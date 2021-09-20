@@ -1,0 +1,4 @@
+// Blocks are allowed to define scope, and do not need to have a semicolon
+{
+    let foo = 13;
+}

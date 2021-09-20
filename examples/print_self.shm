@@ -1,0 +1,183 @@
+#!/usr/bin/env shim
+// The first line can be a shebang, but we otherwise use // for comments
+
+// This is how you include
+use pathlib;
+
+// __file__ is a read-only pathlib.Path object accessible from any file
+let this_file = __file__;
+
+// Immutable built-ins are lowercase (str, bool, int, uint, u8, i8, etc.)
+let text: str = this_file.read_text();
+
+assert("this could literally be anything" in text);
+assert("use pathlib;" in text.split_lines());
+
+// List.new takes an iterable
+// `list` wraps List.new to let you create a list with positional arguments
+// Rust uses `::` for getting attributes in a static context. Since nothing is
+// done 'statically' in Shimlang we use '.' instead.
+let the_lines: List<str> = List.new(("line 1", "line 2", "line 3"));
+
+// Dict.new takes an iterable of two element iterables or keyword arguments
+// `dict` wraps Dict.new to let you create a dict with positional two-element iterables and keyword arguments
+let d: Dict<str, uint> = Dict.new(
+    cats=3,
+    dogs=4,
+);
+let other_d: Dict<uint, str> = Dict.new(
+    (
+        (3, cats),
+        (4, dogs),
+    )
+);
+let other_d: Dict<uint, str> = dict(
+    (3, cats),
+    (4, dogs),
+);
+
+let quick_list = list(1,2,3);
+let n1 = "cat";
+let n2 = "dog";
+let quick_dict = dict((n1,1), (n2,2));
+let quick_set = set(1,2,3);
+
+// Which syntax is the best?
+let favorite_animal = d.items().max(key=|(_, num: uint)| -> uint {num}).map(_.first);
+let favorite_animal = d.items().max(key=|(_, num)| num).map(_.first);
+let favorite_animal = d.items().max(key=(_, num) -> num).map(_.first);
+let favorite_animal = d.items().max(key=(_, num) => num).map(_.first);
+
+// This would be neat...
+let favorite_animal = d.items().max(key=_.second).map(_.first);
+// But this seems like it would have more consistent semantics
+let favorite_animal = d.items().max(key=tuple.second).map(tuple.first);
+// Or would this be more consistent?
+let favorite_animal = d.items().max(key=tuple.second).map(tuple.first);
+
+let a = 42;
+
+let doubler = |x| x * 2;
+
+// Alternative
+let doubler = x -> x*2;
+
+fn or_default(default, val) {
+    if val == None {
+        default
+    } else {
+        val
+    }
+}
+
+let thing = 14 |> or_default 0;
+let thing = 14 |> |v| or_default(0, v);
+let thing = or_default(14, default=0);
+
+// That's kind of awkward... does everything just implement monadic operations then?
+
+// Do we want to have an explicit wrapper like `Optional`, or should everything
+// be anonymous unions with a None singleton? A wrapper seems like it would make
+// it easier to chain together operations, but an anonymous union seems like it
+// would make the "happy" path simpler? Or maybe coercing from an Optional is
+// really easy, so the happy path seems as simple. Or maybe operations on the
+// optional are always deferred to the underlying wrapper value (then wrapped?)?
+
+// Does this double everything in the list, or ignore the parameter and return
+// a 3-element list of closures?
+list(1,2,3).map(|_| _ * 2);
+
+// How about now?
+list(1,2,3).map(|_| {_ * 2});
+
+// And now?
+list(1,2,3).map(|_| {let foo = _ * 2; foo});
+
+let default = false;
+
+let value = if default {
+    "yes"
+} else {
+    let a = "test";
+    a + " otherwise"
+};
+
+assert_eq(value, "test otherwise")
+
+fn err_example() {
+    // TODO
+}
+
+fn my_max(a, b) {
+    if a > b {a} else {b}
+}
+
+fn my_max(a, b) {
+    if a > b {
+        return a;
+    }
+
+    b
+}
+
+let MyUnionType = List<str> | u8 | Dict<uint, str>;
+
+let some_value: MyUnionType = 14;
+
+/// # Shim Programming Language
+///
+/// Largely uses Rust syntax:
+/// - Great support for expression-oriented programming
+/// - C-like syntax
+/// - Modern for-loop syntax
+/// - Multi-line closures
+/// - Room to include/exclude annotations in intuitive ways
+/// - Match syntax
+///     - Exhaustive checks are not done, but an error will be returned by a
+///       function if no branches of a match are taken
+/// - Try syntax
+/// - No generics/lifetimes for things, but there are generics for type annotations
+/// - Structs are not separated from their impl
+/// - Macros...? Seems unnecessary for something dynamic... but maybe?
+/// - Tuple literals
+///
+/// Extensions
+/// - Arguments: positional-only, \, either, *args, keyword-only, **kwargs
+/// - Splatting (positionally and with keywords)
+/// - Yield?
+/// - Anonymous annotation unions
+///
+/// Python Semantics
+/// - Heavily borrows the standard library
+/// - Dicts/Lists/Sets/Tuples and their methods
+/// - No comprehensions, since map/filter over iterables provides much of this benefit
+///
+/// New-ish Things
+/// - When variables have an annotation, that annotation is used to check or
+///   coerce values before binding them to the variable.
+/// - Annotations are re-evaluated every time they are used (before coercion)
+/// - There are no exceptions. Functions can only propagate errors.
+/// - Functions can cause their parent to return
+///     - This is how the `?` would be implemented for an arbitrary struct
+///     - This is how type coercion failures would operate
+///     - This is how type errors (can't add str to it, etc.) would fail
+///
+/// Things to potentially borrow from other languages
+/// - Optional semicolon (not just for last line)
+///     - It's easy to accidently return things when you don't want to, though (perl)
+/// - List/Dict/Set literals
+///     - Ambiguity with code blocks for sets and dicts. Is this a set containing
+///       a single string, or is this a code block that evaluates to "bar"?
+///         let foo = {"bar"};
+///     - This is important because the syntax/features of a language changes the
+///       way you think about problems
+///     - Has the same problem python has with empty sets vs. empty dicts
+///     - Swift/Groovy use `[]` for lists and `[:]` for dicts. Shim could use `[]` for lists, `{:}` for
+///       dicts and `{}` for sets, but that would make millions of Python programmers unhappy.
+///     - Swift doesn't have Set literals, but assigning an array literal to a variable annotated
+///       with `Set` does the business (doesn't help with nested structures, though)
+/// - Format strings!
+///     - '' for unformatted and "" for formatted?
+///     - Do we use \(thing) or $thing or ${thing} or {thing}?
+///     - 100% want to have nested format strings, if this becomes a thing
+/// - Maybe `:` for kwargs rather than `=`? (Swift, Ruby)
