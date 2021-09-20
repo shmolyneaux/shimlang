@@ -51,7 +51,7 @@ const IntLiteral = struct {
 
 const Operand = struct {};
 
-pub fn run_text(allocator: *Allocator, text: *const [12:0]u8) !void {
+pub fn run_text(allocator: *Allocator, text: []const u8) !void {
     var ast = try parse_text(allocator, text);
     defer ast.deinit();
     var result = interpret_ast(ast);
@@ -59,7 +59,7 @@ pub fn run_text(allocator: *Allocator, text: *const [12:0]u8) !void {
     std.debug.print("{}\n", .{result});
 }
 
-pub fn parse_text(allocator: *Allocator, text: *const [12:0]u8) !Ast {
+pub fn parse_text(allocator: *Allocator, text: []const u8) !Ast {
     var left = try std.fmt.parseInt(u8, text[6..7], 10);
     var op = Operand{};
     var right = try std.fmt.parseInt(u8, text[10..11], 10);
