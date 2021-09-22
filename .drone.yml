@@ -1,0 +1,15 @@
+kind: pipeline
+name: default
+
+steps:
+- name: test
+  image: shmolyneaux/ziglang:0.9.0-dev.1139
+  environment:
+    SSH_KEY:
+      from_secret: SSH_KEY
+  commands:
+    - zig build run
+
+trigger:
+  event:
+  - push
