@@ -254,9 +254,13 @@ const TokenTag = enum {
     slash,
     identifier,
     colon,
+    double_colon,
     arrow,
     double_equal,
     equal,
+    comma,
+    gte,
+    lte,
     // Keywords
     if_keyword,
     else_keyword,
@@ -271,6 +275,8 @@ const TokenTag = enum {
     continue_keyword,
     and_keyword,
     or_keyword,
+    use_keyword,
+    as_keyword,
 };
 const Token = struct {
     info: union(TokenTag) {
@@ -296,9 +302,13 @@ const Token = struct {
         // TODO: for now this is a copy of the input
         identifier: struct { text: []const u8 },
         colon,
+        double_colon,
         arrow,
         double_equal,
         equal,
+        comma,
+        gte,
+        lte,
         // TODO: plus_equals, etc.
         // Keywords
         if_keyword,
@@ -314,6 +324,8 @@ const Token = struct {
         continue_keyword,
         and_keyword,
         or_keyword,
+        use_keyword,
+        as_keyword,
     },
     source_line: u32,
 
@@ -361,46 +373,42 @@ pub fn tokenize(allocator: *Allocator, text: []const u8) !ArrayList(Token) {
             '\n' => line_number += 1,
             ' ', '\t', '\r' => {},
             '.' => try tokens.append(Token{ .info = .dot, .source_line = line_number }),
+            ',' => try tokens.append(Token{ .info = .comma, .source_line = line_number }),
             '(' => try tokens.append(Token{ .info = .left_paren, .source_line = line_number }),
             ')' => try tokens.append(Token{ .info = .right_paren, .source_line = line_number }),
             '{' => try tokens.append(Token{ .info = .left_curly, .source_line = line_number }),
             '}' => try tokens.append(Token{ .info = .right_curly, .source_line = line_number }),
-            '<' => try tokens.append(Token{ .info = .left_angle, .source_line = line_number }),
-            '>' => try tokens.append(Token{ .info = .right_angle, .source_line = line_number }),
             '[' => try tokens.append(Token{ .info = .left_square, .source_line = line_number }),
             ']' => try tokens.append(Token{ .info = .right_square, .source_line = line_number }),
-            ':' => try tokens.append(Token{ .info = .colon, .source_line = line_number }),
             '+' => try tokens.append(Token{ .info = .plus, .source_line = line_number }),
-            '-' => if (remaining_text.len >= 1 and remaining_text[0] == '>') {
-                try tokens.append(Token{ .info = .arrow, .source_line = line_number });
-                skip_byte(&remaining_text);
-            } else {
-                try tokens.append(Token{ .info = .minus, .source_line = line_number });
+            ':' => try tokens.append(Token{ .info = if (match(&remaining_text, ':')) .double_colon else .colon, .source_line = line_number }),
+            '<' => try tokens.append(Token{ .info = if (match(&remaining_text, '=')) .lte else .left_angle, .source_line = line_number }),
+            '>' => try tokens.append(Token{ .info = if (match(&remaining_text, '=')) .gte else .right_angle, .source_line = line_number }),
+            '-' => try tokens.append(Token{ .info = if (match(&remaining_text, '>')) .arrow else .minus, .source_line = line_number }),
+            '*' => try tokens.append(Token{ .info = if (match(&remaining_text, '*')) .double_star else .star, .source_line = line_number }),
+            '=' => try tokens.append(Token{ .info = if (match(&remaining_text, '=')) .double_equal else .equal, .source_line = line_number }),
+            '/' => {
+                if (match(&remaining_text, '/')) {
+                    while (remaining_text.len >= 1 and remaining_text[0] != '\n') {
+                        skip_byte(&remaining_text);
+                    }
+                } else {
+                    try tokens.append(Token{ .info = .slash, .source_line = line_number });
+                }
             },
-            '*' => if (remaining_text.len >= 1 and remaining_text[0] == '*') {
-                try tokens.append(Token{ .info = .double_star, .source_line = line_number });
-                skip_byte(&remaining_text);
-            } else {
-                try tokens.append(Token{ .info = .star, .source_line = line_number });
-            },
-            '/' => if (remaining_text.len >= 1 and remaining_text[0] == '/') {
-                while (remaining_text.len >= 1 and remaining_text[0] != '\n') {
+            '"' => {
+                // TODO: interpolated strings
+                // TODO: other characters for string literals
+                // TODO: escape sequences
+                while (remaining_text.len >= 1 and remaining_text[0] != '"') {
                     skip_byte(&remaining_text);
                 }
-            } else {
-                try tokens.append(Token{ .info = .slash, .source_line = line_number });
-            },
-            '=' => if (remaining_text.len >= 1 and remaining_text[0] == '=') {
-                try tokens.append(Token{ .info = .double_equal, .source_line = line_number });
                 skip_byte(&remaining_text);
-            } else {
-                try tokens.append(Token{ .info = .equal, .source_line = line_number });
+                // TODO: actually copy out the text
+                // For now we allocate a size-zero pointer so that we have
+                // something to free during deinit
+                try tokens.append(Token{ .info = .{ .string_literal = .{ .text = try allocator.alloc(u8, 0) } }, .source_line = 24601 });
             },
-            // TODO: parse string_literal: struct { text: []const u8 },
-            '"' => try tokens.append(Token{ .info = .break_keyword, .source_line = 24601 }),
-
-            // TODO: parse int_literal: struct { value: i128 },
-            // TODO: parse float_literal: struct { value: f128 },
             '0'...'9' => {
                 var number_span = find_number_end_pos(remaining_text);
 
@@ -409,15 +417,12 @@ pub fn tokenize(allocator: *Allocator, text: []const u8) !ArrayList(Token) {
                 number.len += 1;
 
                 switch (number_span.number_type) {
-                    .int => try tokens.append(Token{ .info = .{ .int_literal = .{ .value = try std.fmt.parseInt(i128, number, 10) } }, .source_line = 24601 }),
-                    .float => try tokens.append(Token{ .info = .{ .float_literal = .{ .value = try std.fmt.parseFloat(f128, number) } }, .source_line = 24601 }),
+                    .int => try tokens.append(Token{ .info = .{ .int_literal = .{ .value = try std.fmt.parseInt(i128, number, 10) } }, .source_line = line_number }),
+                    .float => try tokens.append(Token{ .info = .{ .float_literal = .{ .value = try std.fmt.parseFloat(f128, number) } }, .source_line = line_number }),
                 }
             },
-
             'A'...'Z', 'a'...'z', '_' => {
                 var end_pos = find_identifier_end_pos(remaining_text);
-
-                // TODO: comptime trie for finding keywords :)
 
                 // Do a bit of pointer twiddling to get the entire identifier,
                 // even though remaining_text is already past the first byte.
@@ -425,71 +430,8 @@ pub fn tokenize(allocator: *Allocator, text: []const u8) !ArrayList(Token) {
                 ident.ptr -= 1;
                 ident.len += 1;
 
-                if (std.mem.eql(u8, ident, "if")) {
-                    try tokens.append(Token{
-                        .info = .if_keyword,
-                        .source_line = line_number,
-                    });
-                } else if (std.mem.eql(u8, ident, "else")) {
-                    try tokens.append(Token{
-                        .info = .else_keyword,
-                        .source_line = line_number,
-                    });
-                } else if (std.mem.eql(u8, ident, "elif")) {
-                    try tokens.append(Token{
-                        .info = .elif_keyword,
-                        .source_line = line_number,
-                    });
-                } else if (std.mem.eql(u8, ident, "return")) {
-                    try tokens.append(Token{
-                        .info = .return_keyword,
-                        .source_line = line_number,
-                    });
-                } else if (std.mem.eql(u8, ident, "struct")) {
-                    try tokens.append(Token{
-                        .info = .struct_keyword,
-                        .source_line = line_number,
-                    });
-                } else if (std.mem.eql(u8, ident, "enum")) {
-                    try tokens.append(Token{
-                        .info = .enum_keyword,
-                        .source_line = line_number,
-                    });
-                } else if (std.mem.eql(u8, ident, "fn")) {
-                    try tokens.append(Token{
-                        .info = .fn_keyword,
-                        .source_line = line_number,
-                    });
-                } else if (std.mem.eql(u8, ident, "while")) {
-                    try tokens.append(Token{
-                        .info = .while_keyword,
-                        .source_line = line_number,
-                    });
-                } else if (std.mem.eql(u8, ident, "for")) {
-                    try tokens.append(Token{
-                        .info = .for_keyword,
-                        .source_line = line_number,
-                    });
-                } else if (std.mem.eql(u8, ident, "break")) {
-                    try tokens.append(Token{
-                        .info = .break_keyword,
-                        .source_line = line_number,
-                    });
-                } else if (std.mem.eql(u8, ident, "continue")) {
-                    try tokens.append(Token{
-                        .info = .continue_keyword,
-                        .source_line = line_number,
-                    });
-                } else if (std.mem.eql(u8, ident, "and")) {
-                    try tokens.append(Token{
-                        .info = .and_keyword,
-                        .source_line = line_number,
-                    });
-                } else if (std.mem.eql(u8, ident, "or")) {
-                    try tokens.append(Token{
-                        .info = .or_keyword,
-                        .source_line = line_number,
-                    });
+                if (keyword_to_token(ident, line_number)) |token| {
+                    try tokens.append(token);
                 } else {
                     const ident_copy = try allocator.alloc(u8, end_pos + 1);
                     std.mem.copy(u8, ident_copy, ident);
@@ -500,8 +442,6 @@ pub fn tokenize(allocator: *Allocator, text: []const u8) !ArrayList(Token) {
                 }
                 remaining_text = remaining_text[end_pos..];
             },
-
-            // Keywords
             else => std.log.err("Don't know how to tokenize: {c}", .{char}),
         }
         skip_whitespace(&remaining_text);
@@ -509,6 +449,46 @@ pub fn tokenize(allocator: *Allocator, text: []const u8) !ArrayList(Token) {
 
     std.log.info("Got tokens: {}", .{tokens});
     return tokens;
+}
+
+pub fn keyword_to_token(text: []const u8, line_number: u32) ?Token {
+    const keyword_table = .{
+        .@"fn" = TokenTag.fn_keyword,
+        .@"if" = TokenTag.if_keyword,
+        .@"else" = TokenTag.else_keyword,
+        .@"elif" = TokenTag.elif_keyword,
+        .@"return" = TokenTag.return_keyword,
+        .@"struct" = TokenTag.struct_keyword,
+        .@"enum" = TokenTag.enum_keyword,
+        .@"while" = TokenTag.while_keyword,
+        .@"for" = TokenTag.for_keyword,
+        .@"break" = TokenTag.break_keyword,
+        .@"continue" = TokenTag.continue_keyword,
+        .@"and" = TokenTag.and_keyword,
+        .@"or" = TokenTag.or_keyword,
+        .@"use_keyword" = TokenTag.use_keyword,
+        .@"as_keyword" = TokenTag.as_keyword,
+    };
+
+    // TODO: comptime trie for finding keywords :)
+    inline for (std.meta.fields(@TypeOf(keyword_table))) |field| {
+        if (std.mem.eql(u8, text, field.name)) {
+            return Token{
+                .info = @field(keyword_table, field.name),
+                .source_line = line_number,
+            };
+        }
+    }
+
+    return null;
+}
+
+pub fn match(text: *[]const u8, char: usize) bool {
+    if (text.*.len >= 1 and text.*[0] == char) {
+        skip_byte(text);
+        return true;
+    }
+    return false;
 }
 
 pub fn find_identifier_end_pos(text: []const u8) u32 {
