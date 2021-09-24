@@ -64,12 +64,24 @@ const Ast = struct {
     }
 };
 
+const Block = struct {};
+
+const IfStatement = struct { predicate: Expression, if_block: Block, else_block: ?Block };
+
 // TODO: Multiple sorts of statements (if, for, use, while, etc.)
-const Statement = struct {
+const StatementTag = enum { expr, if_statement, pretend_statement };
+
+const Statement = union(StatementTag) {
     expr: Expression,
+    if_statement: IfStatement,
+    // Ignore this for now, I just need a placeholder
+    pretend_statement: bool,
 
     pub fn deinit(self: Statement, allocator: *Allocator) void {
-        self.expr.deinit(allocator);
+        switch (self) {
+            StatementTag.expr => self.expr.deinit(allocator),
+            else => return,
+        }
     }
 
     pub fn format(
@@ -81,7 +93,11 @@ const Statement = struct {
         _ = fmt;
         _ = options;
 
-        try writer.print("STATEMENT({})", .{self.expr});
+        switch (self) {
+            StatementTag.expr => try writer.print("STATEMENT({})", .{self.expr}),
+            StatementTag.if_statement => try writer.print("STATEMENT({})", .{self.if_statement}),
+            StatementTag.pretend_statement => try writer.print("STATEMENT(PRETEND())", .{}),
+        }
     }
 };
 
@@ -217,32 +233,388 @@ pub fn run_text(allocator: *Allocator, text: []const u8) !void {
     std.debug.print("{}\n", .{result});
 }
 
-pub fn parse_text(allocator: *Allocator, text: []const u8) !Ast {
-    var remaining_text = text[0..];
+const TokenTag = enum {
+    string_literal,
+    int_literal,
+    float_literal,
+    left_paren,
+    right_paren,
+    left_curly,
+    right_curly,
+    left_angle,
+    right_angle,
+    left_square,
+    right_square,
+    dot,
+    plus,
+    minus,
+    sub,
+    star,
+    double_star,
+    slash,
+    identifier,
+    colon,
+    arrow,
+    double_equal,
+    equal,
+    // Keywords
+    if_keyword,
+    else_keyword,
+    elif_keyword,
+    return_keyword,
+    struct_keyword,
+    enum_keyword,
+    fn_keyword,
+    while_keyword,
+    for_keyword,
+    break_keyword,
+    continue_keyword,
+    and_keyword,
+    or_keyword,
+};
+const Token = struct {
+    info: union(TokenTag) {
+        // TODO: for now this is a copy of the input
+        string_literal: struct { text: []const u8 },
+        int_literal: struct { value: i128 },
+        float_literal: struct { value: f128 },
+        left_paren,
+        right_paren,
+        left_curly,
+        right_curly,
+        left_angle,
+        right_angle,
+        left_square,
+        right_square,
+        dot,
+        plus,
+        minus,
+        sub,
+        star,
+        double_star,
+        slash,
+        // TODO: for now this is a copy of the input
+        identifier: struct { text: []const u8 },
+        colon,
+        arrow,
+        double_equal,
+        equal,
+        // TODO: plus_equals, etc.
+        // Keywords
+        if_keyword,
+        else_keyword,
+        elif_keyword,
+        return_keyword,
+        struct_keyword,
+        enum_keyword,
+        fn_keyword,
+        while_keyword,
+        for_keyword,
+        break_keyword,
+        continue_keyword,
+        and_keyword,
+        or_keyword,
+    },
+    source_line: u32,
 
+    pub fn deinit(self: Token, allocator: *Allocator) void {
+        switch (self.info) {
+            .string_literal => allocator.free(self.info.string_literal.text),
+            .identifier => allocator.free(self.info.identifier.text),
+            else => {},
+        }
+    }
+
+    pub fn format(
+        self: Token,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        _ = fmt;
+        _ = options;
+
+        switch (self.info) {
+            .identifier => try writer.print("IDENT({s})", .{self.info.identifier.text}),
+            .string_literal => try writer.writeAll("TODO_STR"),
+            .int_literal => try writer.print("INT({})", .{self.info.int_literal.value}),
+            .float_literal => try writer.print("FLOAT({})", .{self.info.float_literal.value}),
+            else => {
+                for (@tagName(self.info)) |char| {
+                    try writer.print("{c}", .{std.ascii.toUpper(char)});
+                }
+            },
+        }
+    }
+};
+
+pub fn tokenize(allocator: *Allocator, text: []const u8) !ArrayList(Token) {
+    var remaining_text = text[0..];
+    var tokens = ArrayList(Token).init(allocator);
+    var line_number: u32 = 1;
+
+    skip_whitespace(&remaining_text);
+    while (remaining_text.len != 0) {
+        var char = remaining_text[0];
+        skip_byte(&remaining_text);
+        switch (char) {
+            '\n' => line_number += 1,
+            ' ', '\t', '\r' => {},
+            '.' => try tokens.append(Token{ .info = .dot, .source_line = line_number }),
+            '(' => try tokens.append(Token{ .info = .left_paren, .source_line = line_number }),
+            ')' => try tokens.append(Token{ .info = .right_paren, .source_line = line_number }),
+            '{' => try tokens.append(Token{ .info = .left_curly, .source_line = line_number }),
+            '}' => try tokens.append(Token{ .info = .right_curly, .source_line = line_number }),
+            '<' => try tokens.append(Token{ .info = .left_angle, .source_line = line_number }),
+            '>' => try tokens.append(Token{ .info = .right_angle, .source_line = line_number }),
+            '[' => try tokens.append(Token{ .info = .left_square, .source_line = line_number }),
+            ']' => try tokens.append(Token{ .info = .right_square, .source_line = line_number }),
+            ':' => try tokens.append(Token{ .info = .colon, .source_line = line_number }),
+            '+' => try tokens.append(Token{ .info = .plus, .source_line = line_number }),
+            '-' => if (remaining_text.len >= 1 and remaining_text[0] == '>') {
+                try tokens.append(Token{ .info = .arrow, .source_line = line_number });
+                skip_byte(&remaining_text);
+            } else {
+                try tokens.append(Token{ .info = .minus, .source_line = line_number });
+            },
+            '*' => if (remaining_text.len >= 1 and remaining_text[0] == '*') {
+                try tokens.append(Token{ .info = .double_star, .source_line = line_number });
+                skip_byte(&remaining_text);
+            } else {
+                try tokens.append(Token{ .info = .star, .source_line = line_number });
+            },
+            '/' => if (remaining_text.len >= 1 and remaining_text[0] == '/') {
+                while (remaining_text.len >= 1 and remaining_text[0] != '\n') {
+                    skip_byte(&remaining_text);
+                }
+            } else {
+                try tokens.append(Token{ .info = .slash, .source_line = line_number });
+            },
+            '=' => if (remaining_text.len >= 1 and remaining_text[0] == '=') {
+                try tokens.append(Token{ .info = .double_equal, .source_line = line_number });
+                skip_byte(&remaining_text);
+            } else {
+                try tokens.append(Token{ .info = .equal, .source_line = line_number });
+            },
+            // TODO: parse string_literal: struct { text: []const u8 },
+            '"' => try tokens.append(Token{ .info = .break_keyword, .source_line = 24601 }),
+
+            // TODO: parse int_literal: struct { value: i128 },
+            // TODO: parse float_literal: struct { value: f128 },
+            '0'...'9' => {
+                var number_span = find_number_end_pos(remaining_text);
+
+                var number = remaining_text[0..number_span.end_pos];
+                number.ptr -= 1;
+                number.len += 1;
+
+                switch (number_span.number_type) {
+                    .int => try tokens.append(Token{ .info = .{ .int_literal = .{ .value = try std.fmt.parseInt(i128, number, 10) } }, .source_line = 24601 }),
+                    .float => try tokens.append(Token{ .info = .{ .float_literal = .{ .value = try std.fmt.parseFloat(f128, number) } }, .source_line = 24601 }),
+                }
+            },
+
+            'A'...'Z', 'a'...'z', '_' => {
+                var end_pos = find_identifier_end_pos(remaining_text);
+
+                // TODO: comptime trie for finding keywords :)
+
+                // Do a bit of pointer twiddling to get the entire identifier,
+                // even though remaining_text is already past the first byte.
+                var ident = remaining_text[0..end_pos];
+                ident.ptr -= 1;
+                ident.len += 1;
+
+                if (std.mem.eql(u8, ident, "if")) {
+                    try tokens.append(Token{
+                        .info = .if_keyword,
+                        .source_line = line_number,
+                    });
+                } else if (std.mem.eql(u8, ident, "else")) {
+                    try tokens.append(Token{
+                        .info = .else_keyword,
+                        .source_line = line_number,
+                    });
+                } else if (std.mem.eql(u8, ident, "elif")) {
+                    try tokens.append(Token{
+                        .info = .elif_keyword,
+                        .source_line = line_number,
+                    });
+                } else if (std.mem.eql(u8, ident, "return")) {
+                    try tokens.append(Token{
+                        .info = .return_keyword,
+                        .source_line = line_number,
+                    });
+                } else if (std.mem.eql(u8, ident, "struct")) {
+                    try tokens.append(Token{
+                        .info = .struct_keyword,
+                        .source_line = line_number,
+                    });
+                } else if (std.mem.eql(u8, ident, "enum")) {
+                    try tokens.append(Token{
+                        .info = .enum_keyword,
+                        .source_line = line_number,
+                    });
+                } else if (std.mem.eql(u8, ident, "fn")) {
+                    try tokens.append(Token{
+                        .info = .fn_keyword,
+                        .source_line = line_number,
+                    });
+                } else if (std.mem.eql(u8, ident, "while")) {
+                    try tokens.append(Token{
+                        .info = .while_keyword,
+                        .source_line = line_number,
+                    });
+                } else if (std.mem.eql(u8, ident, "for")) {
+                    try tokens.append(Token{
+                        .info = .for_keyword,
+                        .source_line = line_number,
+                    });
+                } else if (std.mem.eql(u8, ident, "break")) {
+                    try tokens.append(Token{
+                        .info = .break_keyword,
+                        .source_line = line_number,
+                    });
+                } else if (std.mem.eql(u8, ident, "continue")) {
+                    try tokens.append(Token{
+                        .info = .continue_keyword,
+                        .source_line = line_number,
+                    });
+                } else if (std.mem.eql(u8, ident, "and")) {
+                    try tokens.append(Token{
+                        .info = .and_keyword,
+                        .source_line = line_number,
+                    });
+                } else if (std.mem.eql(u8, ident, "or")) {
+                    try tokens.append(Token{
+                        .info = .or_keyword,
+                        .source_line = line_number,
+                    });
+                } else {
+                    const ident_copy = try allocator.alloc(u8, end_pos + 1);
+                    std.mem.copy(u8, ident_copy, ident);
+                    try tokens.append(Token{
+                        .info = .{ .identifier = .{ .text = ident_copy } },
+                        .source_line = line_number,
+                    });
+                }
+                remaining_text = remaining_text[end_pos..];
+            },
+
+            // Keywords
+            else => std.log.err("Don't know how to tokenize: {c}", .{char}),
+        }
+        skip_whitespace(&remaining_text);
+    }
+
+    std.log.info("Got tokens: {}", .{tokens});
+    return tokens;
+}
+
+pub fn find_identifier_end_pos(text: []const u8) u32 {
+    var pos: u32 = 0;
+    while (pos < text.len) {
+        switch (text[pos]) {
+            'A'...'Z', 'a'...'z', '_', '0'...'9' => {},
+            else => return pos,
+        }
+        pos += 1;
+    }
+    return pos;
+}
+
+const NumberSpan = struct {
+    number_type: enum { int, float },
+    end_pos: u32,
+};
+
+// TODO: hex and binary literals
+// TODO: scientific notation
+pub fn find_number_end_pos(text: []const u8) NumberSpan {
+    var isFloat = false;
+    var pos: u32 = 0;
+    while (pos < text.len) {
+        switch (text[pos]) {
+            '0'...'9' => {},
+            '.' => {
+                if (isFloat) {
+                    return NumberSpan{ .number_type = .float, .end_pos = pos };
+                }
+                isFloat = true;
+            },
+            else => break,
+        }
+        pos += 1;
+    }
+
+    if (isFloat) {
+        return NumberSpan{ .number_type = .float, .end_pos = pos };
+    } else {
+        return NumberSpan{ .number_type = .int, .end_pos = pos };
+    }
+}
+
+pub fn parse_text(allocator: *Allocator, text: []const u8) !Ast {
     var stmts = ArrayList(Statement).init(allocator);
     _ = stmts;
 
-    if (try parse_expression(allocator, &remaining_text)) |expr| {
-        try stmts.append(Statement{ .expr = expr });
+    var tokens = try tokenize(allocator, text);
+    defer {
+        for (tokens.items) |token| {
+            token.deinit(allocator);
+        }
+        tokens.deinit();
     }
 
-    var left = try std.fmt.parseInt(u8, text[6..7], 10);
-    var right = try std.fmt.parseInt(u8, text[10..11], 10);
-    var op = BinaryOperator.BinaryAdd;
+    var remaining_tokens = tokens.items;
 
-    var list = ArrayList(Statement).init(allocator);
+    while (remaining_tokens.len != 0) {
+        var stmt = try parse_statement(allocator, &remaining_tokens);
+        try stmts.append(stmt);
+    }
 
-    var left_expr: *Expression = try allocator.create(Expression);
-    left_expr.* = Expression{ .int_literal = left };
-    var right_expr: *Expression = try allocator.create(Expression);
-    right_expr.* = Expression{ .int_literal = right };
+    return Ast{ .allocator = allocator, .stmts = stmts };
+}
 
-    try list.append(Statement{ .expr = Expression{
-        .binary = .{ .left = left_expr, .op = op, .right = right_expr },
-    } });
+pub fn skip_whitespace(text: *[]const u8) void {
+    while (text.*.len != 0) {
+        switch (text.*[0]) {
+            ' ' => skip_byte(text),
+            '\n' => skip_byte(text),
+            '\t' => skip_byte(text),
+            '\r' => skip_byte(text),
+            '/' => if (text.*.len >= 2 and text.*[1] == '/') {
+                skip_bytes(text, 2);
+                // Consume all characters until we hit a newline
+                while (text.*.len != 0) {
+                    switch (text.*[0]) {
+                        '\n' => {
+                            skip_byte(text);
+                            break;
+                        },
+                        else => skip_byte(text),
+                    }
+                }
+            } else {
+                return;
+            },
+            else => return,
+        }
+    }
+}
 
-    return Ast{ .allocator = allocator, .stmts = list };
+pub fn skip_bytes(text: *[]const u8, count: usize) void {
+    text.* = text.*[count..];
+}
+
+pub fn skip_byte(text: *[]const u8) void {
+    skip_bytes(text, 1);
+}
+
+pub fn parse_statement(allocator: *Allocator, tokens: *[]const Token) !Statement {
+    _ = allocator;
+    tokens.* = tokens.*[tokens.*.len..];
+    return Statement{ .pretend_statement = true };
 }
 
 pub fn parse_expression(allocator: *Allocator, text: *[]const u8) !?Expression {
@@ -263,7 +635,11 @@ pub fn interpret_ast(ast: Ast) void {
 }
 
 pub fn interpret_stmt(stmt: Statement) ShimValue {
-    _ = interpret_expr(&stmt.expr);
+    switch (stmt) {
+        StatementTag.expr => return interpret_expr(&stmt.expr),
+        StatementTag.if_statement => unreachable,
+        StatementTag.pretend_statement => return ShimValue{ .shim_unit = ShimUnit{} },
+    }
     return ShimValue{ .shim_unit = ShimUnit{} };
 }
 
