@@ -69,17 +69,18 @@ const Block = struct {};
 const IfStatement = struct { predicate: Expression, if_block: Block, else_block: ?Block };
 
 // TODO: Multiple sorts of statements (if, for, use, while, etc.)
-const StatementTag = enum { expr, if_statement, pretend_statement };
+const StatementTag = enum { expression_statement, if_statement, assignment_statement, pretend_statement };
 
 const Statement = union(StatementTag) {
-    expr: Expression,
+    expression_statement: Expression,
     if_statement: IfStatement,
+    assignment_statement: struct { obj: ?Expression, name: []const u8, value: Expression },
     // Ignore this for now, I just need a placeholder
     pretend_statement: bool,
 
     pub fn deinit(self: Statement, allocator: *Allocator) void {
         switch (self) {
-            StatementTag.expr => self.expr.deinit(allocator),
+            StatementTag.expression_statement => |stmt| stmt.deinit(allocator),
             else => return,
         }
     }
@@ -94,9 +95,11 @@ const Statement = union(StatementTag) {
         _ = options;
 
         switch (self) {
-            StatementTag.expr => try writer.print("STATEMENT({})", .{self.expr}),
-            StatementTag.if_statement => try writer.print("STATEMENT({})", .{self.if_statement}),
-            StatementTag.pretend_statement => try writer.print("STATEMENT(PRETEND())", .{}),
+            StatementTag.expression_statement => |stmt| try writer.print("EXPR({})", .{stmt}),
+            StatementTag.if_statement => |stmt| try writer.print("IF({})", .{stmt}),
+            StatementTag.pretend_statement => try writer.print("PRETEND()", .{}),
+            // TODO: lies
+            StatementTag.assignment_statement => unreachable,
         }
     }
 };
@@ -106,13 +109,21 @@ const UnaryOperator = enum {
     UnaryNot,
 };
 const UnaryExpr = struct {
-    expr: u8,
+    expr: *Expression,
     op: UnaryOperator,
 };
 
 const BinaryOperator = enum {
     BinaryAdd,
+    BinarySub,
     BinaryMul,
+    BinaryDiv,
+    BinaryDoubleEqual,
+    BinaryBangEqual,
+    BinaryGreaterThanEqual,
+    BinaryLessThanEqual,
+    BinaryLessThan,
+    BinaryGreaterThan,
 };
 
 const BinaryExpr = struct {
@@ -123,32 +134,74 @@ const BinaryExpr = struct {
     // TODO: We assume that some parent structure provides the allocator that
     // was used to originally create these expressions.
     pub fn deinit(self: BinaryExpr, allocator: *Allocator) void {
+        self.left.deinit(allocator);
+        self.right.deinit(allocator);
         allocator.destroy(self.left);
         allocator.destroy(self.right);
+    }
+};
+
+const LogicalExpr = struct {
+    left: *Expression,
+    op: enum { LogicalAnd, LogicalOr },
+    right: *Expression,
+
+    // TODO: We assume that some parent structure provides the allocator that
+    // was used to originally create these expressions.
+    pub fn deinit(self: LogicalExpr, allocator: *Allocator) void {
+        self.left.deinit(allocator);
+        self.right.deinit(allocator);
+        allocator.destroy(self.left);
+        allocator.destroy(self.right);
+    }
+};
+
+const CallExpr = struct {
+    left: *Expression,
+    args: ?*Expression,
+
+    // TODO: We assume that some parent structure provides the allocator that
+    // was used to originally create these expressions.
+    pub fn deinit(self: CallExpr, allocator: *Allocator) void {
+        self.left.deinit(allocator);
+        allocator.destroy(self.left);
+        if (self.args) |args| {
+            args.deinit(allocator);
+            allocator.destroy(args);
+        }
     }
 };
 
 const ExpressionTag = enum {
     int_literal,
     string_literal,
+    bool_literal,
     unary,
     binary,
+    logical,
+    identifier,
     call,
 };
 const Expression = union(ExpressionTag) {
-    int_literal: u8,
+    int_literal: i128,
     string_literal: []const u8,
+    bool_literal: bool,
     unary: UnaryExpr,
     binary: BinaryExpr,
-    call: bool,
+    logical: LogicalExpr,
+    identifier: []const u8,
+    call: CallExpr,
 
     pub fn deinit(self: Expression, allocator: *Allocator) void {
         switch (self) {
             ExpressionTag.int_literal => |_| {},
             ExpressionTag.string_literal => |_| {},
+            ExpressionTag.bool_literal => |_| {},
             ExpressionTag.unary => |_| {},
+            ExpressionTag.identifier => |ident| allocator.free(ident),
+            ExpressionTag.logical => |lexpr| lexpr.deinit(allocator),
             ExpressionTag.binary => |bexpr| bexpr.deinit(allocator),
-            ExpressionTag.call => |_| {},
+            ExpressionTag.call => |cexpr| cexpr.deinit(allocator),
         }
     }
 
@@ -162,7 +215,47 @@ const Expression = union(ExpressionTag) {
         _ = fmt;
         _ = options;
 
-        try writer.print("EXPRESSION({s})", .{"foo"});
+        switch (self) {
+            .int_literal => |val| try writer.print("INT({})", .{val}),
+            .string_literal => |val| try writer.print("'{s}'", .{val}),
+            .bool_literal => |val| try writer.print("{}", .{val}),
+            .unary => |val| {
+                switch (val.op) {
+                    .UnaryNegation => try writer.print("NEG({})", .{val.expr.*}),
+                    .UnaryNot => try writer.print("BANG({})", .{val.expr.*}),
+                }
+            },
+            .binary => |val| {
+                switch (val.op) {
+                    .BinaryAdd => try writer.print("ADD({}, {})", .{ val.left.*, val.right.* }),
+                    .BinarySub => try writer.print("SUB({}, {})", .{ val.left.*, val.right.* }),
+                    .BinaryMul => try writer.print("MUL({}, {})", .{ val.left.*, val.right.* }),
+                    .BinaryDiv => try writer.print("DIV({}, {})", .{ val.left.*, val.right.* }),
+                    .BinaryDoubleEqual => try writer.print("DE({}, {})", .{ val.left.*, val.right.* }),
+                    .BinaryBangEqual => try writer.print("BE({}, {})", .{ val.left.*, val.right.* }),
+                    .BinaryGreaterThanEqual => try writer.print("GTE({}, {})", .{ val.left.*, val.right.* }),
+                    .BinaryLessThanEqual => try writer.print("LTE({}, {})", .{ val.left.*, val.right.* }),
+                    .BinaryLessThan => try writer.print("LT({}, {})", .{ val.left.*, val.right.* }),
+                    .BinaryGreaterThan => try writer.print("GT({}, {})", .{ val.left.*, val.right.* }),
+                }
+            },
+            // .logical => |val| try writer.print("{}", .{val}),
+            .identifier => |val| {
+                _ = val;
+                //std.log.info("Printing ident", .{});
+                //@breakpoint();
+                // std.log.info("Printing ident: {s}", .{val});
+                try writer.print("IDENT({s})", .{val});
+            },
+            .call => |val| {
+                try writer.print("CALL({}, ", .{val.left.*});
+                if (val.args) |args| {
+                    try writer.print("{}", .{args});
+                }
+                try writer.print(")", .{});
+            },
+            else => try writer.print("SOMETHING_ELSE", .{}),
+        }
     }
 };
 
@@ -187,16 +280,18 @@ const ShimUnit = struct {};
 
 const ValueTag = enum {
     // Fixed length ints
-    shim_u8,
+    // shim_u8,
     // shim_u16,
     // shim_u32,
     // shim_u64,
+    // shim_u128,
     // shim_i8,
     // shim_i16,
     // shim_i32,
     // shim_i64,
+    shim_i128,
 
-    // shim_bool
+    shim_bool,
 
     // Arbitrary sized ints
     // shim_biguint,
@@ -214,8 +309,9 @@ const ValueTag = enum {
     shim_obj,
 };
 const ShimValue = union(ValueTag) {
-    shim_u8: u8,
+    shim_i128: i128,
     shim_str: bool,
+    shim_bool: bool,
     shim_unit: ShimUnit,
     shim_error: ShimUnit,
     shim_obj: ShimUnit,
@@ -227,10 +323,7 @@ pub fn run_text(allocator: *Allocator, text: []const u8) !void {
     var ast = try parse_text(allocator, text);
     defer ast.deinit();
 
-    std.debug.print("{any}\n", .{ast});
-    var result = interpret_ast(ast);
-
-    std.debug.print("{}\n", .{result});
+    _ = interpret_ast(ast);
 }
 
 const TokenTag = enum {
@@ -255,9 +348,12 @@ const TokenTag = enum {
     identifier,
     colon,
     double_colon,
+    semicolon,
     arrow,
     double_equal,
     equal,
+    bang,
+    bang_equal,
     comma,
     gte,
     lte,
@@ -277,56 +373,66 @@ const TokenTag = enum {
     struct_keyword,
     use_keyword,
     while_keyword,
+    true_keyword,
+    false_keyword,
 };
+
+const TokenInfo = union(TokenTag) {
+    // TODO: for now this is a copy of the input
+    string_literal: struct { text: []const u8 },
+    int_literal: struct { value: i128 },
+    float_literal: struct { value: f128 },
+    left_paren,
+    right_paren,
+    left_curly,
+    right_curly,
+    left_angle,
+    right_angle,
+    left_square,
+    right_square,
+    dot,
+    plus,
+    minus,
+    sub,
+    star,
+    double_star,
+    slash,
+    // TODO: for now this is a copy of the input
+    identifier: struct { text: []const u8 },
+    colon,
+    double_colon,
+    semicolon,
+    arrow,
+    double_equal,
+    equal,
+    bang,
+    bang_equal,
+    comma,
+    gte,
+    lte,
+    // TODO: plus_equals, etc.
+    // Keywords
+    and_keyword,
+    as_keyword,
+    break_keyword,
+    continue_keyword,
+    elif_keyword,
+    else_keyword,
+    enum_keyword,
+    fn_keyword,
+    for_keyword,
+    if_keyword,
+    or_keyword,
+    return_keyword,
+    struct_keyword,
+    use_keyword,
+    while_keyword,
+    true_keyword,
+    false_keyword,
+};
+
 const Token = struct {
-    info: union(TokenTag) {
-        // TODO: for now this is a copy of the input
-        string_literal: struct { text: []const u8 },
-        int_literal: struct { value: i128 },
-        float_literal: struct { value: f128 },
-        left_paren,
-        right_paren,
-        left_curly,
-        right_curly,
-        left_angle,
-        right_angle,
-        left_square,
-        right_square,
-        dot,
-        plus,
-        minus,
-        sub,
-        star,
-        double_star,
-        slash,
-        // TODO: for now this is a copy of the input
-        identifier: struct { text: []const u8 },
-        colon,
-        double_colon,
-        arrow,
-        double_equal,
-        equal,
-        comma,
-        gte,
-        lte,
-        // TODO: plus_equals, etc.
-        // Keywords
-        and_keyword,
-        as_keyword,
-        break_keyword,
-        continue_keyword,
-        elif_keyword,
-        else_keyword,
-        enum_keyword,
-        fn_keyword,
-        for_keyword,
-        if_keyword,
-        or_keyword,
-        return_keyword,
-        struct_keyword,
-        use_keyword,
-        while_keyword,
-    },
+    info: TokenInfo,
     source_line: u32,
 
     pub fn deinit(self: Token, allocator: *Allocator) void {
@@ -381,12 +487,14 @@ pub fn tokenize(allocator: *Allocator, text: []const u8) !ArrayList(Token) {
             '[' => try tokens.append(Token{ .info = .left_square, .source_line = line_number }),
             ']' => try tokens.append(Token{ .info = .right_square, .source_line = line_number }),
             '+' => try tokens.append(Token{ .info = .plus, .source_line = line_number }),
+            ';' => try tokens.append(Token{ .info = .semicolon, .source_line = line_number }),
             ':' => try tokens.append(Token{ .info = if (match(&remaining_text, ':')) .double_colon else .colon, .source_line = line_number }),
             '<' => try tokens.append(Token{ .info = if (match(&remaining_text, '=')) .lte else .left_angle, .source_line = line_number }),
             '>' => try tokens.append(Token{ .info = if (match(&remaining_text, '=')) .gte else .right_angle, .source_line = line_number }),
             '-' => try tokens.append(Token{ .info = if (match(&remaining_text, '>')) .arrow else .minus, .source_line = line_number }),
             '*' => try tokens.append(Token{ .info = if (match(&remaining_text, '*')) .double_star else .star, .source_line = line_number }),
             '=' => try tokens.append(Token{ .info = if (match(&remaining_text, '=')) .double_equal else .equal, .source_line = line_number }),
+            '!' => try tokens.append(Token{ .info = if (match(&remaining_text, '=')) .bang_equal else .bang, .source_line = line_number }),
             '/' => {
                 if (match(&remaining_text, '/')) {
                     while (remaining_text.len >= 1 and remaining_text[0] != '\n') {
@@ -420,6 +528,7 @@ pub fn tokenize(allocator: *Allocator, text: []const u8) !ArrayList(Token) {
                     .int => try tokens.append(Token{ .info = .{ .int_literal = .{ .value = try std.fmt.parseInt(i128, number, 10) } }, .source_line = line_number }),
                     .float => try tokens.append(Token{ .info = .{ .float_literal = .{ .value = try std.fmt.parseFloat(f128, number) } }, .source_line = line_number }),
                 }
+                remaining_text = remaining_text[number_span.end_pos..];
             },
             'A'...'Z', 'a'...'z', '_' => {
                 var end_pos = find_identifier_end_pos(remaining_text);
@@ -447,14 +556,13 @@ pub fn tokenize(allocator: *Allocator, text: []const u8) !ArrayList(Token) {
         skip_whitespace(&remaining_text);
     }
 
-    std.log.info("Got tokens: {}", .{tokens});
     return tokens;
 }
 
 pub fn keyword_to_token(text: []const u8, line_number: u32) ?Token {
     const keyword_table = .{
         .@"and" = TokenTag.and_keyword,
-        .@"as_keyword" = TokenTag.as_keyword,
+        .@"as" = TokenTag.as_keyword,
         .@"break" = TokenTag.break_keyword,
         .@"continue" = TokenTag.continue_keyword,
         .@"elif" = TokenTag.elif_keyword,
@@ -466,8 +574,10 @@ pub fn keyword_to_token(text: []const u8, line_number: u32) ?Token {
         .@"or" = TokenTag.or_keyword,
         .@"return" = TokenTag.return_keyword,
         .@"struct" = TokenTag.struct_keyword,
-        .@"use_keyword" = TokenTag.use_keyword,
+        .@"use" = TokenTag.use_keyword,
         .@"while" = TokenTag.while_keyword,
+        .@"true" = TokenTag.true_keyword,
+        .@"false" = TokenTag.false_keyword,
     };
 
     // TODO: comptime trie for finding keywords :)
@@ -536,7 +646,7 @@ pub fn find_number_end_pos(text: []const u8) NumberSpan {
 
 pub fn parse_text(allocator: *Allocator, text: []const u8) !Ast {
     var stmts = ArrayList(Statement).init(allocator);
-    _ = stmts;
+    errdefer stmts.deinit();
 
     var tokens = try tokenize(allocator, text);
     defer {
@@ -548,7 +658,7 @@ pub fn parse_text(allocator: *Allocator, text: []const u8) !Ast {
 
     var remaining_tokens = tokens.items;
 
-    while (remaining_tokens.len != 0) {
+    while (have_tokens(&remaining_tokens)) {
         var stmt = try parse_statement(allocator, &remaining_tokens);
         try stmts.append(stmt);
     }
@@ -557,7 +667,7 @@ pub fn parse_text(allocator: *Allocator, text: []const u8) !Ast {
 }
 
 pub fn skip_whitespace(text: *[]const u8) void {
-    while (text.*.len != 0) {
+    while (have_text(text)) {
         switch (text.*[0]) {
             ' ' => skip_byte(text),
             '\n' => skip_byte(text),
@@ -566,7 +676,7 @@ pub fn skip_whitespace(text: *[]const u8) void {
             '/' => if (text.*.len >= 2 and text.*[1] == '/') {
                 skip_bytes(text, 2);
                 // Consume all characters until we hit a newline
-                while (text.*.len != 0) {
+                while (have_text(text)) {
                     switch (text.*[0]) {
                         '\n' => {
                             skip_byte(text);
@@ -591,21 +701,355 @@ pub fn skip_byte(text: *[]const u8) void {
     skip_bytes(text, 1);
 }
 
+pub fn skip_all(comptime T: type, slice: *[]const T) void {
+    slice.* = slice.*[slice.*.len..];
+}
+
 pub fn parse_statement(allocator: *Allocator, tokens: *[]const Token) !Statement {
     _ = allocator;
-    tokens.* = tokens.*[tokens.*.len..];
+
+    if (!have_tokens(tokens)) {
+        return error.RanOutOfTokens;
+    }
+
+    if (try parse_use_statement(allocator, tokens)) |stmt| {
+        return stmt;
+    } else if (try parse_expressionlike_statement(allocator, tokens)) |stmt| {
+        return stmt;
+    }
+
+    std.log.err("Giving up and running to the end", .{});
+
+    skip_all(Token, tokens);
     return Statement{ .pretend_statement = true };
 }
 
-pub fn parse_expression(allocator: *Allocator, text: *[]const u8) !?Expression {
+pub fn parse_use_statement(allocator: *Allocator, tokens: *[]const Token) !?Statement {
     _ = allocator;
-    _ = text;
+    _ = tokens;
 
-    // TODO: this is how we consume text functionally
-    text.* = text.*[1..];
-    std.log.info("blah: {s}", .{text.*});
+    if (!have_tokens(tokens)) {
+        return error.RanOutOfTokens;
+    }
+
+    switch (tokens.*[0].info) {
+        .use_keyword => {
+            // TODO: actually parse this
+            skip_all(Token, tokens);
+            return error.NoParsingUseStatements;
+        },
+        else => return null,
+    }
+}
+
+pub fn parse_expressionlike_statement(allocator: *Allocator, tokens: *[]const Token) !?Statement {
+    _ = allocator;
+    _ = tokens;
+
+    var slice_copy = tokens.*;
+    if (try parse_expression(allocator, &slice_copy)) |expr| {
+        // Oh no... this is going to need to go into a lot of places...
+        errdefer expr.deinit(allocator);
+
+        switch (try peek_token(&slice_copy)) {
+            .equal => {
+                // TODO: turn the expression we got into an assignment
+                skip_all(Token, tokens);
+                return error.AssignmentNotImplemented;
+            },
+            .semicolon => {
+                try consume_token(&slice_copy);
+                // Only advance the token slice when we're successful
+                tokens.* = slice_copy;
+                return Statement{ .expression_statement = expr };
+            },
+            else => {
+                std.log.info("Next token is: {}", .{try peek_token(&slice_copy)});
+                return null;
+            },
+        }
+    }
+
+    std.log.info("Not an expression statement 1", .{});
+    return null;
+}
+
+pub fn peek_tokenx(tokens: *[]const Token, idx: usize) !TokenInfo {
+    if (tokens.*.len > idx) {
+        return tokens.*[idx].info;
+    }
+    return error.RanOutOfTokens;
+}
+
+pub fn peek_token(tokens: *[]const Token) !TokenInfo {
+    return peek_tokenx(tokens, 0);
+}
+
+pub fn consume_token(tokens: *[]const Token) !void {
+    if (have_tokens(tokens)) {
+        tokens.* = tokens.*[1..];
+        return;
+    }
+    return error.RanOutOfTokens;
+}
+
+pub fn parse_expression(allocator: *Allocator, tokens: *[]const Token) !?Expression {
+    if (try parse_logic_or(allocator, tokens)) |expr| {
+        return expr;
+    }
 
     return null;
+}
+
+pub fn parse_precedence(
+    comptime higher_precedence: fn (*Allocator, *[]const Token) anyerror!?Expression,
+    comptime is_logical: bool,
+    comptime op_table: anytype,
+) fn (*Allocator, *[]const Token) anyerror!?Expression {
+    return struct {
+        fn parser(allocator: *Allocator, tokens: *[]const Token) anyerror!?Expression {
+            var slice_copy = tokens.*;
+            if (try higher_precedence(allocator, &slice_copy)) |higher_precedence_expr1| {
+                var expr: Expression = higher_precedence_expr1;
+
+                outer: while (have_tokens(&slice_copy)) {
+                    inline for (std.meta.fields(@TypeOf(op_table))) |field| {
+                        var token_name: []const u8 = @tagName(try peek_token(&slice_copy));
+                        var field_name: []const u8 = field.name;
+
+                        var should_return = false;
+                        if (std.mem.eql(u8, token_name, field_name)) {
+                            try consume_token(&slice_copy);
+                            var maybe_expr: ?Expression = try higher_precedence(allocator, &slice_copy);
+                            if (maybe_expr) |higher_precedence_expr| {
+                                var left: *Expression = try allocator.create(Expression);
+                                var right: *Expression = try allocator.create(Expression);
+                                left.* = expr;
+                                right.* = higher_precedence_expr;
+
+                                if (is_logical) {
+                                    expr = Expression{ .logical = LogicalExpr{ .left = left, .op = @field(op_table, field.name), .right = right } };
+                                } else {
+                                    expr = Expression{ .binary = BinaryExpr{ .left = left, .op = @field(op_table, field.name), .right = right } };
+                                }
+
+                                // Return to the top to continue along chained
+                                // binary operations at this same precedence.
+                                continue :outer;
+                            } else {
+                                // Don't return here. Provide indirection to get around https://github.com/ziglang/zig/issues/8893
+                                should_return = true;
+                            }
+
+                            if (should_return) {
+                                return null;
+                            }
+                        }
+                    }
+
+                    // Didn't match any recognized tokens
+                    break;
+                }
+
+                tokens.* = slice_copy;
+                return expr;
+            }
+
+            return null;
+        }
+    }.parser;
+}
+
+const parse_logic_or = parse_precedence(
+    parse_logic_and,
+    true,
+    .{ .or_keyword = .LogicalOr },
+);
+
+const parse_logic_and = parse_precedence(
+    parse_equality,
+    true,
+    .{ .and_keyword = .LogicalAnd },
+);
+
+const parse_equality = parse_precedence(
+    parse_comparison,
+    false,
+    .{
+        .bang_equal = .BinaryBangEqual,
+        .double_equal = .BinaryDoubleEqual,
+    },
+);
+
+const parse_comparison = parse_precedence(
+    parse_term,
+    false,
+    .{
+        .gte = .BinaryGreaterThanEqual,
+        .lte = .BinaryLessThanEqual,
+        .right_angle = .BinaryGreaterThan,
+        .left_angle = .BinaryLessThan,
+    },
+);
+
+const parse_term = parse_precedence(
+    parse_factor,
+    false,
+    .{
+        .plus = .BinaryAdd,
+        .minus = .BinarySub,
+    },
+);
+
+const parse_factor = parse_precedence(
+    parse_unary,
+    false,
+    .{
+        .star = .BinaryMul,
+        .slash = .BinaryDiv,
+    },
+);
+
+pub fn parse_unary(allocator: *Allocator, tokens: *[]const Token) anyerror!?Expression {
+    if (have_tokens(tokens)) {
+        switch (try peek_token(tokens)) {
+            .bang => {
+                var slice_copy = tokens.*;
+                try consume_token(&slice_copy);
+
+                if (try parse_unary(allocator, &slice_copy)) |expr| {
+                    var left = try allocator.create(Expression);
+                    left.* = expr;
+
+                    tokens.* = slice_copy;
+                    return Expression{ .unary = .{ .expr = left, .op = .UnaryNot } };
+                }
+                return null;
+            },
+            .minus => {
+                var slice_copy = tokens.*;
+                try consume_token(&slice_copy);
+
+                if (try parse_unary(allocator, &slice_copy)) |expr| {
+                    var left = try allocator.create(Expression);
+                    left.* = expr;
+
+                    tokens.* = slice_copy;
+                    return Expression{ .unary = .{ .expr = left, .op = .UnaryNegation } };
+                }
+                return null;
+            },
+            else => return try parse_call(allocator, tokens),
+        }
+    }
+
+    return null;
+}
+
+pub fn parse_call(allocator: *Allocator, tokens: *[]const Token) !?Expression {
+    var slice_copy = tokens.*;
+    if (try parse_primary(allocator, &slice_copy)) |got_expr| {
+        var expr = got_expr;
+        while (have_tokens(&slice_copy)) {
+            switch (try peek_token(&slice_copy)) {
+                .left_paren => {
+                    try consume_token(&slice_copy);
+                    var maybe_arg: ?Expression = null;
+                    // TODO: support multiple arguments
+                    if (try parse_expression(allocator, &slice_copy)) |arg| {
+                        maybe_arg = arg;
+                    }
+
+                    switch (try peek_token(&slice_copy)) {
+                        .right_paren => {
+                            try consume_token(&slice_copy);
+                            var left = try allocator.create(Expression);
+                            left.* = expr;
+
+                            if (maybe_arg) |arg| {
+                                var args = try allocator.create(Expression);
+                                args.* = arg;
+
+                                expr = Expression{ .call = .{ .left = left, .args = args } };
+                            } else {
+                                expr = Expression{ .call = .{ .left = left, .args = null } };
+                            }
+                        },
+                        else => {
+                            // Expected a closing paren.
+                            // TODO: there _has_ to be a better way to do this...
+                            return null;
+                        },
+                    }
+                },
+                else => break,
+            }
+        }
+
+        tokens.* = slice_copy;
+        return expr;
+    }
+
+    return null;
+}
+
+pub fn parse_primary(allocator: *Allocator, tokens: *[]const Token) !?Expression {
+    if (have_tokens(tokens)) {
+        switch (try peek_token(tokens)) {
+            .true_keyword => {
+                try consume_token(tokens);
+                return Expression{ .bool_literal = true };
+            },
+            .false_keyword => {
+                try consume_token(tokens);
+                return Expression{ .bool_literal = false };
+            },
+            .int_literal => |int_literal| {
+                try consume_token(tokens);
+                return Expression{ .int_literal = int_literal.value };
+            },
+            .string_literal => |string_literal| {
+                try consume_token(tokens);
+                return Expression{ .string_literal = string_literal.text };
+            },
+            .identifier => |token_ident| {
+                try consume_token(tokens);
+                var ident = try allocator.alloc(u8, token_ident.text.len);
+                std.mem.copy(u8, ident, token_ident.text);
+                return Expression{ .identifier = ident };
+            },
+            .left_paren => {
+                var slice_copy = tokens.*;
+                try consume_token(&slice_copy);
+                if (have_tokens(&slice_copy)) {
+                    if (try parse_expression(allocator, &slice_copy)) |expr| {
+                        switch (try peek_token(&slice_copy)) {
+                            .right_paren => {
+                                try consume_token(&slice_copy);
+                                tokens.* = slice_copy;
+                                return expr;
+                            },
+                            else => {},
+                        }
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+
+    return null;
+}
+
+// primary        → "true" | "false"
+//                | NUMBER | STRING | IDENTIFIER | "(" expression ")";
+
+pub fn have_text(text: *[]const u8) bool {
+    return text.*.len >= 1;
+}
+
+pub fn have_tokens(tokens: *[]const Token) bool {
+    return tokens.*.len >= 1;
 }
 
 pub fn interpret_ast(ast: Ast) void {
@@ -616,48 +1060,54 @@ pub fn interpret_ast(ast: Ast) void {
 
 pub fn interpret_stmt(stmt: Statement) ShimValue {
     switch (stmt) {
-        StatementTag.expr => return interpret_expr(&stmt.expr),
+        StatementTag.expression_statement => {
+            var result = interpret_expr(&stmt.expression_statement);
+            return result;
+        },
+        // TODO: lies
         StatementTag.if_statement => unreachable,
         StatementTag.pretend_statement => return ShimValue{ .shim_unit = ShimUnit{} },
+        // TODO: lies
+        StatementTag.assignment_statement => unreachable,
     }
     return ShimValue{ .shim_unit = ShimUnit{} };
 }
 
 pub fn interpret_expr(expr: *const Expression) ShimValue {
     switch (expr.*) {
-        ExpressionTag.int_literal => |v| return ShimValue{ .shim_u8 = v },
+        ExpressionTag.int_literal => |v| return ShimValue{ .shim_i128 = v },
         ExpressionTag.string_literal => |_| return ShimValue{ .shim_str = false },
+        ExpressionTag.bool_literal => |b| return ShimValue{ .shim_bool = b },
         ExpressionTag.unary => |_| return ShimValue{ .shim_str = false },
+        ExpressionTag.logical => |_| unreachable,
         ExpressionTag.binary => |bexpr| {
             var left = switch (interpret_expr(bexpr.left)) {
-                ValueTag.shim_u8 => |v| v,
+                ValueTag.shim_i128 => |v| v,
                 else => return ShimValue{ .shim_unit = ShimUnit{} },
             };
             var right = switch (interpret_expr(bexpr.right)) {
-                ValueTag.shim_u8 => |v| v,
+                ValueTag.shim_i128 => |v| v,
                 else => return ShimValue{ .shim_unit = ShimUnit{} },
             };
             switch (bexpr.op) {
-                BinaryOperator.BinaryAdd => return ShimValue{ .shim_u8 = left + right },
-                BinaryOperator.BinaryMul => return ShimValue{ .shim_u8 = left * right },
+                BinaryOperator.BinaryAdd => return ShimValue{ .shim_i128 = left + right },
+                BinaryOperator.BinaryMul => return ShimValue{ .shim_i128 = left * right },
+                else => unreachable,
             }
         },
-        ExpressionTag.call => |_| return ShimValue{ .shim_str = false },
+        ExpressionTag.identifier => |_| return ShimValue{ .shim_str = false },
+        ExpressionTag.call => |cexpr| {
+            // Ignore the thing being called... we always assume it's print for now :)
+            if (cexpr.args) |args| {
+                var val = interpret_expr(args);
+                switch (val) {
+                    .shim_i128 => |num| std.debug.print("{}", .{num}),
+                    else => unreachable,
+                }
+            }
+            std.debug.print("\n", .{});
+
+            return ShimValue{ .shim_unit = ShimUnit{} };
+        },
     }
 }
-
-// TODO: this is how we could conditionally add comments to the AST
-// const build_options = @import("build_options");
-//
-// const Ast = blk: {
-//     if (build_options.include_comments_in_ast) {
-//         break :blk struct {
-//             foo: u8,
-//             comment: u8,
-//         };
-//     } else {
-//         break :blk struct {
-//             foo: u8,
-//         };
-//     }
-// };
