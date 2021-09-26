@@ -1,0 +1,63 @@
+#!/usr/bin/env python3
+
+from pathlib import Path
+import subprocess
+import sys
+import textwrap
+
+# I promise that I can write cleaner Python than this :)
+# I just need something in place for CI
+
+input_test_names = [Path(path).resolve() for path in sys.argv[1:]]
+
+zig = Path(__file__).parent.joinpath("zig-out/bin/shimlang").as_posix()
+
+test_dir = Path(__file__).parent / "tests"
+
+check_script_output = list(test_dir.glob("check_output/*.shm"))
+if input_test_names:
+    check_script_output = [
+        path for path in check_script_output if path.resolve() in input_test_names
+    ]
+
+if not check_script_output:
+    sys.exit("No 'check_script_output' scripts found")
+
+failed = False
+for script in check_script_output:
+    expected_output_file = script.with_suffix(".out")
+    if not expected_output_file.exists():
+        failed = True
+        print("FAIL -", script, "(no output file)")
+        continue
+
+    expected = expected_output_file.read_text()
+    result = subprocess.run(
+        [zig, script.as_posix()],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+
+    if result.returncode:
+        failed = True
+        print("FAIL -", script, "(non-zero exit code)")
+
+        # Only give more detail when a test is explicitly asked for
+        if input_test_names:
+            print("    Got:")
+            print(textwrap.indent(result.stdout, "        "))
+
+    elif result.stdout == expected:
+        print("PASS -", script)
+
+    else:
+        failed = True
+        print("FAIL -", script, "(output does not match expected)")
+        print("    Expected:")
+        print("        ", expected)
+        print("    Got:")
+        print("        ", result.stdout)
+
+if failed:
+    sys.exit(1)
