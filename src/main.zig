@@ -10,5 +10,5 @@ pub fn main() !void {
         }
     }
 
-    try libshim.run_text(&gpa.allocator, "print(3 + 3)");
+    try libshim.run_text(&gpa.allocator, "print(3 + 3 + 2);");
 }
