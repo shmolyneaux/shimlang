@@ -718,10 +718,7 @@ pub fn parse_statement(allocator: *Allocator, tokens: *[]const Token) !Statement
         return stmt;
     }
 
-    std.log.err("Giving up and running to the end", .{});
-
-    skip_all(Token, tokens);
-    return Statement{ .pretend_statement = true };
+    return error.ParseError;
 }
 
 pub fn parse_use_statement(allocator: *Allocator, tokens: *[]const Token) !?Statement {
@@ -950,6 +947,8 @@ pub fn parse_call(allocator: *Allocator, tokens: *[]const Token) !?Expression {
     var slice_copy = tokens.*;
     if (try parse_primary(allocator, &slice_copy)) |got_expr| {
         var expr = got_expr;
+        errdefer expr.deinit(allocator);
+
         while (have_tokens(&slice_copy)) {
             switch (try peek_token(&slice_copy)) {
                 .left_paren => {
@@ -978,6 +977,7 @@ pub fn parse_call(allocator: *Allocator, tokens: *[]const Token) !?Expression {
                         else => {
                             // Expected a closing paren.
                             // TODO: there _has_ to be a better way to do this...
+                            expr.deinit(allocator);
                             return null;
                         },
                     }
