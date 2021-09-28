@@ -13,6 +13,8 @@ pub fn build(b: *std.build.Builder) void {
 
     const exe = b.addExecutable("shimlang", "src/main.zig");
     exe.addPackagePath("libshim", "libs/libshim/libshim.zig");
+    // Set to `true` to get smaller binaries
+    exe.strip = false;
     exe.setTarget(target);
     exe.setBuildMode(mode);
     exe.install();
