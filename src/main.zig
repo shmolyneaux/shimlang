@@ -7,6 +7,7 @@ pub fn main() !void {
         const leaked = gpa.deinit();
         if (leaked) {
             std.log.err("Leaked: {}", .{leaked});
+            std.os.exit(42);
         }
     }
 
