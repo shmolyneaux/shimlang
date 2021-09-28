@@ -195,7 +195,7 @@ const Expression = union(ExpressionTag) {
     pub fn deinit(self: Expression, allocator: *Allocator) void {
         switch (self) {
             ExpressionTag.int_literal => |_| {},
-            ExpressionTag.string_literal => |_| {},
+            ExpressionTag.string_literal => |str| allocator.free(str),
             ExpressionTag.bool_literal => |_| {},
             ExpressionTag.unary => |_| {},
             ExpressionTag.identifier => |ident| allocator.free(ident),
@@ -1010,6 +1010,8 @@ pub fn parse_primary(allocator: *Allocator, tokens: *[]const Token) !?Expression
             },
             .string_literal => |string_literal| {
                 try consume_token(tokens);
+                var text = try allocator.alloc(u8, string_literal.text.len);
+                std.mem.copy(u8, text, string_literal.text);
                 return Expression{ .string_literal = string_literal.text };
             },
             .identifier => |token_ident| {
