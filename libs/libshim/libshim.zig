@@ -310,11 +310,18 @@ const ValueTag = enum {
 };
 const ShimValue = union(ValueTag) {
     shim_i128: i128,
-    shim_str: bool,
+    shim_str: []const u8,
     shim_bool: bool,
     shim_unit: ShimUnit,
     shim_error: ShimUnit,
     shim_obj: ShimUnit,
+
+    fn deinit(self: ShimValue, allocator: *Allocator) void {
+        switch (self) {
+            .shim_str => |str| allocator.free(str),
+            else => {},
+        }
+    }
 };
 
 // Functions!
@@ -323,7 +330,7 @@ pub fn run_text(allocator: *Allocator, text: []const u8) !void {
     var ast = try parse_text(allocator, text);
     defer ast.deinit();
 
-    _ = interpret_ast(ast);
+    _ = try interpret_ast(allocator, ast);
 }
 
 const TokenTag = enum {
@@ -505,17 +512,22 @@ pub fn tokenize(allocator: *Allocator, text: []const u8) !ArrayList(Token) {
                 }
             },
             '"' => {
+                var end_pos = find_string_end_pos(remaining_text);
+
                 // TODO: interpolated strings
                 // TODO: other characters for string literals
                 // TODO: escape sequences
-                while (remaining_text.len >= 1 and remaining_text[0] != '"') {
-                    skip_byte(&remaining_text);
-                }
-                skip_byte(&remaining_text);
+
+                const str_copy = try allocator.alloc(u8, end_pos);
+                std.mem.copy(u8, str_copy, remaining_text[0..end_pos]);
+
+                // We add 1 to the end position to consume the closing '"'
+                remaining_text = remaining_text[end_pos + 1 ..];
+
                 // TODO: actually copy out the text
                 // For now we allocate a size-zero pointer so that we have
                 // something to free during deinit
-                try tokens.append(Token{ .info = .{ .string_literal = .{ .text = try allocator.alloc(u8, 0) } }, .source_line = 24601 });
+                try tokens.append(Token{ .info = .{ .string_literal = .{ .text = str_copy } }, .source_line = 24601 });
             },
             '0'...'9' => {
                 var number_span = find_number_end_pos(remaining_text);
@@ -607,6 +619,18 @@ pub fn find_identifier_end_pos(text: []const u8) u32 {
         switch (text[pos]) {
             'A'...'Z', 'a'...'z', '_', '0'...'9' => {},
             else => return pos,
+        }
+        pos += 1;
+    }
+    return pos;
+}
+
+pub fn find_string_end_pos(text: []const u8) u32 {
+    var pos: u32 = 0;
+    while (pos < text.len) {
+        switch (text[pos]) {
+            '"' => return pos,
+            else => {},
         }
         pos += 1;
     }
@@ -1012,7 +1036,7 @@ pub fn parse_primary(allocator: *Allocator, tokens: *[]const Token) !?Expression
                 try consume_token(tokens);
                 var text = try allocator.alloc(u8, string_literal.text.len);
                 std.mem.copy(u8, text, string_literal.text);
-                return Expression{ .string_literal = string_literal.text };
+                return Expression{ .string_literal = text };
             },
             .identifier => |token_ident| {
                 try consume_token(tokens);
@@ -1054,16 +1078,17 @@ pub fn have_tokens(tokens: *[]const Token) bool {
     return tokens.*.len >= 1;
 }
 
-pub fn interpret_ast(ast: Ast) void {
+pub fn interpret_ast(allocator: *Allocator, ast: Ast) !void {
     for (ast.stmts.items) |stmt| {
-        _ = interpret_stmt(stmt);
+        var res = try interpret_stmt(allocator, stmt);
+        res.deinit(allocator);
     }
 }
 
-pub fn interpret_stmt(stmt: Statement) ShimValue {
+pub fn interpret_stmt(allocator: *Allocator, stmt: Statement) !ShimValue {
     switch (stmt) {
         StatementTag.expression_statement => {
-            var result = interpret_expr(&stmt.expression_statement);
+            var result = try interpret_expr(allocator, &stmt.expression_statement);
             return result;
         },
         // TODO: lies
@@ -1075,19 +1100,28 @@ pub fn interpret_stmt(stmt: Statement) ShimValue {
     return ShimValue{ .shim_unit = ShimUnit{} };
 }
 
-pub fn interpret_expr(expr: *const Expression) ShimValue {
+pub fn interpret_expr(allocator: *Allocator, expr: *const Expression) anyerror!ShimValue {
     switch (expr.*) {
         ExpressionTag.int_literal => |v| return ShimValue{ .shim_i128 = v },
-        ExpressionTag.string_literal => |_| return ShimValue{ .shim_str = false },
+        ExpressionTag.string_literal => |str| {
+            var new_str = try allocator.alloc(u8, str.len);
+            std.mem.copy(u8, new_str, str);
+            return ShimValue{ .shim_str = new_str };
+        },
         ExpressionTag.bool_literal => |b| return ShimValue{ .shim_bool = b },
-        ExpressionTag.unary => |_| return ShimValue{ .shim_str = false },
+        ExpressionTag.unary => |_| return ShimValue{ .shim_unit = ShimUnit{} },
         ExpressionTag.logical => |_| unreachable,
         ExpressionTag.binary => |bexpr| {
-            var left = switch (interpret_expr(bexpr.left)) {
+            var left_val = try interpret_expr(allocator, bexpr.left);
+            defer left_val.deinit(allocator);
+            var right_val = try interpret_expr(allocator, bexpr.right);
+            defer right_val.deinit(allocator);
+
+            var left = switch (left_val) {
                 ValueTag.shim_i128 => |v| v,
                 else => return ShimValue{ .shim_unit = ShimUnit{} },
             };
-            var right = switch (interpret_expr(bexpr.right)) {
+            var right = switch (right_val) {
                 ValueTag.shim_i128 => |v| v,
                 else => return ShimValue{ .shim_unit = ShimUnit{} },
             };
@@ -1097,13 +1131,15 @@ pub fn interpret_expr(expr: *const Expression) ShimValue {
                 else => unreachable,
             }
         },
-        ExpressionTag.identifier => |_| return ShimValue{ .shim_str = false },
+        ExpressionTag.identifier => |_| return ShimValue{ .shim_unit = ShimUnit{} },
         ExpressionTag.call => |cexpr| {
             // Ignore the thing being called... we always assume it's print for now :)
             if (cexpr.args) |args| {
-                var val = interpret_expr(args);
+                var val = try interpret_expr(allocator, args);
+                defer val.deinit(allocator);
                 switch (val) {
                     .shim_i128 => |num| std.debug.print("{}", .{num}),
+                    .shim_str => |str| std.debug.print("{s}", .{str}),
                     else => unreachable,
                 }
             }
