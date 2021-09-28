@@ -41,7 +41,7 @@ for script in check_script_output:
 
     if result.returncode:
         failed = True
-        print("FAIL -", script, "(non-zero exit code)")
+        print("FAIL -", script, f"(non-zero exit code {result.returncode})")
 
         # Only give more detail when a test is explicitly asked for
         if input_test_names:
