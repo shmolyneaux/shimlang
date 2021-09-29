@@ -307,6 +307,7 @@ const ValueTag = enum {
 
     // ... everything else
     shim_obj,
+    shim_native_fn,
 };
 const ShimValue = union(ValueTag) {
     shim_i128: i128,
@@ -315,6 +316,23 @@ const ShimValue = union(ValueTag) {
     shim_unit: ShimUnit,
     shim_error: ShimUnit,
     shim_obj: ShimUnit,
+    // In reality this is a pointer to something that returns a ShimValue, but zig doesn't like that
+    shim_native_fn: *const fn ([]const ShimValue) anyerror!void,
+
+    fn call(func: ShimValue, args: []const ShimValue) anyerror!ShimValue {
+        switch (func) {
+            .shim_native_fn => return func.get_native_fn().*(args),
+            else => return error.ValueCannotBeCalled,
+        }
+    }
+
+    fn create_native_fn(func: *const fn ([]const ShimValue) anyerror!ShimValue) ShimValue {
+        return ShimValue{ .shim_native_fn = @ptrCast(*const fn ([]const ShimValue) anyerror!void, func) };
+    }
+
+    fn get_native_fn(self: ShimValue) *const fn ([]const ShimValue) anyerror!ShimValue {
+        return @ptrCast(*const fn ([]const ShimValue) anyerror!ShimValue, self.shim_native_fn);
+    }
 
     fn deinit(self: ShimValue, allocator: *Allocator) void {
         switch (self) {
@@ -1165,21 +1183,39 @@ pub fn interpret_expr(allocator: *Allocator, expr: *const Expression) anyerror!S
                 else => unreachable,
             }
         },
-        ExpressionTag.identifier => |_| return ShimValue{ .shim_unit = ShimUnit{} },
+        ExpressionTag.identifier => |ident| {
+            if (std.mem.eql(u8, ident, "print")) {
+                return ShimValue.create_native_fn(&native_fn_print);
+            }
+            return ShimValue{ .shim_unit = ShimUnit{} };
+        },
         ExpressionTag.call => |cexpr| {
-            // Ignore the thing being called... we always assume it's print for now :)
+            var left = try interpret_expr(allocator, cexpr.left);
+            defer left.deinit(allocator);
+
             if (cexpr.args) |args| {
                 var val = try interpret_expr(allocator, args);
                 defer val.deinit(allocator);
-                switch (val) {
-                    .shim_i128 => |num| std.debug.print("{}", .{num}),
-                    .shim_str => |str| std.debug.print("{s}", .{str}),
-                    else => unreachable,
-                }
-            }
-            std.debug.print("\n", .{});
 
-            return ShimValue{ .shim_unit = ShimUnit{} };
+                var actual_args: []const ShimValue = &[_]ShimValue{val};
+                return left.call(actual_args);
+            } else {
+                var actual_args: []const ShimValue = &[_]ShimValue{};
+                return left.call(actual_args);
+            }
         },
     }
+}
+
+fn native_fn_print(values: []const ShimValue) anyerror!ShimValue {
+    for (values) |val| {
+        switch (val) {
+            .shim_i128 => |num| std.debug.print("{}", .{num}),
+            .shim_str => |str| std.debug.print("{s}", .{str}),
+            else => unreachable,
+        }
+    }
+    std.debug.print("\n", .{});
+
+    return ShimValue{ .shim_unit = ShimUnit{} };
 }
