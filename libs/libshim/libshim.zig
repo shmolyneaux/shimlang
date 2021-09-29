@@ -512,21 +512,67 @@ pub fn tokenize(allocator: *Allocator, text: []const u8) !ArrayList(Token) {
                 }
             },
             '"' => {
-                var end_pos = find_string_end_pos(remaining_text);
+                var byte_count: u32 = 0;
+                var pos: u32 = 0;
+                var found_closing_quote = false;
+                while (pos < remaining_text.len) {
+                    switch (remaining_text[pos]) {
+                        '"' => {
+                            found_closing_quote = true;
+                            break;
+                        },
+                        '\\' => {
+                            // Ignore the character after the backslash
+                            pos += 1;
+                        },
+                        else => {},
+                    }
+                    byte_count += 1;
+                    pos += 1;
+                }
+                if (!found_closing_quote) {
+                    return error.StringNotClosed;
+                }
+                var end_pos = pos;
 
                 // TODO: interpolated strings
-                // TODO: other characters for string literals
-                // TODO: escape sequences
+                // TODO: other characters for string literals (single quote)
 
-                const str_copy = try allocator.alloc(u8, end_pos);
-                std.mem.copy(u8, str_copy, remaining_text[0..end_pos]);
+                const str_copy = try allocator.alloc(u8, byte_count);
+                var dest_idx: u32 = 0;
+                var escape_next = false;
+
+                {
+                    // Is this actually how you do a c-style for loop?
+                    var src_idx: u32 = 0;
+                    while (src_idx < end_pos) {
+                        defer src_idx += 1;
+
+                        str_copy[dest_idx] = blk: {
+                            if (escape_next) {
+                                escape_next = false;
+                                break :blk switch (remaining_text[src_idx]) {
+                                    'n' => '\n',
+                                    't' => '\t',
+                                    'r' => '\r',
+                                    // Use the exact byte that appears after the slash
+                                    else => remaining_text[src_idx],
+                                };
+                            } else {
+                                if (remaining_text[src_idx] == '\\') {
+                                    escape_next = true;
+                                    continue;
+                                }
+                                break :blk remaining_text[src_idx];
+                            }
+                        };
+                        dest_idx += 1;
+                    }
+                }
 
                 // We add 1 to the end position to consume the closing '"'
                 remaining_text = remaining_text[end_pos + 1 ..];
 
-                // TODO: actually copy out the text
-                // For now we allocate a size-zero pointer so that we have
-                // something to free during deinit
                 try tokens.append(Token{ .info = .{ .string_literal = .{ .text = str_copy } }, .source_line = 24601 });
             },
             '0'...'9' => {
@@ -619,18 +665,6 @@ pub fn find_identifier_end_pos(text: []const u8) u32 {
         switch (text[pos]) {
             'A'...'Z', 'a'...'z', '_', '0'...'9' => {},
             else => return pos,
-        }
-        pos += 1;
-    }
-    return pos;
-}
-
-pub fn find_string_end_pos(text: []const u8) u32 {
-    var pos: u32 = 0;
-    while (pos < text.len) {
-        switch (text[pos]) {
-            '"' => return pos,
-            else => {},
         }
         pos += 1;
     }
