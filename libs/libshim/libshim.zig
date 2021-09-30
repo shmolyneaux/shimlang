@@ -794,10 +794,13 @@ pub fn parse_statement(allocator: *Allocator, tokens: *[]const Token) !Statement
         return error.RanOutOfTokens;
     }
 
-    if (try parse_use_statement(allocator, tokens)) |stmt| {
-        return stmt;
-    } else if (try parse_expressionlike_statement(allocator, tokens)) |stmt| {
-        return stmt;
+    switch (try peek_token(tokens)) {
+        .use_keyword => if (try parse_use_statement(allocator, tokens)) |stmt| {
+            return stmt;
+        },
+        else => if (try parse_expressionlike_statement(allocator, tokens)) |stmt| {
+            return stmt;
+        },
     }
 
     return error.ParseError;
@@ -846,11 +849,11 @@ pub fn parse_expressionlike_statement(allocator: *Allocator, tokens: *[]const To
                 tokens.* = slice_copy;
                 return Statement{ .expression_statement = expr };
             },
-            else => {
-                std.log.info("Next token is: {}", .{try peek_token(&slice_copy)});
-                return null;
-            },
+            else => {},
         }
+
+        std.log.info("Next token is: {}", .{try peek_token(&slice_copy)});
+        expr.deinit(allocator);
     }
 
     std.log.info("Not an expression statement 1", .{});
