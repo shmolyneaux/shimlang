@@ -830,7 +830,11 @@ pub fn parse_expressionlike_statement(allocator: *Allocator, tokens: *[]const To
         // Oh no... this is going to need to go into a lot of places...
         errdefer expr.deinit(allocator);
 
-        switch (try peek_token(&slice_copy)) {
+        var token_type = peek_token(&slice_copy) catch |err| {
+            std.debug.print("Expected '=' or ';' after expression\n", .{});
+            return err;
+        };
+        switch (token_type) {
             .equal => {
                 // TODO: turn the expression we got into an assignment
                 skip_all(Token, tokens);
