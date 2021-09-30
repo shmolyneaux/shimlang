@@ -1,0 +1,4 @@
+fn tell() {
+    print("in fn");
+}
+tell();

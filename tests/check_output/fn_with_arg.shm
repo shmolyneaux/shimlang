@@ -1,0 +1,5 @@
+fn print_thing(thing) {
+    print(thing);
+}
+print_thing(4);
+print_thing("test");

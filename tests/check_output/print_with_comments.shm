@@ -1,0 +1,7 @@
+// Did
+print(// it
+// ignore
+    3 //these
+// comments
+) // ?
+;
