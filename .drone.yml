@@ -10,7 +10,7 @@ steps:
   commands:
     - zig build
     - apk add python3
-    - ./run_tests tests/check_output/print_int*.shm tests/check_output/print_str*.shm tests/check_output/print_int_multiple_add.shm
+    - ./run_tests tests/check_output/print_int*.shm tests/check_output/print_str*.shm tests/check_output/print_multiple_args.shm
 
 trigger:
   event:
