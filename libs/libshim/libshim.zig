@@ -158,17 +158,17 @@ const LogicalExpr = struct {
 
 const CallExpr = struct {
     left: *Expression,
-    args: ?*Expression,
+    args: []const Expression,
 
     // TODO: We assume that some parent structure provides the allocator that
     // was used to originally create these expressions.
     pub fn deinit(self: CallExpr, allocator: *Allocator) void {
         self.left.deinit(allocator);
         allocator.destroy(self.left);
-        if (self.args) |args| {
-            args.deinit(allocator);
-            allocator.destroy(args);
+        for (self.args) |arg| {
+            arg.deinit(allocator);
         }
+        allocator.free(self.args);
     }
 };
 
@@ -249,8 +249,11 @@ const Expression = union(ExpressionTag) {
             },
             .call => |val| {
                 try writer.print("CALL({}, ", .{val.left.*});
-                if (val.args) |args| {
-                    try writer.print("{}", .{args});
+                for (val.args) |arg, i| {
+                    try writer.print("{}", .{arg});
+                    if (i != val.args.len - 1) {
+                        try writer.print(",", .{});
+                    }
                 }
                 try writer.print(")", .{});
             },
@@ -317,7 +320,10 @@ const ShimValue = union(ValueTag) {
     shim_error: ShimUnit,
     shim_obj: ShimUnit,
     // In reality this is a pointer to something that returns a ShimValue, but zig doesn't like that
-    shim_native_fn: *const fn ([]const ShimValue) anyerror!void,
+    shim_native_fn: PretendNativeFn,
+
+    const RealNativeFn = *const fn ([]const ShimValue) anyerror!ShimValue;
+    const PretendNativeFn = *const fn ([]const ShimValue) anyerror!void;
 
     fn call(func: ShimValue, args: []const ShimValue) anyerror!ShimValue {
         switch (func) {
@@ -326,12 +332,12 @@ const ShimValue = union(ValueTag) {
         }
     }
 
-    fn create_native_fn(func: *const fn ([]const ShimValue) anyerror!ShimValue) ShimValue {
-        return ShimValue{ .shim_native_fn = @ptrCast(*const fn ([]const ShimValue) anyerror!void, func) };
+    fn create_native_fn(func: RealNativeFn) ShimValue {
+        return ShimValue{ .shim_native_fn = @ptrCast(PretendNativeFn, func) };
     }
 
-    fn get_native_fn(self: ShimValue) *const fn ([]const ShimValue) anyerror!ShimValue {
-        return @ptrCast(*const fn ([]const ShimValue) anyerror!ShimValue, self.shim_native_fn);
+    fn get_native_fn(self: ShimValue) RealNativeFn {
+        return @ptrCast(RealNativeFn, self.shim_native_fn);
     }
 
     fn deinit(self: ShimValue, allocator: *Allocator) void {
@@ -1029,33 +1035,45 @@ pub fn parse_call(allocator: *Allocator, tokens: *[]const Token) !?Expression {
             switch (try peek_token(&slice_copy)) {
                 .left_paren => {
                     try consume_token(&slice_copy);
-                    var maybe_arg: ?Expression = null;
-                    // TODO: support multiple arguments
-                    if (try parse_expression(allocator, &slice_copy)) |arg| {
-                        maybe_arg = arg;
+                    var args = ArrayList(Expression).init(allocator);
+                    defer args.deinit();
+
+                    var last_arg = false;
+                    var finished = false;
+                    while (have_tokens(&slice_copy)) {
+                        switch (try peek_token(&slice_copy)) {
+                            .right_paren => {
+                                try consume_token(&slice_copy);
+                                var left = try allocator.create(Expression);
+                                left.* = expr;
+
+                                expr = Expression{ .call = .{ .left = left, .args = args.toOwnedSlice() } };
+
+                                // Break here, and attempt to chain on another call
+                                finished = true;
+                                break;
+                            },
+                            else => {
+                                if (last_arg) {
+                                    return error.ExpectedClosingParenAfterExpressionWithNoComma;
+                                }
+
+                                if (try parse_expression(allocator, &slice_copy)) |arg_expr| {
+                                    try args.append(arg_expr);
+                                } else {
+                                    return error.CouldNotParseExpressionInCall;
+                                }
+
+                                switch (try peek_token(&slice_copy)) {
+                                    .comma => try consume_token(&slice_copy),
+                                    else => last_arg = true,
+                                }
+                            },
+                        }
                     }
 
-                    switch (try peek_token(&slice_copy)) {
-                        .right_paren => {
-                            try consume_token(&slice_copy);
-                            var left = try allocator.create(Expression);
-                            left.* = expr;
-
-                            if (maybe_arg) |arg| {
-                                var args = try allocator.create(Expression);
-                                args.* = arg;
-
-                                expr = Expression{ .call = .{ .left = left, .args = args } };
-                            } else {
-                                expr = Expression{ .call = .{ .left = left, .args = null } };
-                            }
-                        },
-                        else => {
-                            // Expected a closing paren.
-                            // TODO: there _has_ to be a better way to do this...
-                            expr.deinit(allocator);
-                            return null;
-                        },
+                    if (!finished) {
+                        return error.RanOutOfTokensWhenParsingCall;
                     }
                 },
                 else => break,
@@ -1152,6 +1170,41 @@ pub fn interpret_stmt(allocator: *Allocator, stmt: Statement) !ShimValue {
     return ShimValue{ .shim_unit = ShimUnit{} };
 }
 
+fn Buffer(comptime T: type) type {
+    return struct {
+        allocator: *Allocator,
+        items: []T,
+        capacity: usize,
+
+        fn init(allocator: *Allocator, capacity: usize) !Buffer(T) {
+            // Allocate the space for the given capacity, but set the slice
+            // to only ever contain the number of items that have been inserted.
+            var items = try allocator.alloc(T, capacity);
+            items.len = 0;
+
+            return Buffer(T){
+                .allocator = allocator,
+                .items = items,
+                .capacity = capacity,
+            };
+        }
+
+        fn append(self: *Buffer(T), value: T) !void {
+            if (self.items.len < self.capacity) {
+                self.items.len += 1;
+                self.items[self.items.len - 1] = value;
+                return;
+            }
+
+            return error.IndexOutOfBounds;
+        }
+
+        fn deinit(self: Buffer(T)) void {
+            self.allocator.free(self.items);
+        }
+    };
+}
+
 pub fn interpret_expr(allocator: *Allocator, expr: *const Expression) anyerror!ShimValue {
     switch (expr.*) {
         ExpressionTag.int_literal => |v| return ShimValue{ .shim_i128 = v },
@@ -1193,26 +1246,34 @@ pub fn interpret_expr(allocator: *Allocator, expr: *const Expression) anyerror!S
             var left = try interpret_expr(allocator, cexpr.left);
             defer left.deinit(allocator);
 
-            if (cexpr.args) |args| {
-                var val = try interpret_expr(allocator, args);
-                defer val.deinit(allocator);
-
-                var actual_args: []const ShimValue = &[_]ShimValue{val};
-                return left.call(actual_args);
-            } else {
-                var actual_args: []const ShimValue = &[_]ShimValue{};
-                return left.call(actual_args);
+            var args = try Buffer(ShimValue).init(allocator, cexpr.args.len);
+            defer {
+                for (args.items) |arg| {
+                    arg.deinit(allocator);
+                }
+                args.deinit();
             }
+
+            for (cexpr.args) |arg_expr| {
+                var arg_val = try interpret_expr(allocator, &arg_expr);
+                try args.append(arg_val);
+            }
+
+            return left.call(args.items);
         },
     }
 }
 
 fn native_fn_print(values: []const ShimValue) anyerror!ShimValue {
-    for (values) |val| {
-        switch (val) {
+    // We take a pointer to workaround a bug I still need to file: https://www.reddit.com/r/zig/comments/py099g
+    for (values) |*val, i| {
+        switch (val.*) {
             .shim_i128 => |num| std.debug.print("{}", .{num}),
             .shim_str => |str| std.debug.print("{s}", .{str}),
             else => unreachable,
+        }
+        if (i != values.len - 1) {
+            std.debug.print(" ", .{});
         }
     }
     std.debug.print("\n", .{});
