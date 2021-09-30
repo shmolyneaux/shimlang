@@ -13,9 +13,9 @@ built-in libraries once there's enough of a language in place to warrant that.
 A key goal of the Shimlang project is to provide a portable scripting language
 that is _exceptionally_ easy to distribute. That means several things:
 
-- As much as possible (for each platform), binary releases should be static binaries (no libc)
+- As much as possible (for each platform), binary releases should be static binaries (no dynamic linking to libc)
 - Binaries should be small, ideally a few hundred kB (there shouldn't be big concerns about including the binary in a git repo)
-    - For the extra-cautious, a bootstrap executable should be available that downloads the correct version
+    - For the extra-cautious, a bootstrap executable should be available that downloads a specified version
 - Scripts should be easily packaged with the interpreter for single-file distribution
 - The language should provide familiar syntax. The syntax is largely inspired by Rust, and I haven't seen
   huge complaints about Rust syntax (in constrast with Python, Lisp, Haskell, bash).
