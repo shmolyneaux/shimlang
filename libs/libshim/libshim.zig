@@ -69,11 +69,12 @@ const Block = struct {};
 const IfStatement = struct { predicate: Expression, if_block: Block, else_block: ?Block };
 
 // TODO: Multiple sorts of statements (if, for, use, while, etc.)
-const StatementTag = enum { expression_statement, if_statement, assignment_statement, pretend_statement };
+const StatementTag = enum { expression_statement, if_statement, declaration_statement, assignment_statement, pretend_statement };
 
 const Statement = union(StatementTag) {
     expression_statement: Expression,
     if_statement: IfStatement,
+    declaration_statement: struct { name: []const u8, value: Expression },
     assignment_statement: struct { obj: ?Expression, name: []const u8, value: Expression },
     // Ignore this for now, I just need a placeholder
     pretend_statement: bool,
@@ -81,6 +82,17 @@ const Statement = union(StatementTag) {
     pub fn deinit(self: Statement, allocator: *Allocator) void {
         switch (self) {
             StatementTag.expression_statement => |stmt| stmt.deinit(allocator),
+            StatementTag.declaration_statement => |stmt| {
+                allocator.free(stmt.name);
+                stmt.value.deinit(allocator);
+            },
+            StatementTag.assignment_statement => |stmt| {
+                allocator.free(stmt.name);
+                stmt.value.deinit(allocator);
+                if (stmt.obj) |obj| {
+                    obj.deinit(allocator);
+                }
+            },
             else => return,
         }
     }
@@ -403,6 +415,7 @@ const TokenTag = enum {
     return_keyword,
     struct_keyword,
     use_keyword,
+    let_keyword,
     while_keyword,
     true_keyword,
     false_keyword,
@@ -457,6 +470,7 @@ const TokenInfo = union(TokenTag) {
     return_keyword,
     struct_keyword,
     use_keyword,
+    let_keyword,
     while_keyword,
     true_keyword,
     false_keyword,
@@ -624,8 +638,7 @@ pub fn tokenize(allocator: *Allocator, text: []const u8) !ArrayList(Token) {
                 if (keyword_to_token(ident, line_number)) |token| {
                     try tokens.append(token);
                 } else {
-                    const ident_copy = try allocator.alloc(u8, end_pos + 1);
-                    std.mem.copy(u8, ident_copy, ident);
+                    const ident_copy = try copy_slice(allocator, ident);
                     try tokens.append(Token{
                         .info = .{ .identifier = .{ .text = ident_copy } },
                         .source_line = line_number,
@@ -657,6 +670,7 @@ pub fn keyword_to_token(text: []const u8, line_number: u32) ?Token {
         .@"return" = TokenTag.return_keyword,
         .@"struct" = TokenTag.struct_keyword,
         .@"use" = TokenTag.use_keyword,
+        .@"let" = TokenTag.let_keyword,
         .@"while" = TokenTag.while_keyword,
         .@"true" = TokenTag.true_keyword,
         .@"false" = TokenTag.false_keyword,
@@ -798,6 +812,7 @@ pub fn parse_statement(allocator: *Allocator, tokens: *[]const Token) !Statement
         .use_keyword => if (try parse_use_statement(allocator, tokens)) |stmt| {
             return stmt;
         },
+        .let_keyword => return try parse_declaration(allocator, tokens),
         else => if (try parse_expressionlike_statement(allocator, tokens)) |stmt| {
             return stmt;
         },
@@ -822,6 +837,27 @@ pub fn parse_use_statement(allocator: *Allocator, tokens: *[]const Token) !?Stat
         },
         else => return null,
     }
+}
+
+pub fn parse_declaration(allocator: *Allocator, tokens: *[]const Token) !Statement {
+    _ = allocator;
+    try expect_token(tokens, .let_keyword);
+    if (try match_token(tokens, .identifier)) |token| {
+        var name = try copy_slice(allocator, token.identifier.text);
+        errdefer allocator.free(name);
+
+        try expect_token(tokens, .equal);
+
+        var maybe_expr = try parse_expression(allocator, tokens);
+        if (maybe_expr) |expr| {
+            try expect_token(tokens, .semicolon);
+            return Statement{ .declaration_statement = .{ .name = name, .value = expr } };
+        }
+
+        std.debug.print("didnt get an expr\n", .{});
+        return error.CantParseDeclaration;
+    }
+    return error.CantParseDeclaration;
 }
 
 pub fn parse_expressionlike_statement(allocator: *Allocator, tokens: *[]const Token) !?Statement {
@@ -871,12 +907,37 @@ pub fn peek_token(tokens: *[]const Token) !TokenInfo {
     return peek_tokenx(tokens, 0);
 }
 
+/// Consume a token
 pub fn consume_token(tokens: *[]const Token) !void {
     if (have_tokens(tokens)) {
         tokens.* = tokens.*[1..];
         return;
     }
     return error.RanOutOfTokens;
+}
+
+/// Consume and return a token if it matches a tag, return null otherwise
+// TODO: could this be comptime and return the actual type from the union?
+pub fn match_token(tokens: *[]const Token, expected: TokenTag) !?TokenInfo {
+    var token = try peek_token(tokens);
+    if (@as(TokenTag, token) == expected) {
+        try consume_token(tokens);
+        return token;
+    }
+
+    return null;
+}
+
+/// Consume a token if it matches a tag, error otherwise
+pub fn expect_token(tokens: *[]const Token, expected: TokenTag) !void {
+    var token_tag = @as(TokenTag, try peek_token(tokens));
+    if (token_tag == expected) {
+        try consume_token(tokens);
+        return;
+    }
+
+    std.debug.print("Expected {} but got {}\n", .{ expected, token_tag });
+    return error.UnexpectedToken;
 }
 
 pub fn parse_expression(allocator: *Allocator, tokens: *[]const Token) !?Expression {
@@ -1111,14 +1172,12 @@ pub fn parse_primary(allocator: *Allocator, tokens: *[]const Token) !?Expression
             },
             .string_literal => |string_literal| {
                 try consume_token(tokens);
-                var text = try allocator.alloc(u8, string_literal.text.len);
-                std.mem.copy(u8, text, string_literal.text);
+                var text = try copy_slice(allocator, string_literal.text);
                 return Expression{ .string_literal = text };
             },
             .identifier => |token_ident| {
                 try consume_token(tokens);
-                var ident = try allocator.alloc(u8, token_ident.text.len);
-                std.mem.copy(u8, ident, token_ident.text);
+                var ident = try copy_slice(allocator, token_ident.text);
                 return Expression{ .identifier = ident };
             },
             .left_paren => {
@@ -1142,6 +1201,13 @@ pub fn parse_primary(allocator: *Allocator, tokens: *[]const Token) !?Expression
     }
 
     return null;
+}
+
+pub fn copy_slice(allocator: *Allocator, slice: []const u8) ![]u8 {
+    var new_slice = try allocator.alloc(u8, slice.len);
+    std.mem.copy(u8, new_slice, slice);
+
+    return new_slice;
 }
 
 // primary        → "true" | "false"
@@ -1173,6 +1239,9 @@ pub fn interpret_stmt(allocator: *Allocator, stmt: Statement) !ShimValue {
         StatementTag.pretend_statement => return ShimValue{ .shim_unit = ShimUnit{} },
         // TODO: lies
         StatementTag.assignment_statement => unreachable,
+        StatementTag.declaration_statement => |decl| {
+            std.log.info("pretending to assign to {s}", .{decl.name});
+        },
     }
     return ShimValue{ .shim_unit = ShimUnit{} };
 }
@@ -1216,8 +1285,7 @@ pub fn interpret_expr(allocator: *Allocator, expr: *const Expression) anyerror!S
     switch (expr.*) {
         ExpressionTag.int_literal => |v| return ShimValue{ .shim_i128 = v },
         ExpressionTag.string_literal => |str| {
-            var new_str = try allocator.alloc(u8, str.len);
-            std.mem.copy(u8, new_str, str);
+            var new_str = try copy_slice(allocator, str);
             return ShimValue{ .shim_str = new_str };
         },
         ExpressionTag.bool_literal => |b| return ShimValue{ .shim_bool = b },
