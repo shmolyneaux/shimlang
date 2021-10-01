@@ -352,6 +352,18 @@ const ShimValue = union(ValueTag) {
         return @ptrCast(RealNativeFn, self.shim_native_fn);
     }
 
+    fn clone(self: ShimValue, allocator: *Allocator) !ShimValue {
+        switch (self) {
+            .shim_i128 => return self,
+            .shim_str => |str| return ShimValue{ .shim_str = try copy_slice(allocator, str) },
+            .shim_bool => return self,
+            .shim_unit => return self,
+            .shim_error => return self,
+            .shim_obj => return self,
+            .shim_native_fn => return self,
+        }
+    }
+
     fn deinit(self: ShimValue, allocator: *Allocator) void {
         switch (self) {
             .shim_str => |str| allocator.free(str),
@@ -366,9 +378,10 @@ pub fn run_text(allocator: *Allocator, text: []const u8) !void {
     var ast = try parse_text(allocator, text);
     defer ast.deinit();
 
-    var interpreter = Interpreter{};
+    var interpreter = Interpreter.init(allocator);
+    defer interpreter.deinit();
 
-    _ = try interpreter.interpret_ast(allocator, ast);
+    try interpreter.interpret_ast(ast);
 }
 
 const TokenTag = enum {
@@ -1258,47 +1271,110 @@ fn Buffer(comptime T: type) type {
     };
 }
 
-const Interpreter = struct {
-    pub fn interpret_ast(self: Interpreter, allocator: *Allocator, ast: Ast) !void {
-        for (ast.stmts.items) |stmt| {
-            var res = try self.interpret_stmt(allocator, stmt);
-            res.deinit(allocator);
+/// Runtime state storage
+const Environment = struct {
+    allocator: *Allocator,
+    ident_map: std.StringHashMap(ShimValue),
+
+    /// Removes this stack layer, returning a lower layer
+    fn init(allocator: *Allocator) Environment {
+        return .{ .allocator = allocator, .ident_map = std.StringHashMap(ShimValue).init(allocator) };
+    }
+
+    fn insert(self: *@This(), ident: []const u8, value: ShimValue) !void {
+        if (try self.ident_map.fetchPut(ident, value)) |prev_entry| {
+            self._deinit_kv(prev_entry);
         }
     }
 
-    pub fn interpret_stmt(self: Interpreter, allocator: *Allocator, stmt: Statement) !ShimValue {
+    fn retrieve(self: @This(), ident: []const u8) !ShimValue {
+        if (self.ident_map.get(ident)) |value| {
+            // We clone so that the consumer of this value can proceed to free
+            // it like all other values.
+            // TODO: no tests leak or double-free when value is returned directly
+            // so apparently I don't know what's going on.
+            return try value.clone(self.allocator);
+        }
+
+        // TODO: check in environments up the stack
+
+        return error.UnknownIdentifier;
+    }
+
+    fn _deinit_kv(self: @This(), entry: std.StringHashMap(ShimValue).KV) void {
+        self.allocator.free(entry.key);
+        entry.value.deinit(self.allocator);
+    }
+
+    fn _deinit_entry(self: @This(), entry: std.StringHashMap(ShimValue).Entry) void {
+        self.allocator.free(entry.key_ptr.*);
+        entry.value_ptr.deinit(self.allocator);
+    }
+
+    fn deinit(self: *@This()) void {
+        var iter = self.ident_map.iterator();
+        while (iter.next()) |entry| {
+            self._deinit_entry(entry);
+        }
+
+        self.ident_map.deinit();
+    }
+};
+
+const Interpreter = struct {
+    allocator: *Allocator,
+    env: Environment,
+
+    pub fn init(allocator: *Allocator) @This() {
+        return .{
+            .allocator = allocator,
+            .env = Environment.init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *@This()) void {
+        self.env.deinit();
+    }
+
+    pub fn interpret_ast(self: *@This(), ast: Ast) !void {
+        for (ast.stmts.items) |stmt| {
+            try self.interpret_stmt(stmt);
+        }
+    }
+
+    pub fn interpret_stmt(self: *@This(), stmt: Statement) !void {
         switch (stmt) {
             StatementTag.expression_statement => {
-                var result = try interpret_expr(self, allocator, &stmt.expression_statement);
-                return result;
+                var result = try self.interpret_expr(&stmt.expression_statement);
+                result.deinit(self.allocator);
             },
             // TODO: lies
             StatementTag.if_statement => unreachable,
-            StatementTag.pretend_statement => return ShimValue{ .shim_unit = ShimUnit{} },
+            StatementTag.pretend_statement => unreachable,
             // TODO: lies
             StatementTag.assignment_statement => unreachable,
             StatementTag.declaration_statement => |decl| {
-                std.log.info("pretending to assign to {s}", .{decl.name});
+                var value = try self.interpret_expr(&decl.value);
+                try self.env.insert(try copy_slice(self.allocator, decl.name), value);
             },
         }
-        return ShimValue{ .shim_unit = ShimUnit{} };
     }
 
-    pub fn interpret_expr(self: Interpreter, allocator: *Allocator, expr: *const Expression) anyerror!ShimValue {
+    pub fn interpret_expr(self: @This(), expr: *const Expression) anyerror!ShimValue {
         switch (expr.*) {
             ExpressionTag.int_literal => |v| return ShimValue{ .shim_i128 = v },
             ExpressionTag.string_literal => |str| {
-                var new_str = try copy_slice(allocator, str);
+                var new_str = try copy_slice(self.allocator, str);
                 return ShimValue{ .shim_str = new_str };
             },
             ExpressionTag.bool_literal => |b| return ShimValue{ .shim_bool = b },
             ExpressionTag.unary => |_| return ShimValue{ .shim_unit = ShimUnit{} },
             ExpressionTag.logical => |_| unreachable,
             ExpressionTag.binary => |bexpr| {
-                var left_val = try interpret_expr(self, allocator, bexpr.left);
-                defer left_val.deinit(allocator);
-                var right_val = try interpret_expr(self, allocator, bexpr.right);
-                defer right_val.deinit(allocator);
+                var left_val = try self.interpret_expr(bexpr.left);
+                defer left_val.deinit(self.allocator);
+                var right_val = try self.interpret_expr(bexpr.right);
+                defer right_val.deinit(self.allocator);
 
                 var left = switch (left_val) {
                     ValueTag.shim_i128 => |v| v,
@@ -1318,22 +1394,23 @@ const Interpreter = struct {
                 if (std.mem.eql(u8, ident, "print")) {
                     return ShimValue.create_native_fn(&native_fn_print);
                 }
-                return ShimValue{ .shim_unit = ShimUnit{} };
+                // For now, just error when an ident isn't there
+                return try self.env.retrieve(ident);
             },
             ExpressionTag.call => |cexpr| {
-                var left = try interpret_expr(self, allocator, cexpr.left);
-                defer left.deinit(allocator);
+                var left = try self.interpret_expr(cexpr.left);
+                defer left.deinit(self.allocator);
 
-                var args = try Buffer(ShimValue).init(allocator, cexpr.args.len);
+                var args = try Buffer(ShimValue).init(self.allocator, cexpr.args.len);
                 defer {
                     for (args.items) |arg| {
-                        arg.deinit(allocator);
+                        arg.deinit(self.allocator);
                     }
                     args.deinit();
                 }
 
                 for (cexpr.args) |arg_expr| {
-                    var arg_val = try interpret_expr(self, allocator, &arg_expr);
+                    var arg_val = try self.interpret_expr(&arg_expr);
                     try args.append(arg_val);
                 }
 
@@ -1349,7 +1426,7 @@ fn native_fn_print(values: []const ShimValue) anyerror!ShimValue {
         switch (val.*) {
             .shim_i128 => |num| std.debug.print("{}", .{num}),
             .shim_str => |str| std.debug.print("{s}", .{str}),
-            else => unreachable,
+            else => std.debug.print("<{}>", .{val.*}),
         }
         if (i != values.len - 1) {
             std.debug.print(" ", .{});
