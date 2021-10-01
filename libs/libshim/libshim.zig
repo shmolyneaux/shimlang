@@ -366,7 +366,9 @@ pub fn run_text(allocator: *Allocator, text: []const u8) !void {
     var ast = try parse_text(allocator, text);
     defer ast.deinit();
 
-    _ = try interpret_ast(allocator, ast);
+    var interpreter = Interpreter{};
+
+    _ = try interpreter.interpret_ast(allocator, ast);
 }
 
 const TokenTag = enum {
@@ -1256,88 +1258,90 @@ fn Buffer(comptime T: type) type {
     };
 }
 
-pub fn interpret_ast(allocator: *Allocator, ast: Ast) !void {
-    for (ast.stmts.items) |stmt| {
-        var res = try interpret_stmt(allocator, stmt);
-        res.deinit(allocator);
+const Interpreter = struct {
+    pub fn interpret_ast(self: Interpreter, allocator: *Allocator, ast: Ast) !void {
+        for (ast.stmts.items) |stmt| {
+            var res = try self.interpret_stmt(allocator, stmt);
+            res.deinit(allocator);
+        }
     }
-}
 
-pub fn interpret_stmt(allocator: *Allocator, stmt: Statement) !ShimValue {
-    switch (stmt) {
-        StatementTag.expression_statement => {
-            var result = try interpret_expr(allocator, &stmt.expression_statement);
-            return result;
-        },
-        // TODO: lies
-        StatementTag.if_statement => unreachable,
-        StatementTag.pretend_statement => return ShimValue{ .shim_unit = ShimUnit{} },
-        // TODO: lies
-        StatementTag.assignment_statement => unreachable,
-        StatementTag.declaration_statement => |decl| {
-            std.log.info("pretending to assign to {s}", .{decl.name});
-        },
+    pub fn interpret_stmt(self: Interpreter, allocator: *Allocator, stmt: Statement) !ShimValue {
+        switch (stmt) {
+            StatementTag.expression_statement => {
+                var result = try interpret_expr(self, allocator, &stmt.expression_statement);
+                return result;
+            },
+            // TODO: lies
+            StatementTag.if_statement => unreachable,
+            StatementTag.pretend_statement => return ShimValue{ .shim_unit = ShimUnit{} },
+            // TODO: lies
+            StatementTag.assignment_statement => unreachable,
+            StatementTag.declaration_statement => |decl| {
+                std.log.info("pretending to assign to {s}", .{decl.name});
+            },
+        }
+        return ShimValue{ .shim_unit = ShimUnit{} };
     }
-    return ShimValue{ .shim_unit = ShimUnit{} };
-}
 
-pub fn interpret_expr(allocator: *Allocator, expr: *const Expression) anyerror!ShimValue {
-    switch (expr.*) {
-        ExpressionTag.int_literal => |v| return ShimValue{ .shim_i128 = v },
-        ExpressionTag.string_literal => |str| {
-            var new_str = try copy_slice(allocator, str);
-            return ShimValue{ .shim_str = new_str };
-        },
-        ExpressionTag.bool_literal => |b| return ShimValue{ .shim_bool = b },
-        ExpressionTag.unary => |_| return ShimValue{ .shim_unit = ShimUnit{} },
-        ExpressionTag.logical => |_| unreachable,
-        ExpressionTag.binary => |bexpr| {
-            var left_val = try interpret_expr(allocator, bexpr.left);
-            defer left_val.deinit(allocator);
-            var right_val = try interpret_expr(allocator, bexpr.right);
-            defer right_val.deinit(allocator);
+    pub fn interpret_expr(self: Interpreter, allocator: *Allocator, expr: *const Expression) anyerror!ShimValue {
+        switch (expr.*) {
+            ExpressionTag.int_literal => |v| return ShimValue{ .shim_i128 = v },
+            ExpressionTag.string_literal => |str| {
+                var new_str = try copy_slice(allocator, str);
+                return ShimValue{ .shim_str = new_str };
+            },
+            ExpressionTag.bool_literal => |b| return ShimValue{ .shim_bool = b },
+            ExpressionTag.unary => |_| return ShimValue{ .shim_unit = ShimUnit{} },
+            ExpressionTag.logical => |_| unreachable,
+            ExpressionTag.binary => |bexpr| {
+                var left_val = try interpret_expr(self, allocator, bexpr.left);
+                defer left_val.deinit(allocator);
+                var right_val = try interpret_expr(self, allocator, bexpr.right);
+                defer right_val.deinit(allocator);
 
-            var left = switch (left_val) {
-                ValueTag.shim_i128 => |v| v,
-                else => return ShimValue{ .shim_unit = ShimUnit{} },
-            };
-            var right = switch (right_val) {
-                ValueTag.shim_i128 => |v| v,
-                else => return ShimValue{ .shim_unit = ShimUnit{} },
-            };
-            switch (bexpr.op) {
-                BinaryOperator.BinaryAdd => return ShimValue{ .shim_i128 = left + right },
-                BinaryOperator.BinaryMul => return ShimValue{ .shim_i128 = left * right },
-                else => unreachable,
-            }
-        },
-        ExpressionTag.identifier => |ident| {
-            if (std.mem.eql(u8, ident, "print")) {
-                return ShimValue.create_native_fn(&native_fn_print);
-            }
-            return ShimValue{ .shim_unit = ShimUnit{} };
-        },
-        ExpressionTag.call => |cexpr| {
-            var left = try interpret_expr(allocator, cexpr.left);
-            defer left.deinit(allocator);
-
-            var args = try Buffer(ShimValue).init(allocator, cexpr.args.len);
-            defer {
-                for (args.items) |arg| {
-                    arg.deinit(allocator);
+                var left = switch (left_val) {
+                    ValueTag.shim_i128 => |v| v,
+                    else => return ShimValue{ .shim_unit = ShimUnit{} },
+                };
+                var right = switch (right_val) {
+                    ValueTag.shim_i128 => |v| v,
+                    else => return ShimValue{ .shim_unit = ShimUnit{} },
+                };
+                switch (bexpr.op) {
+                    BinaryOperator.BinaryAdd => return ShimValue{ .shim_i128 = left + right },
+                    BinaryOperator.BinaryMul => return ShimValue{ .shim_i128 = left * right },
+                    else => unreachable,
                 }
-                args.deinit();
-            }
+            },
+            ExpressionTag.identifier => |ident| {
+                if (std.mem.eql(u8, ident, "print")) {
+                    return ShimValue.create_native_fn(&native_fn_print);
+                }
+                return ShimValue{ .shim_unit = ShimUnit{} };
+            },
+            ExpressionTag.call => |cexpr| {
+                var left = try interpret_expr(self, allocator, cexpr.left);
+                defer left.deinit(allocator);
 
-            for (cexpr.args) |arg_expr| {
-                var arg_val = try interpret_expr(allocator, &arg_expr);
-                try args.append(arg_val);
-            }
+                var args = try Buffer(ShimValue).init(allocator, cexpr.args.len);
+                defer {
+                    for (args.items) |arg| {
+                        arg.deinit(allocator);
+                    }
+                    args.deinit();
+                }
 
-            return left.call(args.items);
-        },
+                for (cexpr.args) |arg_expr| {
+                    var arg_val = try interpret_expr(self, allocator, &arg_expr);
+                    try args.append(arg_val);
+                }
+
+                return left.call(args.items);
+            },
+        }
     }
-}
+};
 
 fn native_fn_print(values: []const ShimValue) anyerror!ShimValue {
     // We take a pointer to workaround a bug I still need to file: https://www.reddit.com/r/zig/comments/py099g
