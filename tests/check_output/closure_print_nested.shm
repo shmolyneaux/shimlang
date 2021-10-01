@@ -1,0 +1,14 @@
+fn a() {
+    let x = "value";
+    fn b() {
+        fn c() {
+            print(x);
+        }
+        return c;
+    }
+    return b;
+}
+
+let middle = a();
+let inner = middle();
+inner();

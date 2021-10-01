@@ -1,0 +1,7 @@
+if true {
+    print("if taken");
+} elif true {
+    print("elif taken");
+} else {
+    print("else taken");
+}

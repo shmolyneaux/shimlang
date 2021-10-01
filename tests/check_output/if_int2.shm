@@ -1,0 +1,4 @@
+if 0 {
+    print("should not get here");
+}
+print("");
