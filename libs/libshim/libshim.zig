@@ -1221,31 +1221,6 @@ pub fn have_tokens(tokens: *[]const Token) bool {
     return tokens.*.len >= 1;
 }
 
-pub fn interpret_ast(allocator: *Allocator, ast: Ast) !void {
-    for (ast.stmts.items) |stmt| {
-        var res = try interpret_stmt(allocator, stmt);
-        res.deinit(allocator);
-    }
-}
-
-pub fn interpret_stmt(allocator: *Allocator, stmt: Statement) !ShimValue {
-    switch (stmt) {
-        StatementTag.expression_statement => {
-            var result = try interpret_expr(allocator, &stmt.expression_statement);
-            return result;
-        },
-        // TODO: lies
-        StatementTag.if_statement => unreachable,
-        StatementTag.pretend_statement => return ShimValue{ .shim_unit = ShimUnit{} },
-        // TODO: lies
-        StatementTag.assignment_statement => unreachable,
-        StatementTag.declaration_statement => |decl| {
-            std.log.info("pretending to assign to {s}", .{decl.name});
-        },
-    }
-    return ShimValue{ .shim_unit = ShimUnit{} };
-}
-
 fn Buffer(comptime T: type) type {
     return struct {
         allocator: *Allocator,
@@ -1279,6 +1254,31 @@ fn Buffer(comptime T: type) type {
             self.allocator.free(self.items);
         }
     };
+}
+
+pub fn interpret_ast(allocator: *Allocator, ast: Ast) !void {
+    for (ast.stmts.items) |stmt| {
+        var res = try interpret_stmt(allocator, stmt);
+        res.deinit(allocator);
+    }
+}
+
+pub fn interpret_stmt(allocator: *Allocator, stmt: Statement) !ShimValue {
+    switch (stmt) {
+        StatementTag.expression_statement => {
+            var result = try interpret_expr(allocator, &stmt.expression_statement);
+            return result;
+        },
+        // TODO: lies
+        StatementTag.if_statement => unreachable,
+        StatementTag.pretend_statement => return ShimValue{ .shim_unit = ShimUnit{} },
+        // TODO: lies
+        StatementTag.assignment_statement => unreachable,
+        StatementTag.declaration_statement => |decl| {
+            std.log.info("pretending to assign to {s}", .{decl.name});
+        },
+    }
+    return ShimValue{ .shim_unit = ShimUnit{} };
 }
 
 pub fn interpret_expr(allocator: *Allocator, expr: *const Expression) anyerror!ShimValue {
