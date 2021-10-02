@@ -31,13 +31,10 @@ const File = struct {
 
 const Ast = struct {
     allocator: *Allocator,
-    stmts: ArrayList(Statement),
+    block: Block,
 
     pub fn deinit(self: Ast) void {
-        for (self.stmts.items) |stmt| {
-            stmt.deinit(self.allocator);
-        }
-        self.stmts.deinit();
+        self.block.deinit();
     }
 
     pub fn format(
@@ -49,39 +46,64 @@ const Ast = struct {
         _ = fmt;
         _ = options;
 
-        try writer.writeAll("AST([");
-
-        var first = true;
-        for (self.stmts.items) |stmt| {
-            if (!first) {
-                try writer.writeAll(",");
-            }
-            try writer.print("{}", .{stmt});
-            first = false;
-        }
-
-        try writer.writeAll("])");
+        try writer.print("AST({})", self.block);
     }
 };
 
-const Block = struct {};
+const Block = struct {
+    allocator: *Allocator,
+    stmts: ArrayList(Statement),
+
+    pub fn deinit(self: Block) void {
+        for (self.stmts.items) |stmt| {
+            stmt.deinit(self.allocator);
+        }
+        self.stmts.deinit();
+    }
+
+    pub fn format(
+        self: Block,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        _ = fmt;
+        _ = options;
+
+        try writer.writeAll("[");
+
+        for (self.stmts.items) |stmt, i| {
+            try writer.print("{}", .{stmt});
+            if (i + 1 != self.stmts.len) {
+                try writer.writeAll(",");
+            }
+        }
+
+        try writer.writeAll("]");
+    }
+};
 
 const IfStatement = struct { predicate: Expression, if_block: Block, else_block: ?Block };
 
 // TODO: Multiple sorts of statements (if, for, use, while, etc.)
-const StatementTag = enum { expression_statement, if_statement, declaration_statement, assignment_statement, pretend_statement };
+const StatementTag = enum { expression_statement, if_statement, declaration_statement, assignment_statement };
 
 const Statement = union(StatementTag) {
     expression_statement: Expression,
     if_statement: IfStatement,
     declaration_statement: struct { name: []const u8, value: Expression },
     assignment_statement: struct { obj: ?Expression, name: []const u8, value: Expression },
-    // Ignore this for now, I just need a placeholder
-    pretend_statement: bool,
 
     pub fn deinit(self: Statement, allocator: *Allocator) void {
         switch (self) {
             StatementTag.expression_statement => |stmt| stmt.deinit(allocator),
+            StatementTag.if_statement => |stmt| {
+                stmt.predicate.deinit(allocator);
+                stmt.if_block.deinit();
+                if (stmt.else_block) |else_block| {
+                    else_block.deinit();
+                }
+            },
             StatementTag.declaration_statement => |stmt| {
                 allocator.free(stmt.name);
                 stmt.value.deinit(allocator);
@@ -93,7 +115,6 @@ const Statement = union(StatementTag) {
                     obj.deinit(allocator);
                 }
             },
-            else => return,
         }
     }
 
@@ -109,7 +130,6 @@ const Statement = union(StatementTag) {
         switch (self) {
             StatementTag.expression_statement => |stmt| try writer.print("EXPR({})", .{stmt}),
             StatementTag.if_statement => |stmt| try writer.print("IF({})", .{stmt}),
-            StatementTag.pretend_statement => try writer.print("PRETEND()", .{}),
             // TODO: lies
             StatementTag.assignment_statement => unreachable,
         }
@@ -344,6 +364,18 @@ const ShimValue = union(ValueTag) {
         }
     }
 
+    fn is_truthy(self: ShimValue) bool {
+        return switch (self) {
+            .shim_i128 => |val| val != 0,
+            .shim_str => |val| val.len != 0,
+            .shim_bool => |val| val,
+            .shim_unit => false,
+            .shim_error => false,
+            .shim_native_fn => true,
+            else => return true, // Return true for now, call __bool__ later
+        };
+    }
+
     fn create_native_fn(func: RealNativeFn) ShimValue {
         return ShimValue{ .shim_native_fn = @ptrCast(PretendNativeFn, func) };
     }
@@ -420,7 +452,6 @@ const TokenTag = enum {
     as_keyword,
     break_keyword,
     continue_keyword,
-    elif_keyword,
     else_keyword,
     enum_keyword,
     fn_keyword,
@@ -475,7 +506,6 @@ const TokenInfo = union(TokenTag) {
     as_keyword,
     break_keyword,
     continue_keyword,
-    elif_keyword,
     else_keyword,
     enum_keyword,
     fn_keyword,
@@ -675,7 +705,6 @@ pub fn keyword_to_token(text: []const u8, line_number: u32) ?Token {
         .@"as" = TokenTag.as_keyword,
         .@"break" = TokenTag.break_keyword,
         .@"continue" = TokenTag.continue_keyword,
-        .@"elif" = TokenTag.elif_keyword,
         .@"else" = TokenTag.else_keyword,
         .@"enum" = TokenTag.enum_keyword,
         .@"fn" = TokenTag.fn_keyword,
@@ -771,10 +800,12 @@ pub fn parse_text(allocator: *Allocator, text: []const u8) !Ast {
 
     while (have_tokens(&remaining_tokens)) {
         var stmt = try parse_statement(allocator, &remaining_tokens);
+        errdefer stmt.deinit(allocator);
+
         try stmts.append(stmt);
     }
 
-    return Ast{ .allocator = allocator, .stmts = stmts };
+    return Ast{ .allocator = allocator, .block = .{ .allocator = allocator, .stmts = stmts } };
 }
 
 pub fn skip_whitespace(text: *[]const u8) void {
@@ -816,7 +847,7 @@ pub fn skip_all(comptime T: type, slice: *[]const T) void {
     slice.* = slice.*[slice.*.len..];
 }
 
-pub fn parse_statement(allocator: *Allocator, tokens: *[]const Token) !Statement {
+pub fn parse_statement(allocator: *Allocator, tokens: *[]const Token) anyerror!Statement {
     _ = allocator;
 
     if (!have_tokens(tokens)) {
@@ -828,6 +859,7 @@ pub fn parse_statement(allocator: *Allocator, tokens: *[]const Token) !Statement
             return stmt;
         },
         .let_keyword => return try parse_declaration(allocator, tokens),
+        .if_keyword => return try parse_conditional_statement(allocator, tokens),
         else => if (try parse_expressionlike_statement(allocator, tokens)) |stmt| {
             return stmt;
         },
@@ -852,6 +884,69 @@ pub fn parse_use_statement(allocator: *Allocator, tokens: *[]const Token) !?Stat
         },
         else => return null,
     }
+}
+
+pub fn parse_conditional_statement(allocator: *Allocator, tokens: *[]const Token) anyerror!Statement {
+    _ = allocator;
+    try expect_token(tokens, .if_keyword);
+
+    var expr = blk: {
+        if (try parse_expression(allocator, tokens)) |expr| {
+            break :blk expr;
+        } else {
+            return error.ParseError;
+        }
+    };
+    errdefer expr.deinit(allocator);
+
+    var if_block = try parse_block(allocator, tokens);
+    errdefer if_block.deinit();
+
+    var else_block: ?Block = null;
+    if (have_tokens(tokens)) {
+        if (try match_token(tokens, .else_keyword)) |_| {
+            if (try is_next_token(tokens, .if_keyword)) {
+                var nested_if = try parse_conditional_statement(allocator, tokens);
+                errdefer nested_if.deinit(allocator);
+
+                var lst = ArrayList(Statement).init(allocator);
+                errdefer lst.deinit();
+
+                try lst.append(nested_if);
+
+                else_block = Block{ .allocator = allocator, .stmts = lst };
+            } else {
+                var found_else_block = try parse_block(allocator, tokens);
+                else_block = found_else_block;
+            }
+        }
+    }
+
+    return Statement{ .if_statement = .{
+        .predicate = expr,
+        .if_block = if_block,
+        .else_block = else_block,
+    } };
+}
+
+pub fn parse_block(allocator: *Allocator, tokens: *[]const Token) !Block {
+    try expect_token(tokens, .left_curly);
+
+    var stmts = ArrayList(Statement).init(allocator);
+    errdefer {
+        for (stmts.items) |stmt| {
+            stmt.deinit(allocator);
+        }
+        stmts.deinit();
+    }
+
+    while (!(try is_next_token(tokens, .right_curly))) {
+        var stmt = try parse_statement(allocator, tokens);
+        try stmts.append(stmt);
+    }
+    try expect_token(tokens, .right_curly);
+
+    return Block{ .allocator = allocator, .stmts = stmts };
 }
 
 pub fn parse_declaration(allocator: *Allocator, tokens: *[]const Token) !Statement {
@@ -907,7 +1002,7 @@ pub fn parse_expressionlike_statement(allocator: *Allocator, tokens: *[]const To
         expr.deinit(allocator);
     }
 
-    std.log.info("Not an expression statement 1", .{});
+    std.log.info("Not an expression statement 1: {s}", .{tokens.*});
     return null;
 }
 
@@ -931,12 +1026,22 @@ pub fn consume_token(tokens: *[]const Token) !void {
     return error.RanOutOfTokens;
 }
 
+/// Check if the next token has a specific TokenTag, without consuming it
+pub fn is_next_token(tokens: *[]const Token, expected: TokenTag) !bool {
+    var token = try peek_token(tokens);
+    if (@as(TokenTag, token) == expected) {
+        return true;
+    }
+
+    return false;
+}
+
 /// Consume and return a token if it matches a tag, return null otherwise
 // TODO: could this be comptime and return the actual type from the union?
 pub fn match_token(tokens: *[]const Token, expected: TokenTag) !?TokenInfo {
-    var token = try peek_token(tokens);
-    if (@as(TokenTag, token) == expected) {
-        try consume_token(tokens);
+    if (try is_next_token(tokens, expected)) {
+        var token = try peek_token(tokens);
+        tokens.* = tokens.*[1..];
         return token;
     }
 
@@ -1337,27 +1442,59 @@ const Interpreter = struct {
     }
 
     pub fn interpret_ast(self: *@This(), ast: Ast) !void {
-        for (ast.stmts.items) |stmt| {
-            try self.interpret_stmt(stmt);
-        }
+        var result = try self.interpret_block(ast.block);
+        result.deinit(self.allocator);
     }
 
-    pub fn interpret_stmt(self: *@This(), stmt: Statement) !void {
+    // TODO: this shouldn't return a ShimValue, it should return a different
+    // value depending on whether the value should propagate (return) or
+    // not (break, continue, etc.).
+    pub fn interpret_block(self: *@This(), block: Block) anyerror!ShimValue {
+        for (block.stmts.items) |stmt| {
+            // When a statement returns a value, the block is finished
+            if (try self.interpret_stmt(stmt)) |val| {
+                return val;
+            }
+        }
+
+        return ShimValue{ .shim_unit = ShimUnit{} };
+    }
+
+    pub fn interpret_stmt(self: *@This(), stmt: Statement) !?ShimValue {
         switch (stmt) {
             StatementTag.expression_statement => {
                 var result = try self.interpret_expr(&stmt.expression_statement);
                 result.deinit(self.allocator);
             },
             // TODO: lies
-            StatementTag.if_statement => unreachable,
-            StatementTag.pretend_statement => unreachable,
+            StatementTag.if_statement => |if_stmt| {
+                var value = try self.interpret_expr(&if_stmt.predicate);
+                defer value.deinit(self.allocator);
+
+                if (value.is_truthy()) {
+                    var result = try self.interpret_block(if_stmt.if_block);
+                    result.deinit(self.allocator);
+                } else if (if_stmt.else_block) |else_block| {
+                    var result = try self.interpret_block(else_block);
+                    result.deinit(self.allocator);
+                }
+            },
             // TODO: lies
             StatementTag.assignment_statement => unreachable,
             StatementTag.declaration_statement => |decl| {
                 var value = try self.interpret_expr(&decl.value);
-                try self.env.insert(try copy_slice(self.allocator, decl.name), value);
+                errdefer value.deinit(self.allocator);
+
+                var key = try copy_slice(self.allocator, decl.name);
+                errdefer self.allocator.free(key);
+
+                try self.env.insert(key, value);
             },
         }
+
+        // Since we didn't return a value from the switch, this must not be the
+        // sort of statement that breaks out of a block
+        return null;
     }
 
     pub fn interpret_expr(self: @This(), expr: *const Expression) anyerror!ShimValue {
@@ -1426,6 +1563,7 @@ fn native_fn_print(values: []const ShimValue) anyerror!ShimValue {
         switch (val.*) {
             .shim_i128 => |num| std.debug.print("{}", .{num}),
             .shim_str => |str| std.debug.print("{s}", .{str}),
+            .shim_bool => |b| std.debug.print("{s}", .{b}),
             else => std.debug.print("<{}>", .{val.*}),
         }
         if (i != values.len - 1) {
