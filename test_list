@@ -1,3 +1,13 @@
+tests/check_output/if_elif_else.shm
+tests/check_output/if_elif_else2.shm
+tests/check_output/if_elif_else3.shm
+tests/check_output/if_else.shm
+tests/check_output/if_else2.shm
+tests/check_output/if_int.shm
+tests/check_output/if_int2.shm
+tests/check_output/if_simple.shm
+tests/check_output/if_simple2.shm
+tests/check_output/print_bool.shm
 tests/check_output/print_int.shm
 tests/check_output/print_int_add.shm
 tests/check_output/print_int_multiple_add.shm
