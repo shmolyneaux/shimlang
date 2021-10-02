@@ -1,6 +1,6 @@
 if false {
     print("if taken");
-} elif false {
+} else if false {
     print("elif taken");
 } else {
     print("else taken");

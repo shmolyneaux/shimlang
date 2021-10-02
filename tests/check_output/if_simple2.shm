@@ -2,4 +2,4 @@ if false {
     print("should not get here");
 }
 // Newline so that it's easier to write the output file :)
-print()
+print();
