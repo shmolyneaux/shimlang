@@ -1,3 +1,4 @@
+tests/check_output/bound_method_call.shm
 tests/check_output/if_elif_else.shm
 tests/check_output/if_elif_else2.shm
 tests/check_output/if_elif_else3.shm

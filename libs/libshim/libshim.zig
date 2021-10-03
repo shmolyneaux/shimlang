@@ -212,6 +212,7 @@ const ExpressionTag = enum {
     binary,
     logical,
     identifier,
+    attribute,
     call,
 };
 const Expression = union(ExpressionTag) {
@@ -222,6 +223,7 @@ const Expression = union(ExpressionTag) {
     binary: BinaryExpr,
     logical: LogicalExpr,
     identifier: []const u8,
+    attribute: struct { left: *Expression, name: []const u8 },
     call: CallExpr,
 
     pub fn deinit(self: Expression, allocator: *Allocator) void {
@@ -233,6 +235,11 @@ const Expression = union(ExpressionTag) {
             ExpressionTag.identifier => |ident| allocator.free(ident),
             ExpressionTag.logical => |lexpr| lexpr.deinit(allocator),
             ExpressionTag.binary => |bexpr| bexpr.deinit(allocator),
+            ExpressionTag.attribute => |aexpr| {
+                aexpr.left.deinit(allocator);
+                allocator.destroy(aexpr.left);
+                allocator.free(aexpr.name);
+            },
             ExpressionTag.call => |cexpr| cexpr.deinit(allocator),
         }
     }
@@ -342,6 +349,7 @@ const ValueTag = enum {
 
     // ... everything else
     shim_obj,
+    shim_bound_method,
     shim_native_fn,
 };
 const ShimValue = union(ValueTag) {
@@ -351,15 +359,46 @@ const ShimValue = union(ValueTag) {
     shim_unit: ShimUnit,
     shim_error: ShimUnit,
     shim_obj: ShimUnit,
+    shim_bound_method: struct { obj: *ShimValue, func: *ShimValue },
     // In reality this is a pointer to something that returns a ShimValue, but zig doesn't like that
     shim_native_fn: PretendNativeFn,
 
-    const RealNativeFn = *const fn ([]const ShimValue) anyerror!ShimValue;
-    const PretendNativeFn = *const fn ([]const ShimValue) anyerror!void;
+    const RealNativeFn = *const fn (*Allocator, []const ShimValue) anyerror!ShimValue;
+    const PretendNativeFn = *const fn (*Allocator, []const ShimValue) anyerror!void;
 
-    fn call(func: ShimValue, args: []const ShimValue) anyerror!ShimValue {
+    fn get(self: ShimValue, allocator: *Allocator, name: []const u8) anyerror!ShimValue {
+        switch (self) {
+            .shim_str => {
+                if (std.mem.eql(u8, name, "lower")) {
+                    var obj_ref = try allocator.create(ShimValue);
+                    errdefer allocator.destroy(obj_ref);
+
+                    obj_ref.* = try self.clone(allocator);
+                    errdefer obj_ref.deinit(allocator);
+
+                    var func_ref = try allocator.create(ShimValue);
+                    func_ref.* = create_native_fn(&native_str_lower);
+
+                    return ShimValue{ .shim_bound_method = .{ .obj = obj_ref, .func = func_ref } };
+                }
+
+                return error.StrOnlyHasLower;
+            },
+            else => return error.GetNotImplementedOnValue,
+        }
+    }
+
+    fn call(func: ShimValue, allocator: *Allocator, args: []const ShimValue) anyerror!ShimValue {
         switch (func) {
-            .shim_native_fn => return func.get_native_fn().*(args),
+            .shim_bound_method => |meth| {
+                var args_with_obj = try allocator.alloc(ShimValue, args.len + 1);
+                args_with_obj[0] = meth.obj.*;
+                defer allocator.free(args_with_obj);
+                std.mem.copy(ShimValue, args_with_obj[1..], args);
+
+                return try meth.func.*.call(allocator, args_with_obj);
+            },
+            .shim_native_fn => return func.get_native_fn().*(allocator, args),
             else => return error.ValueCannotBeCalled,
         }
     }
@@ -392,6 +431,14 @@ const ShimValue = union(ValueTag) {
             .shim_unit => return self,
             .shim_error => return self,
             .shim_obj => return self,
+            .shim_bound_method => |meth| {
+                var obj_ref = try allocator.create(ShimValue);
+                var func_ref = try allocator.create(ShimValue);
+                obj_ref.* = meth.obj.*;
+                func_ref.* = meth.func.*;
+
+                return ShimValue{ .shim_bound_method = .{ .obj = obj_ref, .func = func_ref } };
+            },
             .shim_native_fn => return self,
         }
     }
@@ -399,6 +446,12 @@ const ShimValue = union(ValueTag) {
     fn deinit(self: ShimValue, allocator: *Allocator) void {
         switch (self) {
             .shim_str => |str| allocator.free(str),
+            .shim_bound_method => |meth| {
+                meth.obj.*.deinit(allocator);
+                meth.func.*.deinit(allocator);
+                allocator.destroy(meth.obj);
+                allocator.destroy(meth.func);
+            },
             else => {},
         }
     }
@@ -1050,12 +1103,16 @@ pub fn match_token(tokens: *[]const Token, expected: TokenTag) !?TokenInfo {
 
 /// Consume a token if it matches a tag, error otherwise
 pub fn expect_token(tokens: *[]const Token, expected: TokenTag) !void {
-    var token_tag = @as(TokenTag, try peek_token(tokens));
-    if (token_tag == expected) {
-        try consume_token(tokens);
-        return;
+    _ = try expect_match_token(tokens, expected);
+}
+
+/// Consume and return a token if it matches a tag, error otherwise
+pub fn expect_match_token(tokens: *[]const Token, expected: TokenTag) !TokenInfo {
+    if (try match_token(tokens, expected)) |info| {
+        return info;
     }
 
+    var token_tag = try peek_token(tokens);
     std.debug.print("Expected {} but got {}\n", .{ expected, token_tag });
     return error.UnexpectedToken;
 }
@@ -1264,6 +1321,18 @@ pub fn parse_call(allocator: *Allocator, tokens: *[]const Token) !?Expression {
                         return error.RanOutOfTokensWhenParsingCall;
                     }
                 },
+                .dot => {
+                    try consume_token(&slice_copy);
+
+                    var info = try expect_match_token(&slice_copy, .identifier);
+                    var name = try copy_slice(allocator, info.identifier.text);
+                    errdefer allocator.free(name);
+
+                    var left = try allocator.create(Expression);
+                    left.* = expr;
+
+                    expr = Expression{ .attribute = .{ .left = left, .name = name } };
+                },
                 else => break,
             }
         }
@@ -1392,6 +1461,9 @@ const Environment = struct {
         }
     }
 
+    /// Return a copy of a value from the environment.
+    ///
+    /// Caller is responsible for freeing this value.
     fn retrieve(self: @This(), ident: []const u8) !ShimValue {
         if (self.ident_map.get(ident)) |value| {
             // We clone so that the consumer of this value can proceed to free
@@ -1534,6 +1606,12 @@ const Interpreter = struct {
                 // For now, just error when an ident isn't there
                 return try self.env.retrieve(ident);
             },
+            ExpressionTag.attribute => |aexpr| {
+                var left = try self.interpret_expr(aexpr.left);
+                defer left.deinit(self.allocator);
+
+                return try left.get(self.allocator, aexpr.name);
+            },
             ExpressionTag.call => |cexpr| {
                 var left = try self.interpret_expr(cexpr.left);
                 defer left.deinit(self.allocator);
@@ -1551,13 +1629,14 @@ const Interpreter = struct {
                     try args.append(arg_val);
                 }
 
-                return left.call(args.items);
+                return left.call(self.allocator, args.items);
             },
         }
     }
 };
 
-fn native_fn_print(values: []const ShimValue) anyerror!ShimValue {
+fn native_fn_print(allocator: *Allocator, values: []const ShimValue) anyerror!ShimValue {
+    _ = allocator;
     // We take a pointer to workaround a bug I still need to file: https://www.reddit.com/r/zig/comments/py099g
     for (values) |*val, i| {
         switch (val.*) {
@@ -1573,4 +1652,18 @@ fn native_fn_print(values: []const ShimValue) anyerror!ShimValue {
     std.debug.print("\n", .{});
 
     return ShimValue{ .shim_unit = ShimUnit{} };
+}
+
+fn native_str_lower(allocator: *Allocator, values: []const ShimValue) anyerror!ShimValue {
+    _ = allocator;
+    if (values.len != 1) {
+        return ShimValue{ .shim_error = ShimUnit{} };
+    }
+
+    switch (values[0]) {
+        .shim_str => |str| {
+            return ShimValue{ .shim_str = try std.ascii.allocLowerString(allocator, str) };
+        },
+        else => return error.HowWasLowerCalledOnNonStr,
+    }
 }
