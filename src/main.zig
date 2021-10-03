@@ -28,7 +28,9 @@ pub fn main() !void {
         };
         defer gpa.allocator.free(script_text);
 
-        try libshim.run_text(&gpa.allocator, script_text);
+        libshim.run_text(&gpa.allocator, script_text) catch |err| {
+            std.debug.print("{}\n", .{err});
+        };
         return;
     }
 
