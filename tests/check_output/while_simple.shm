@@ -1,0 +1,4 @@
+while false {
+    print("this should never happen");
+}
+print("done");
