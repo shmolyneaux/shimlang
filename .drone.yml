@@ -3,15 +3,17 @@ name: default
 
 steps:
 - name: test
-  image: shmolyneaux/ziglang:0.9.0-dev.1139
-  environment:
-    SSH_KEY:
-      from_secret: SSH_KEY
+  image: ubuntu:18.04
   commands:
-    - zig build
-    - apk add python3
-    - cat test_list | xargs ./run_tests
+    - apt update
+    - apt install -y musl-dev curl build-essential
+    - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --default-toolchain nightly --component rust-src -y
+    - source $HOME/.cargo/env
+    - cargo +nightly build --release -Z build-std=std,panic_abort -Z build-std-features=panic_immediate_abort --target x86_64-unknown-linux-musl
 
 trigger:
   event:
   - push
+
+
+
