@@ -86,11 +86,13 @@ const Block = struct {
 const IfStatement = struct { predicate: Expression, if_block: Block, else_block: ?Block };
 
 // TODO: Multiple sorts of statements (if, for, use, while, etc.)
-const StatementTag = enum { expression_statement, if_statement, declaration_statement, assignment_statement };
+const StatementTag = enum { expression_statement, if_statement, declaration_statement, assignment_statement, break_statement, while_statement };
 
 const Statement = union(StatementTag) {
     expression_statement: Expression,
     if_statement: IfStatement,
+    break_statement,
+    while_statement: struct { predicate: Expression, block: Block },
     declaration_statement: struct { name: []const u8, value: Expression },
     assignment_statement: struct { obj: ?Expression, name: []const u8, value: Expression },
 
@@ -103,6 +105,11 @@ const Statement = union(StatementTag) {
                 if (stmt.else_block) |else_block| {
                     else_block.deinit();
                 }
+            },
+            StatementTag.break_statement => return,
+            StatementTag.while_statement => |stmt| {
+                stmt.predicate.deinit(allocator);
+                stmt.block.deinit();
             },
             StatementTag.declaration_statement => |stmt| {
                 allocator.free(stmt.name);
@@ -839,7 +846,12 @@ pub fn find_number_end_pos(text: []const u8) NumberSpan {
 
 pub fn parse_text(allocator: *Allocator, text: []const u8) !Ast {
     var stmts = ArrayList(Statement).init(allocator);
-    errdefer stmts.deinit();
+    errdefer {
+        for (stmts.items) |stmt| {
+            stmt.deinit(allocator);
+        }
+        stmts.deinit();
+    }
 
     var tokens = try tokenize(allocator, text);
     defer {
@@ -913,6 +925,13 @@ pub fn parse_statement(allocator: *Allocator, tokens: *[]const Token) anyerror!S
         },
         .let_keyword => return try parse_declaration(allocator, tokens),
         .if_keyword => return try parse_conditional_statement(allocator, tokens),
+        .break_keyword => {
+            try expect_token(tokens, .break_keyword);
+            try expect_token(tokens, .semicolon);
+
+            return Statement.break_statement;
+        },
+        .while_keyword => return try parse_while_statement(allocator, tokens),
         else => if (try parse_expressionlike_statement(allocator, tokens)) |stmt| {
             return stmt;
         },
@@ -982,6 +1001,27 @@ pub fn parse_conditional_statement(allocator: *Allocator, tokens: *[]const Token
     } };
 }
 
+pub fn parse_while_statement(allocator: *Allocator, tokens: *[]const Token) anyerror!Statement {
+    _ = allocator;
+    try expect_token(tokens, .while_keyword);
+
+    var expr = blk: {
+        if (try parse_expression(allocator, tokens)) |expr| {
+            break :blk expr;
+        } else {
+            return error.ParseError;
+        }
+    };
+    errdefer expr.deinit(allocator);
+
+    var block = try parse_block(allocator, tokens);
+
+    return Statement{ .while_statement = .{
+        .predicate = expr,
+        .block = block,
+    } };
+}
+
 pub fn parse_block(allocator: *Allocator, tokens: *[]const Token) !Block {
     try expect_token(tokens, .left_curly);
 
@@ -1038,6 +1078,22 @@ pub fn parse_expressionlike_statement(allocator: *Allocator, tokens: *[]const To
         };
         switch (token_type) {
             .equal => {
+                try consume_token(&slice_copy);
+
+                switch (expr) {
+                    .identifier => |name| {
+                        if (try parse_expression(allocator, &slice_copy)) |value_expr| {
+                            errdefer value_expr.deinit(allocator);
+
+                            try expect_token(&slice_copy, .semicolon);
+
+                            tokens.* = slice_copy;
+                            return Statement{ .assignment_statement = .{ .obj = null, .name = name, .value = value_expr } };
+                        }
+                    },
+                    else => return error.CanOnlyAssignToIdentifier,
+                }
+
                 // TODO: turn the expression we got into an assignment
                 skip_all(Token, tokens);
                 return error.AssignmentNotImplemented;
@@ -1457,7 +1513,10 @@ const Environment = struct {
 
     fn insert(self: *@This(), ident: []const u8, value: ShimValue) !void {
         if (try self.ident_map.fetchPut(ident, value)) |prev_entry| {
-            self._deinit_kv(prev_entry);
+            // If it's already there, the previous key stays. The new key is
+            // freed, and the old value is freed...
+            self.allocator.free(ident);
+            prev_entry.value.deinit(self.allocator);
         }
     }
 
@@ -1498,6 +1557,29 @@ const Environment = struct {
     }
 };
 
+const BlockExitTag = enum {
+    exit_return,
+    exit_continue,
+    exit_break,
+    finished,
+};
+
+const BlockExit = union(BlockExitTag) {
+    exit_return: ShimValue,
+    exit_break: ShimValue,
+    exit_continue,
+    finished,
+
+    fn deinit(self: @This(), allocator: *Allocator) void {
+        switch (self) {
+            .exit_return => |val| val.deinit(allocator),
+            .exit_break => |val| val.deinit(allocator),
+            .exit_continue => {},
+            .finished => {},
+        }
+    }
+};
+
 const Interpreter = struct {
     allocator: *Allocator,
     env: Environment,
@@ -1521,38 +1603,82 @@ const Interpreter = struct {
     // TODO: this shouldn't return a ShimValue, it should return a different
     // value depending on whether the value should propagate (return) or
     // not (break, continue, etc.).
-    pub fn interpret_block(self: *@This(), block: Block) anyerror!ShimValue {
+    pub fn interpret_block(self: *@This(), block: Block) anyerror!BlockExit {
         for (block.stmts.items) |stmt| {
             // When a statement returns a value, the block is finished
             if (try self.interpret_stmt(stmt)) |val| {
-                return val;
+                switch (val) {
+                    .exit_return => return val,
+                    .exit_break => return val,
+                    .exit_continue => return val,
+                    .finished => {},
+                }
             }
         }
 
-        return ShimValue{ .shim_unit = ShimUnit{} };
+        return BlockExit.finished;
     }
 
-    pub fn interpret_stmt(self: *@This(), stmt: Statement) !?ShimValue {
+    pub fn interpret_stmt(self: *@This(), stmt: Statement) !?BlockExit {
         switch (stmt) {
             StatementTag.expression_statement => {
                 var result = try self.interpret_expr(&stmt.expression_statement);
                 result.deinit(self.allocator);
             },
-            // TODO: lies
+            StatementTag.break_statement => return BlockExit{ .exit_break = ShimValue{ .shim_unit = ShimUnit{} } },
+            StatementTag.while_statement => |while_stmt| {
+                while (true) {
+                    var value = try self.interpret_expr(&while_stmt.predicate);
+                    defer value.deinit(self.allocator);
+
+                    if (!value.is_truthy()) {
+                        break;
+                    }
+
+                    var result = try self.interpret_block(while_stmt.block);
+                    defer result.deinit(self.allocator);
+
+                    switch (result) {
+                        .exit_return => return result,
+                        .exit_break => break,
+                        .exit_continue => continue,
+                        .finished => {},
+                    }
+                }
+            },
             StatementTag.if_statement => |if_stmt| {
                 var value = try self.interpret_expr(&if_stmt.predicate);
                 defer value.deinit(self.allocator);
 
                 if (value.is_truthy()) {
                     var result = try self.interpret_block(if_stmt.if_block);
+                    switch (result) {
+                        .exit_return => return result,
+                        .exit_break => return result,
+                        .exit_continue => return result,
+                        .finished => {},
+                    }
                     result.deinit(self.allocator);
                 } else if (if_stmt.else_block) |else_block| {
                     var result = try self.interpret_block(else_block);
+                    switch (result) {
+                        .exit_return => return result,
+                        .exit_break => return result,
+                        .exit_continue => return result,
+                        .finished => {},
+                    }
                     result.deinit(self.allocator);
                 }
             },
-            // TODO: lies
-            StatementTag.assignment_statement => unreachable,
+            StatementTag.assignment_statement => |assi| {
+                var value = try self.interpret_expr(&assi.value);
+                errdefer value.deinit(self.allocator);
+
+                var ident = try copy_slice(self.allocator, assi.name);
+                errdefer self.allocator.free(ident);
+
+                try self.env.insert(ident, value);
+            },
             StatementTag.declaration_statement => |decl| {
                 var value = try self.interpret_expr(&decl.value);
                 errdefer value.deinit(self.allocator);
@@ -1596,7 +1722,14 @@ const Interpreter = struct {
                 switch (bexpr.op) {
                     BinaryOperator.BinaryAdd => return ShimValue{ .shim_i128 = left + right },
                     BinaryOperator.BinaryMul => return ShimValue{ .shim_i128 = left * right },
-                    else => unreachable,
+                    BinaryOperator.BinarySub => return ShimValue{ .shim_i128 = left - right },
+                    BinaryOperator.BinaryDiv => return ShimValue{ .shim_i128 = @divTrunc(left, right) },
+                    BinaryOperator.BinaryDoubleEqual => return ShimValue{ .shim_bool = left == right },
+                    BinaryOperator.BinaryBangEqual => return ShimValue{ .shim_bool = left != right },
+                    BinaryOperator.BinaryGreaterThanEqual => return ShimValue{ .shim_bool = left >= right },
+                    BinaryOperator.BinaryLessThanEqual => return ShimValue{ .shim_bool = left <= right },
+                    BinaryOperator.BinaryLessThan => return ShimValue{ .shim_bool = left < right },
+                    BinaryOperator.BinaryGreaterThan => return ShimValue{ .shim_bool = left > right },
                 }
             },
             ExpressionTag.identifier => |ident| {
