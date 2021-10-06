@@ -6,14 +6,14 @@ steps:
   image: ubuntu:18.04
   commands:
     - apt update
+    # We probably don't need all of `build-essential`, we do need `cc`, though
     - apt install -y musl-dev curl build-essential
     - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --default-toolchain nightly --component rust-src -y
     - . $HOME/.cargo/env
+    # We need this to get crtbegin.o and crtend.o so that linking doesn't fail
+    - rustup component add rust-std-x86_64-unknown-linux-musl
     - cargo +nightly build --release -Z build-std=std,panic_abort -Z build-std-features=panic_immediate_abort --target x86_64-unknown-linux-musl
 
 trigger:
   event:
   - push
-
-
-
