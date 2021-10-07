@@ -3,5 +3,20 @@
 version = 3
 
 [[package]]
-name = "min-static"
+name = "acollections"
 version = "0.1.0"
+
+[[package]]
+name = "libshim"
+version = "0.1.0"
+dependencies = [
+ "acollections",
+]
+
+[[package]]
+name = "shimlang"
+version = "0.1.0"
+dependencies = [
+ "acollections",
+ "libshim",
+]
