@@ -12,7 +12,7 @@ steps:
     - objcopy --only-keep-debug target/x86_64-unknown-linux-musl/release/shimlang symbols.dbg
     - cp target/x86_64-unknown-linux-musl/release/shimlang stripped
     - strip stripped
-    - bloaty stripped -d symbols -n 100 -s file --debug-file symbols.dbg
+    - bloaty stripped -d symbols -n 100 -s file --domain=file --debug-file symbols.dbg
 
 trigger:
   event:
