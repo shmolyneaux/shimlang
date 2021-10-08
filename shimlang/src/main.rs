@@ -62,7 +62,6 @@ pub fn main(argc: i32, _argv: *const *const i8) -> Result<(), std::alloc::AllocE
     }
 
     let allocator = StephenAllocator {};
-    let my_box: ABox<u8, _> = ABox::new(b'A', allocator)?;
     let script_name = unsafe { *_argv.offset(1) };
 
     stdout.write(b"Reading ").unwrap();
@@ -82,7 +81,17 @@ pub fn main(argc: i32, _argv: *const *const i8) -> Result<(), std::alloc::AllocE
     let buf: NonNull<[u8]> = allocator.allocate(buf_layout)?;
 
     let count = unsafe { file.read(&mut *buf.as_ptr()).unwrap() };
-    unsafe { stdout.write(&(*buf.as_ptr())[..count]).unwrap() };
+    // Lazy file reading
+    // TODO: did we read the whole file?
+    assert_eq!(count, file_length);
+
+    let mut interpreter = libshim::Interpreter::new(
+        allocator,
+    );
+    // interpreter.set_print_fn(
+    //     Box::new(move |text| {stdout.write(text).unwrap();})
+    // );
+    interpreter.interpret(unsafe{&(*buf.as_ptr())}).unwrap();
 
     unsafe{ allocator.deallocate(buf.cast(), buf_layout) };
 
