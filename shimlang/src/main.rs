@@ -4,6 +4,7 @@
 use std::alloc::Allocator;
 use std::alloc::Layout;
 use std::ptr::NonNull;
+use std::cell::Cell;
 
 use std::ffi::CStr;
 use std::fs::File;
@@ -49,6 +50,16 @@ fn stdout() -> File {
     unsafe { File::from_raw_fd(1) }
 }
 
+struct FilePrinter {
+    f: File
+}
+
+impl libshim::Printer for FilePrinter {
+    fn print(&mut self, text: &[u8]) {
+        self.f.write(text).unwrap();
+    }
+}
+
 #[no_mangle]
 pub fn main(argc: i32, _argv: *const *const i8) -> Result<(), std::alloc::AllocError> {
     let mut stdout = stdout();
@@ -85,12 +96,10 @@ pub fn main(argc: i32, _argv: *const *const i8) -> Result<(), std::alloc::AllocE
     // TODO: did we read the whole file?
     assert_eq!(count, file_length);
 
-    let mut interpreter = libshim::Interpreter::new(
-        allocator,
-    );
-    // interpreter.set_print_fn(
-    //     Box::new(move |text| {stdout.write(text).unwrap();})
-    // );
+    let mut interpreter = libshim::Interpreter::new(allocator);
+
+    let mut stdout_printer = FilePrinter {f: stdout};
+    interpreter.set_print_fn(&mut stdout_printer);
     interpreter.interpret(unsafe{&(*buf.as_ptr())}).unwrap();
 
     unsafe{ allocator.deallocate(buf.cast(), buf_layout) };

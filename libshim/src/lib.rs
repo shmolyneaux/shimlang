@@ -18,24 +18,28 @@ pub enum Expression<A: Allocator> {
     Binary(BinaryOp, ABox<Expression<A>, A>, ABox<Expression<A>, A>),
 }
 
-pub struct Interpreter<A: Allocator> {
+pub struct Interpreter<'a, A: Allocator> {
     allocator: A,
     // TODO: figure out how to make the ABox work like this
-    print_fn: Option<Box<dyn FnMut(&[u8]) -> ()>>,
+    print: Option<&'a mut dyn Printer>,
 }
 
-impl<A: Allocator> Interpreter<A> {
+pub trait Printer {
+    fn print(&mut self, text: &[u8]);
+}
 
-    pub fn new(allocator: A) -> Interpreter<A> {
-        Interpreter { allocator, print_fn: None }
+impl<'a, A: Allocator> Interpreter<'a, A> {
+
+    pub fn new(allocator: A) -> Interpreter<'a, A> {
+        Interpreter { allocator, print: None }
     }
 
-    pub fn set_print_fn(&mut self, f: Box<dyn FnMut(&[u8]) -> ()>) {
-        self.print_fn = Some(f);
+    pub fn set_print_fn(&mut self, f: &'a mut dyn Printer) {
+        self.print = Some(f);
     }
 
     pub fn print(&mut self, text: &[u8]) {
-        self.print_fn.as_mut().map(|p| p(text));
+        self.print.as_mut().map(|p| p.print(text));
     }
 
     pub fn interpret(&mut self, text: &[u8]) -> Result<(), ShimError> {
