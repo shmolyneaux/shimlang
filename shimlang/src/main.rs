@@ -7,8 +7,11 @@ use std::ptr::NonNull;
 
 use std::ffi::CStr;
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::{Read, Write, Seek};
+use std::io::SeekFrom;
 use std::os::unix::io::FromRawFd;
+
+use libc;
 
 use acollections::ABox;
 use libshim;
@@ -60,28 +63,28 @@ pub fn main(argc: i32, _argv: *const *const i8) -> Result<(), std::alloc::AllocE
 
     let allocator = StephenAllocator {};
     let my_box: ABox<u8, _> = ABox::new(b'A', allocator)?;
-    let script_name = unsafe { CStr::from_ptr(*_argv.offset(1)).to_bytes() };
+    let script_name = unsafe { *_argv.offset(1) };
 
     stdout.write(b"Reading ").unwrap();
-    stdout.write(script_name).unwrap();
+    unsafe { stdout.write(CStr::from_ptr(script_name).to_bytes()).unwrap() };
     stdout.write(b"\n").unwrap();
 
-    let mut file = File::open(&std::str::from_utf8(script_name).unwrap()).unwrap();
+    // TODO: handle error codes
+    // We open this ourselves since there's no way to open a file from a path
+    // without using the global allocator...
+    let fd = unsafe { libc::open(script_name, libc::O_RDONLY) };
+    let mut file = unsafe { File::from_raw_fd(fd) };
 
-    let buf_layout = Layout::array::<u8>(100).map_err(|_| std::alloc::AllocError)?;
+    let file_length = file.seek(SeekFrom::End(0)).unwrap() as usize;
+    file.seek(SeekFrom::Start(0)).unwrap();
+
+    let buf_layout = Layout::array::<u8>(file_length).map_err(|_| std::alloc::AllocError)?;
     let buf: NonNull<[u8]> = allocator.allocate(buf_layout)?;
 
     let count = unsafe { file.read(&mut *buf.as_ptr()).unwrap() };
     unsafe { stdout.write(&(*buf.as_ptr())[..count]).unwrap() };
-    stdout.write(b"\n").unwrap();
 
-    stdout.write(b"After ").unwrap();
-    stdout.write(&[*my_box]).unwrap();
-    stdout.write(b" is ").unwrap();
-    stdout.write(&[libshim::add_one(b'A')]).unwrap();
-    stdout.write(b"\n").unwrap();
-
-    unsafe { allocator.deallocate(buf.cast(), buf_layout) };
+    unsafe{ allocator.deallocate(buf.cast(), buf_layout) };
 
     Ok(())
 }
