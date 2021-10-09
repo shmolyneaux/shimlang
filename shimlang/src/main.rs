@@ -3,13 +3,13 @@
 
 use std::alloc::Allocator;
 use std::alloc::Layout;
-use std::ptr::NonNull;
 use std::cell::Cell;
+use std::ptr::NonNull;
 
 use std::ffi::CStr;
 use std::fs::File;
-use std::io::{Read, Write, Seek};
 use std::io::SeekFrom;
+use std::io::{Read, Seek, Write};
 use std::os::unix::io::FromRawFd;
 
 use libc;
@@ -51,7 +51,7 @@ fn stdout() -> File {
 }
 
 struct FilePrinter {
-    f: File
+    f: File,
 }
 
 impl libshim::Printer for FilePrinter {
@@ -76,7 +76,11 @@ pub fn main(argc: i32, _argv: *const *const i8) -> Result<(), std::alloc::AllocE
     let script_name = unsafe { *_argv.offset(1) };
 
     stdout.write(b"Reading ").unwrap();
-    unsafe { stdout.write(CStr::from_ptr(script_name).to_bytes()).unwrap() };
+    unsafe {
+        stdout
+            .write(CStr::from_ptr(script_name).to_bytes())
+            .unwrap()
+    };
     stdout.write(b"\n").unwrap();
 
     // TODO: handle error codes
@@ -98,11 +102,11 @@ pub fn main(argc: i32, _argv: *const *const i8) -> Result<(), std::alloc::AllocE
 
     let mut interpreter = libshim::Interpreter::new(allocator);
 
-    let mut stdout_printer = FilePrinter {f: stdout};
+    let mut stdout_printer = FilePrinter { f: stdout };
     interpreter.set_print_fn(&mut stdout_printer);
-    interpreter.interpret(unsafe{&(*buf.as_ptr())}).unwrap();
+    interpreter.interpret(unsafe { &(*buf.as_ptr()) }).unwrap();
 
-    unsafe{ allocator.deallocate(buf.cast(), buf_layout) };
+    unsafe { allocator.deallocate(buf.cast(), buf_layout) };
 
     Ok(())
 }
