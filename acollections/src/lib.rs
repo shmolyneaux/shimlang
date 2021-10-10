@@ -83,6 +83,34 @@ impl<T: ?Sized, A: Allocator> BorrowMut<T> for ABox<T, A> {
     }
 }
 
+pub struct AVecIterator<'a, T, A: Allocator> {
+    vec: &'a AVec<T, A>,
+    pos: usize
+}
+
+impl<'a, T, A: Allocator> AVecIterator<'a, T, A> {
+    fn new(vec: &'a AVec<T, A>) -> Self {
+        let pos = 0;
+        AVecIterator {
+            vec,
+            pos,
+        }
+    }
+}
+
+impl<'a, T, A: Allocator> Iterator for AVecIterator<'a, T, A> {
+    type Item = &'a T;
+
+    fn next(&mut self) -> Option<&'a T> {
+        if self.pos < self.vec.len() {
+            self.pos += 1;
+            Some(&self.vec[self.pos-1])
+        } else {
+            None
+        }
+    }
+}
+
 pub struct AVec<T, A: Allocator> {
     ptr: Option<NonNull<T>>,
     len: usize,
@@ -98,6 +126,14 @@ impl<T, A: Allocator> AVec<T, A> {
             len: 0,
             capacity: 0,
         }
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn iter(&self) -> AVecIterator<'_, T, A> {
+        AVecIterator::new(self)
     }
 
     pub fn push(&mut self, value: T) -> Result<(), AllocError> {
@@ -200,6 +236,22 @@ mod tests {
         }
 
         assert_eq!(vec[5555], 5555);
+    }
+
+    #[test]
+    fn vec_iter() {
+        let allocator = std::alloc::Global;
+        let mut vec: AVec<u8, _> = AVec::new(allocator);
+        vec.push(3).unwrap();
+        vec.push(2).unwrap();
+        vec.push(1).unwrap();
+
+        let mut iter = vec.iter();
+        assert_eq!(iter.next(), Some(&3));
+        assert_eq!(iter.next(), Some(&2));
+        assert_eq!(iter.next(), Some(&1));
+        assert_eq!(iter.next(), None);
+        assert_eq!(iter.next(), None);
     }
 
     #[test]
