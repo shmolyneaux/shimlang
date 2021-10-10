@@ -1,19 +1,33 @@
 #![feature(allocator_api)]
 
 use acollections::ABox;
-use std::alloc::{AllocError, Allocator};
+use std::alloc::AllocError;
 
 #[derive(Debug)]
 pub enum ShimError {
+    PureParseError(PureParseError),
     AllocError(AllocError),
 }
+
+impl From<ParseError> for ShimError {
+    fn from(err: ParseError) -> ShimError {
+        match err {
+            ParseError::AllocError(err) => ShimError::AllocError(err),
+            ParseError::PureParseError(err) => ShimError::PureParseError(err),
+        }
+    }
+}
+
+// TODO: Forcing the allocator to be copyable doesn't seem right in the general
+// case of having sized allocators. It's perfect for zero-sized ones though!
+pub trait Allocator: std::alloc::Allocator + Copy {}
 
 pub enum BinaryOp {
     Add,
     Mul,
 }
 
-#[derive(PartialEq, Copy, Clone)]
+#[derive(PartialEq, Debug, Copy, Clone)]
 pub enum Token<'a> {
     Unknown(u8),
     StringLiteral(&'a [u8]),
@@ -117,56 +131,56 @@ impl<'a> TokenStream<'a> {
                     b'+' => (Token::Plus, inc + 1),
                     b';' => (Token::Semicolon, inc + 1),
                     b':' => {
-                        if multichar_ok && self.text[self.idx + inc] == b':' {
+                        if multichar_ok && self.text[self.idx + inc + 1] == b':' {
                             (Token::DoubleColon, inc + 2)
                         } else {
                             (Token::Colon, inc + 1)
                         }
                     }
                     b'<' => {
-                        if multichar_ok && self.text[self.idx + inc] == b'=' {
+                        if multichar_ok && self.text[self.idx + inc + 1] == b'=' {
                             (Token::Lte, inc + 2)
                         } else {
                             (Token::LeftAngle, inc + 1)
                         }
                     }
                     b'>' => {
-                        if multichar_ok && self.text[self.idx + inc] == b'=' {
+                        if multichar_ok && self.text[self.idx + inc + 1] == b'=' {
                             (Token::Gte, inc + 2)
                         } else {
                             (Token::RightAngle, inc + 1)
                         }
                     }
                     b'-' => {
-                        if multichar_ok && self.text[self.idx + inc] == b'>' {
+                        if multichar_ok && self.text[self.idx + inc + 1] == b'>' {
                             (Token::Arrow, inc + 2)
                         } else {
                             (Token::Minus, inc + 1)
                         }
                     }
                     b'*' => {
-                        if multichar_ok && self.text[self.idx + inc] == b'*' {
+                        if multichar_ok && self.text[self.idx + inc + 1] == b'*' {
                             (Token::DoubleStar, inc + 2)
                         } else {
                             (Token::Star, inc + 1)
                         }
                     }
                     b'=' => {
-                        if multichar_ok && self.text[self.idx + inc] == b'=' {
+                        if multichar_ok && self.text[self.idx + inc + 1] == b'=' {
                             (Token::DoubleEqual, inc + 2)
                         } else {
                             (Token::Equal, inc + 1)
                         }
                     }
                     b'!' => {
-                        if multichar_ok && self.text[self.idx + inc] == b'=' {
+                        if multichar_ok && self.text[self.idx + inc + 1] == b'=' {
                             (Token::BangEqual, inc + 2)
                         } else {
                             (Token::Bang, inc + 1)
                         }
                     }
                     b'/' => {
-                        if multichar_ok && self.text[self.idx + inc] == b'/' {
+                        if multichar_ok && self.text[self.idx + inc + 1] == b'/' {
                             // This is a comment. Consume everything until we reach a newline
                             while self.idx + inc < self.text.len()
                                 && self.text[self.idx + inc] != b'\n'
@@ -179,6 +193,7 @@ impl<'a> TokenStream<'a> {
                         }
                     }
                     b'"' => {
+                        inc += 1;
                         while self.idx + inc < self.text.len() && self.text[self.idx + inc] != b'"'
                         {
                             inc += 1;
@@ -271,6 +286,61 @@ pub enum Expression<A: Allocator> {
     Binary(BinaryOp, ABox<Expression<A>, A>, ABox<Expression<A>, A>),
 }
 
+#[derive(Debug)]
+pub enum PureParseError {
+    UnexpectedToken,
+}
+
+pub enum ParseError {
+    AllocError(AllocError),
+    PureParseError(PureParseError),
+}
+
+impl From<AllocError> for ParseError {
+    fn from(err: AllocError) -> ParseError {
+        ParseError::AllocError(err)
+    }
+}
+
+fn parse_expression<A: Allocator>(
+    tokens: &mut TokenStream,
+    allocator: A,
+) -> Result<Expression<A>, ParseError> {
+    // Return some hard-coded stuff for now
+    assert_eq!(tokens.peek(), Token::Identifier(b"print"));
+    tokens.advance();
+    assert_eq!(tokens.peek(), Token::LeftParen);
+    tokens.advance();
+    assert_eq!(tokens.peek(), Token::IntLiteral(3));
+    tokens.advance();
+    assert_eq!(tokens.peek(), Token::Plus);
+    tokens.advance();
+    assert_eq!(tokens.peek(), Token::IntLiteral(3));
+    tokens.advance();
+    assert_eq!(tokens.peek(), Token::Star);
+    tokens.advance();
+    assert_eq!(tokens.peek(), Token::IntLiteral(4));
+    tokens.advance();
+    assert_eq!(tokens.peek(), Token::RightParen);
+    tokens.advance();
+    assert_eq!(tokens.peek(), Token::Semicolon);
+    tokens.advance();
+    assert_eq!(tokens.peek(), Token::EOF);
+
+    Ok(Expression::Binary(
+        BinaryOp::Add,
+        ABox::new(Expression::IntLiteral(3), allocator)?,
+        ABox::new(
+            Expression::Binary(
+                BinaryOp::Mul,
+                ABox::new(Expression::IntLiteral(3), allocator)?,
+                ABox::new(Expression::IntLiteral(4), allocator)?,
+            ),
+            allocator,
+        )?,
+    ))
+}
+
 pub struct Interpreter<'a, A: Allocator> {
     allocator: A,
     // TODO: figure out how to make the ABox work like this
@@ -297,16 +367,52 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
         self.print.as_mut().map(|p| p.print(text));
     }
 
+    pub fn print_int(&mut self, mut val: i128) {
+        if val < 0 {
+            self.print(b"-");
+            // Hopefully this isn't i128::MIN! (since it can't be expressed as a positive)
+            val = val * -1;
+        }
+
+        // The largest 128-bit int is 39 characters long
+        let mut slice = [b'0'; 39];
+
+        // TODO: check for off-by-one errors in the length
+        let mut length = 1;
+        for idx in (0..=38).rev() {
+            slice[idx] = b'0' + (val % 10) as u8;
+            val /= 10;
+            if val > 0 {
+                length += 1;
+            }
+        }
+
+        self.print(&slice[39 - length..39]);
+    }
+
+    pub fn interpret_expression(&mut self, expr: &Expression<A>) -> i128 {
+        match expr {
+            Expression::IntLiteral(i) => *i,
+            Expression::Binary(op, left, right) => {
+                let left = self.interpret_expression(&*left);
+                let right = self.interpret_expression(&*right);
+                // TODO: wrapping / non-wrapping stuff
+                match op {
+                    BinaryOp::Add => left + right,
+                    BinaryOp::Mul => left * right,
+                }
+            }
+        }
+    }
+
     pub fn interpret(&mut self, text: &[u8]) -> Result<(), ShimError> {
         let mut tokens = TokenStream::new(text);
-        let mut token_count = 0;
-        while tokens.peek() != Token::EOF {
-            tokens.advance();
-            token_count += 1;
-        }
-        self.print(b"Found ");
-        self.print(&[token_count + b'0']);
-        self.print(b" tokens\n");
+        let expr = parse_expression(&mut tokens, self.allocator)?;
+
+        let result = self.interpret_expression(&expr);
+        self.print_int(result);
+        self.print(b"\n");
+
         Ok(())
     }
 }

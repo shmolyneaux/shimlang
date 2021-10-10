@@ -85,16 +85,13 @@ impl<T: ?Sized, A: Allocator> BorrowMut<T> for ABox<T, A> {
 
 pub struct AVecIterator<'a, T, A: Allocator> {
     vec: &'a AVec<T, A>,
-    pos: usize
+    pos: usize,
 }
 
 impl<'a, T, A: Allocator> AVecIterator<'a, T, A> {
     fn new(vec: &'a AVec<T, A>) -> Self {
         let pos = 0;
-        AVecIterator {
-            vec,
-            pos,
-        }
+        AVecIterator { vec, pos }
     }
 }
 
@@ -104,7 +101,7 @@ impl<'a, T, A: Allocator> Iterator for AVecIterator<'a, T, A> {
     fn next(&mut self) -> Option<&'a T> {
         if self.pos < self.vec.len() {
             self.pos += 1;
-            Some(&self.vec[self.pos-1])
+            Some(&self.vec[self.pos - 1])
         } else {
             None
         }

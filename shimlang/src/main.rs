@@ -3,7 +3,6 @@
 
 use std::alloc::Allocator;
 use std::alloc::Layout;
-use std::cell::Cell;
 use std::ptr::NonNull;
 
 use std::ffi::CStr;
@@ -14,7 +13,6 @@ use std::os::unix::io::FromRawFd;
 
 use libc;
 
-use acollections::ABox;
 use libshim;
 
 #[link(name = "c")]
@@ -25,6 +23,8 @@ extern "C" {
 
 #[derive(Copy, Clone)]
 struct StephenAllocator {}
+
+impl libshim::Allocator for StephenAllocator {}
 
 unsafe impl Allocator for StephenAllocator {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, std::alloc::AllocError> {
