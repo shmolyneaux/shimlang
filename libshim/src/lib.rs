@@ -29,7 +29,7 @@ pub enum BinaryOp {
 
 #[derive(PartialEq, Debug, Copy, Clone)]
 pub enum Token<'a> {
-    Unknown(u8),
+    Unknown(&'a [u8]),
     StringLiteral(&'a [u8]),
     UnclosedStringLiteral(&'a [u8]),
     BoolLiteral(bool),
@@ -215,8 +215,89 @@ impl<'a> TokenStream<'a> {
                         }
                     }
                     n @ b'0'..=b'9' => {
-                        // TODO: Support multi-character numeric literals
-                        (Token::IntLiteral((n - b'0').into()), inc + 1)
+                        #[derive(Copy, Clone)]
+                        enum NumericParseState {
+                            LeadingZero,
+                            Int,
+                            Binary,
+                            Hex,
+                            Float,
+                        }
+
+                        let mut parse_state = if n == 0 {
+                            NumericParseState::LeadingZero
+                        } else {
+                            NumericParseState::Int
+                        };
+
+                        inc += 1;
+
+                        let mut float_decimal_power = -1;
+                        let mut float_value: f64 = 0.0;
+                        let mut int_value: i128 = (n - b'0') as i128;
+                        while self.idx + inc < self.text.len() {
+                            match (parse_state, self.text[self.idx + inc]) {
+                                (NumericParseState::LeadingZero, b'x') => {
+                                    parse_state = NumericParseState::Hex;
+                                }
+                                (NumericParseState::LeadingZero, b'b') => {
+                                    parse_state = NumericParseState::Binary;
+                                }
+                                (NumericParseState::LeadingZero, b'.') => {
+                                    float_value = int_value as f64;
+                                    parse_state = NumericParseState::Float;
+                                }
+                                (NumericParseState::LeadingZero, _) => {
+                                    break;
+                                }
+                                (NumericParseState::Int, n) => {
+                                    if matches!(n, b'0'..=b'9') {
+                                        int_value *= 10;
+                                        int_value += (n - b'0') as i128;
+                                    } else {
+                                        break;
+                                    }
+                                }
+                                (NumericParseState::Binary, n) => {
+                                    if matches!(n, b'0' | b'1') {
+                                        int_value *= 2;
+                                        int_value += (n - b'0') as i128;
+                                    } else {
+                                        break;
+                                    }
+                                }
+                                (NumericParseState::Hex, n) => {
+                                    if matches!(n, b'0'..=b'9') {
+                                        int_value *= 16;
+                                        int_value += (n - b'0') as i128;
+                                    } else if matches!(n, b'a'..=b'f') {
+                                        int_value *= 16;
+                                        int_value += (n - b'a' + 10) as i128;
+                                    } else if matches!(n, b'A'..=b'F') {
+                                        int_value *= 16;
+                                        int_value += (n - b'A' + 10) as i128;
+                                    } else {
+                                        break;
+                                    }
+                                }
+                                (NumericParseState::Float, n) => {
+                                    // TODO: support 'E' for scientific notation
+                                    if matches!(n, b'0'..=b'9') {
+                                        float_value += ((n - b'0') as f64)
+                                            * (10.0f64).powi(float_decimal_power);
+                                        float_decimal_power -= 1;
+                                    } else {
+                                        break;
+                                    }
+                                }
+                            }
+                            inc += 1;
+                        }
+
+                        match parse_state {
+                            NumericParseState::Float => (Token::FloatLiteral(float_value), inc),
+                            _ => (Token::IntLiteral(int_value), inc),
+                        }
                     }
                     b'A'..=b'Z' | b'a'..=b'z' | b'_' => {
                         while self.idx + inc < self.text.len()
@@ -246,7 +327,10 @@ impl<'a> TokenStream<'a> {
                             _ => (Token::Identifier(slice), inc),
                         }
                     }
-                    c => (Token::Unknown(c), 1),
+                    _ => (
+                        Token::Unknown(&self.text[self.idx + inc..self.idx + inc + 1]),
+                        1,
+                    ),
                 }
             };
 
