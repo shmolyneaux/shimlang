@@ -6,6 +6,11 @@ members = [
     "acollections",
 ]
 
+exclude = [
+    # We keep this apart since it relies on wasm-only intrinsics for memory
+    "shimlang-wasm"
+]
+
 [profile.release]
 debug = true
 opt-level = 'z'
