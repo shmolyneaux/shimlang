@@ -122,6 +122,15 @@ pub extern fn clear_memory_and_allocate_file(size: usize) -> usize {
     ptr as usize
 }
 
+// If I can't figure out how to write directly to memory, I'm just going to
+// write out the script. Byte. By. Byte.
+#[no_mangle]
+pub extern fn set_file_byte(idx: isize, val: u8) {
+    unsafe {
+        *FILE_START.offset(idx) = val;
+    }
+}
+
 
 #[no_mangle]
 pub extern fn run_file() {
@@ -140,6 +149,8 @@ fn run_file_inner() -> Result<(), std::alloc::AllocError> {
     let file_contents = unsafe {
         std::ptr::slice_from_raw_parts_mut(FILE_START, FILE_SIZE)
     };
+
+    unsafe {printer.print(&*file_contents)};
 
     interpreter.set_print_fn(&mut printer);
     interpreter.interpret(unsafe { &*file_contents }).unwrap();

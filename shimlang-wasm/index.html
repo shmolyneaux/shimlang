@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<script type="module">
+    async function init() {
+        let importObject = {
+            imports: {
+            },
+            env: {
+                js_print: arg => console.log(String.fromCharCode(arg)),
+            }
+        };
+        const { instance } = await WebAssembly.instantiateStreaming(
+            fetch("./target/wasm32-unknown-unknown/release/shimlang_wasm.wasm"),
+            importObject
+        );
+        console.log(instance);
+
+        let script = "print(3+3*4)";
+        let bytes = [];
+        for (let i=0; i<script.length; i++) {
+            bytes.push(script.charCodeAt(i));
+        }
+        let file_start = instance.exports.clear_memory_and_allocate_file(
+            bytes.length
+        );
+
+        for (let i=0; i<bytes.length; i++) {
+            instance.exports.set_file_byte(i, bytes[i]);
+        }
+        console.log(instance.exports.memory);
+
+        instance.exports.run_file();
+    }
+
+    init();
+</script>
