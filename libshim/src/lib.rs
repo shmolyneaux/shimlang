@@ -371,7 +371,11 @@ impl<'a> TokenStream<'a> {
 pub enum Expression<'a, A: Allocator> {
     Identifier(&'a [u8]),
     IntLiteral(i128),
-    Binary(BinaryOp, ABox<Expression<'a, A>, A>, ABox<Expression<'a, A>, A>),
+    Binary(
+        BinaryOp,
+        ABox<Expression<'a, A>, A>,
+        ABox<Expression<'a, A>, A>,
+    ),
 }
 
 #[derive(Debug)]
@@ -403,10 +407,7 @@ fn parse_term<'a, A: Allocator>(
 ) -> Result<Expression<'a, A>, ParseError> {
     parse_binary(
         tokens,
-        &[
-            (Token::Plus, BinaryOp::Add),
-            (Token::Minus, BinaryOp::Sub),
-        ],
+        &[(Token::Plus, BinaryOp::Add), (Token::Minus, BinaryOp::Sub)],
         parse_factor,
         allocator,
     )
@@ -418,10 +419,7 @@ fn parse_factor<'a, A: Allocator>(
 ) -> Result<Expression<'a, A>, ParseError> {
     parse_binary(
         tokens,
-        &[
-            (Token::Star, BinaryOp::Mul),
-            (Token::Slash, BinaryOp::Div),
-        ],
+        &[(Token::Star, BinaryOp::Mul), (Token::Slash, BinaryOp::Div)],
         parse_primary,
         allocator,
     )
@@ -435,7 +433,7 @@ fn parse_primary<'a, A: Allocator>(
         Token::IntLiteral(i) => {
             tokens.advance();
             Ok(Expression::IntLiteral(i))
-        },
+        }
         _ => return Err(PureParseError::Generic(b"Unknown token when parsing primary").into()),
     }
 }
@@ -532,7 +530,7 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
             Expression::Identifier(_) => {
                 self.print(b"Can't interpret identifier\n");
                 42
-            },
+            }
             Expression::IntLiteral(i) => *i,
             Expression::Binary(op, left, right) => {
                 let left = self.interpret_expression(&*left);
@@ -556,7 +554,7 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
             Err(ParseError::PureParseError(PureParseError::Generic(msg))) => {
                 self.print(msg);
                 return Err(ParseError::PureParseError(PureParseError::Generic(msg)).into());
-            },
+            }
             Err(err) => {
                 self.print(b"Error parsing input");
                 return Err(err.into());
