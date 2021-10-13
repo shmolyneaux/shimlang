@@ -1,6 +1,6 @@
 #![feature(allocator_api)]
 
-use acollections::ABox;
+use acollections::{ABox, AVec};
 use std::alloc::AllocError;
 
 #[derive(Debug)]
@@ -85,8 +85,6 @@ pub enum Token<'a> {
     FalseKeyword,
     EOF,
 }
-
-struct InvalidToken(u8, usize);
 
 struct TokenStream<'a> {
     text: &'a [u8],
@@ -368,6 +366,11 @@ impl<'a> TokenStream<'a> {
     }
 }
 
+pub struct CallExpr<'a, A: Allocator> {
+    func: ABox<Expression<'a, A>, A>,
+    args: AVec<Expression<'a, A>, A>,
+}
+
 pub enum Expression<'a, A: Allocator> {
     Identifier(&'a [u8]),
     IntLiteral(i128),
@@ -376,6 +379,7 @@ pub enum Expression<'a, A: Allocator> {
         ABox<Expression<'a, A>, A>,
         ABox<Expression<'a, A>, A>,
     ),
+    Call(CallExpr<'a, A>),
 }
 
 #[derive(Debug)]
@@ -420,9 +424,58 @@ fn parse_factor<'a, A: Allocator>(
     parse_binary(
         tokens,
         &[(Token::Star, BinaryOp::Mul), (Token::Slash, BinaryOp::Div)],
-        parse_primary,
+        parse_call,
         allocator,
     )
+}
+
+fn parse_call<'a, A: Allocator>(
+    tokens: &mut TokenStream,
+    allocator: A,
+) -> Result<Expression<'a, A>, ParseError> {
+    let mut expr = parse_primary(tokens, allocator)?;
+    while tokens.peek() != Token::EOF {
+        match tokens.peek() {
+            Token::LeftParen => {
+                tokens.advance();
+                let args = parse_args(tokens, allocator)?;
+
+                if !tokens.matches(Token::RightParen) {
+                    return Err(PureParseError::Generic(b"Right paren did not follow arglist").into());
+                }
+
+                expr = Expression::Call( CallExpr {
+                    func: ABox::new(expr, allocator)?,
+                    args: args,
+                });
+            },
+            Token::Dot => {
+                // TODO: property access
+                return Err(PureParseError::Generic(b"Property access not supported").into());
+            },
+            _ => {
+                break;
+            }
+        }
+    }
+
+    Ok(expr)
+}
+
+fn parse_args<'a, A: Allocator>(
+    tokens: &mut TokenStream,
+    allocator: A,
+) -> Result<AVec<Expression<'a, A>, A>, ParseError> {
+    let mut args = AVec::new(allocator);
+    while tokens.peek() != Token::EOF {
+        args.push(parse_expression(tokens, allocator)?);
+        if tokens.peek() != Token::Comma {
+            break;
+        }
+    }
+
+
+    Ok(args)
 }
 
 fn parse_primary<'a, A: Allocator>(
@@ -434,7 +487,13 @@ fn parse_primary<'a, A: Allocator>(
             tokens.advance();
             Ok(Expression::IntLiteral(i))
         }
-        _ => return Err(PureParseError::Generic(b"Unknown token when parsing primary").into()),
+        Token::Identifier(b"print") => {
+            tokens.advance();
+            Ok(Expression::Identifier(b"print"))
+        },
+        other => {
+            return Err(PureParseError::Generic(b"Unknown token when parsing primary").into())
+        },
     }
 }
 
@@ -476,8 +535,29 @@ fn parse_expression<'a, A: Allocator>(
     parse_term(tokens, allocator)
 }
 
+// These values do not get a copy of the Allocator since they are GC'd, and
+// the memory is handled externally.
+pub enum ShimValue {
+    // A variant used to replace a previous-valid value after GC
+    Freed,
+    // Hard-code this for now until we can declare values
+    PrintFn,
+    Unit,
+    I128(i128)
+}
+
+// A newtype which represents an index into a GC'd collection of ShimValue
+pub struct Id(usize);
+
+impl Id {
+    fn new(id: usize) -> Self {
+        Id(id)
+    }
+}
+
 pub struct Interpreter<'a, A: Allocator> {
     allocator: A,
+    values: AVec<ShimValue, A>,
     // TODO: figure out how to make the ABox work like this
     print: Option<&'a mut dyn Printer>,
 }
@@ -486,10 +566,33 @@ pub trait Printer {
     fn print(&mut self, text: &[u8]);
 }
 
+trait NewValue<T> {
+    fn new_value(&mut self, val: T) -> Id;
+}
+
+impl<'a, A: Allocator> NewValue<i128> for Interpreter<'a, A> {
+    fn new_value(&mut self, val: i128) -> Id {
+        let id = Id::new(self.values.len());
+        self.values.push(ShimValue::I128(val));
+
+        id
+    }
+}
+
+impl<'a, A: Allocator> NewValue<ShimValue> for Interpreter<'a, A> {
+    fn new_value(&mut self, val: ShimValue) -> Id {
+        let id = Id::new(self.values.len());
+        self.values.push(val);
+
+        id
+    }
+}
+
 impl<'a, A: Allocator> Interpreter<'a, A> {
     pub fn new(allocator: A) -> Interpreter<'a, A> {
         Interpreter {
             allocator,
+            values: AVec::new(allocator),
             print: None,
         }
     }
@@ -525,23 +628,65 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
         self.print(&slice[39 - length..39]);
     }
 
-    pub fn interpret_expression(&mut self, expr: &Expression<A>) -> i128 {
+    pub fn interpret_expression(&mut self, expr: &Expression<A>) -> Id {
         match expr {
+            Expression::Identifier(b"print") => {
+                self.new_value(ShimValue::PrintFn)
+            }
             Expression::Identifier(_) => {
                 self.print(b"Can't interpret identifier\n");
-                42
+                self.new_value(42)
             }
-            Expression::IntLiteral(i) => *i,
+            Expression::IntLiteral(i) => {
+                self.new_value(*i)
+            },
             Expression::Binary(op, left, right) => {
                 let left = self.interpret_expression(&*left);
                 let right = self.interpret_expression(&*right);
 
-                // TODO: wrapping / non-wrapping stuff
-                match op {
-                    BinaryOp::Add => left + right,
-                    BinaryOp::Sub => left - right,
-                    BinaryOp::Mul => left * right,
-                    BinaryOp::Div => left / right,
+                let result = match (&self.values[left.0], &self.values[right.0]) {
+                    (ShimValue::I128(a), ShimValue::I128(b)) => {
+                        ShimValue::I128(
+                            // TODO: wrapping / non-wrapping stuff
+                            match op {
+                                BinaryOp::Add => a + b,
+                                BinaryOp::Sub => a - b,
+                                BinaryOp::Mul => a * b,
+                                BinaryOp::Div => a / b,
+                            }
+                        )
+                    },
+                    _ => {
+                        self.print(b"TODO: values can't be added\n");
+                        ShimValue::I128(42)
+                    }
+                };
+
+                self.new_value(result)
+            },
+            Expression::Call(cexpr) => {
+                let func = self.interpret_expression(&cexpr.func);
+                match self.values[func.0] {
+                    ShimValue::PrintFn => {
+                        let last_idx = cexpr.args.len() - 1;
+                        for (idx, arg) in cexpr.args.iter().enumerate() {
+                            let arg = self.interpret_expression(arg);
+                            match self.values[arg.0] {
+                                ShimValue::I128(i) => self.print_int(i),
+                                _ => self.print(b"other"),
+                            }
+
+                            if idx != last_idx {
+                                self.print(b" ");
+                            }
+                        }
+                        self.print(b"\n");
+                        self.new_value(ShimValue::Unit)
+                    },
+                    _ => {
+                        self.print(b"Can't call value\n");
+                        self.new_value(ShimValue::I128(42))
+                    }
                 }
             }
         }
@@ -561,9 +706,7 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
             }
         };
 
-        let result = self.interpret_expression(&expr);
-        self.print_int(result);
-        self.print(b"\n");
+        let _ = self.interpret_expression(&expr);
 
         Ok(())
     }
