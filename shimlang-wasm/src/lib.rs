@@ -9,9 +9,9 @@ use libshim;
 use libshim::Printer;
 
 extern {
-    // For now... print a single byte at a time so that we don't need to do
-    // anything funky with returning references.
-    pub fn js_print(byte: u8);
+    // Lol, let's give JS a pointer and a len and have it read the memory directly
+    // through get_memory_byte
+    pub fn js_print(offset: usize, count: usize);
 }
 
 // The next location to allocate, already 8-byte-aligned
@@ -81,13 +81,26 @@ unsafe impl Allocator for BumpAllocator {
     }
 }
 
-struct WasmPrinter {}
+struct WasmPrinter {
+    allocator: BumpAllocator
+}
 
 impl libshim::Printer for WasmPrinter {
     fn print(&mut self, text: &[u8]) {
-        for c in text {
-            unsafe { js_print(*c) };
-        }
+        let len = text.len();
+        let layout = Layout::array::<u8>(len).unwrap();
+
+        // Allocate memory for writing a message using our bump allocator. It
+        // won't get freed until the next script is run.
+        let print_ptr: *mut u8 = self.allocator.allocate(layout).unwrap().as_ptr().cast();
+
+        let mut print_str: &mut [u8] = unsafe {
+            &mut *std::ptr::slice_from_raw_parts_mut(print_ptr, len)
+        };
+
+        print_str.copy_from_slice(text);
+
+        unsafe { js_print(print_ptr as usize, len) };
     }
 }
 
@@ -102,7 +115,7 @@ pub extern fn clear_memory_and_allocate_file(size: usize) -> usize {
     let layout = match Layout::array::<u8>(size) {
         Ok(l) => l,
         Err(_) => {
-            let mut printer = WasmPrinter {};
+            let mut printer = WasmPrinter {allocator};
             printer.print(b"alloc error");
 
             return 0;
@@ -131,18 +144,26 @@ pub extern fn set_file_byte(idx: isize, val: u8) {
     }
 }
 
+#[no_mangle]
+pub extern fn get_memory_byte(ptr: usize) -> u8 {
+    unsafe {
+        *(ptr as *mut u8)
+    }
+}
+
 
 #[no_mangle]
 pub extern fn run_file() {
     if run_file_inner().is_err() {
-        let mut printer = WasmPrinter {};
+        let allocator = BumpAllocator {};
+        let mut printer = WasmPrinter {allocator};
         printer.print(b"alloc error");
     }
 }
 
 fn run_file_inner() -> Result<(), std::alloc::AllocError> {
-    let mut printer = WasmPrinter {};
     let allocator = BumpAllocator {};
+    let mut printer = WasmPrinter {allocator};
 
     let mut interpreter = libshim::Interpreter::new(allocator);
 
@@ -153,7 +174,10 @@ fn run_file_inner() -> Result<(), std::alloc::AllocError> {
     unsafe {printer.print(&*file_contents)};
 
     interpreter.set_print_fn(&mut printer);
-    interpreter.interpret(unsafe { &*file_contents }).unwrap();
+    match interpreter.interpret(unsafe { &*file_contents }) {
+        Err(_) => printer.print(b"Error while running script"),
+        _ => {},
+    }
 
     Ok(())
 }

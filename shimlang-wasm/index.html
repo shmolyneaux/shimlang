@@ -5,7 +5,14 @@
             imports: {
             },
             env: {
-                js_print: arg => console.log(String.fromCharCode(arg)),
+                js_print: (offset, count) => {
+                    let s = "";
+                    for (let i=0; i<count; i++) {
+                        s += String.fromCharCode(instance.exports.get_memory_byte(offset+i));
+                    }
+
+                    console.log(s);
+                },
             }
         };
         const { instance } = await WebAssembly.instantiateStreaming(
@@ -14,7 +21,7 @@
         );
         console.log(instance);
 
-        let script = "print(3+3*4)";
+        let script = "3+4+5+6+5*6";
         let bytes = [];
         for (let i=0; i<script.length; i++) {
             bytes.push(script.charCodeAt(i));
