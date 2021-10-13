@@ -22,9 +22,12 @@ impl From<ParseError> for ShimError {
 // case of having sized allocators. It's perfect for zero-sized ones though!
 pub trait Allocator: std::alloc::Allocator + Copy {}
 
+#[derive(Debug, Copy, Clone)]
 pub enum BinaryOp {
     Add,
+    Sub,
     Mul,
+    Div,
 }
 
 #[derive(PartialEq, Debug, Copy, Clone)]
@@ -109,7 +112,7 @@ impl<'a> TokenStream<'a> {
         // the number of bytes we consume in inc.
         let mut inc = 0;
         loop {
-            let chars_left = self.text.len() - self.idx - inc;
+            let chars_left: isize = self.text.len() as isize - self.idx as isize - inc as isize;
             let next = if chars_left <= 0 {
                 (Token::EOF, 0)
             } else {
@@ -365,19 +368,27 @@ impl<'a> TokenStream<'a> {
     }
 }
 
-pub enum Expression<A: Allocator> {
+pub enum Expression<'a, A: Allocator> {
+    Identifier(&'a [u8]),
     IntLiteral(i128),
-    Binary(BinaryOp, ABox<Expression<A>, A>, ABox<Expression<A>, A>),
+    Binary(BinaryOp, ABox<Expression<'a, A>, A>, ABox<Expression<'a, A>, A>),
 }
 
 #[derive(Debug)]
 pub enum PureParseError {
     UnexpectedToken,
+    Generic(&'static [u8]),
 }
 
 pub enum ParseError {
     AllocError(AllocError),
     PureParseError(PureParseError),
+}
+
+impl From<PureParseError> for ParseError {
+    fn from(err: PureParseError) -> ParseError {
+        ParseError::PureParseError(err)
+    }
 }
 
 impl From<AllocError> for ParseError {
@@ -386,43 +397,85 @@ impl From<AllocError> for ParseError {
     }
 }
 
-fn parse_expression<A: Allocator>(
+fn parse_term<'a, A: Allocator>(
     tokens: &mut TokenStream,
     allocator: A,
-) -> Result<Expression<A>, ParseError> {
-    // Return some hard-coded stuff for now
-    assert_eq!(tokens.peek(), Token::Identifier(b"print"));
-    tokens.advance();
-    assert_eq!(tokens.peek(), Token::LeftParen);
-    tokens.advance();
-    assert_eq!(tokens.peek(), Token::IntLiteral(3));
-    tokens.advance();
-    assert_eq!(tokens.peek(), Token::Plus);
-    tokens.advance();
-    assert_eq!(tokens.peek(), Token::IntLiteral(3));
-    tokens.advance();
-    assert_eq!(tokens.peek(), Token::Star);
-    tokens.advance();
-    assert_eq!(tokens.peek(), Token::IntLiteral(4));
-    tokens.advance();
-    assert_eq!(tokens.peek(), Token::RightParen);
-    tokens.advance();
-    assert_eq!(tokens.peek(), Token::Semicolon);
-    tokens.advance();
-    assert_eq!(tokens.peek(), Token::EOF);
+) -> Result<Expression<'a, A>, ParseError> {
+    parse_binary(
+        tokens,
+        &[
+            (Token::Plus, BinaryOp::Add),
+            (Token::Minus, BinaryOp::Sub),
+        ],
+        parse_factor,
+        allocator,
+    )
+}
 
-    Ok(Expression::Binary(
-        BinaryOp::Add,
-        ABox::new(Expression::IntLiteral(3), allocator)?,
-        ABox::new(
-            Expression::Binary(
-                BinaryOp::Mul,
-                ABox::new(Expression::IntLiteral(3), allocator)?,
-                ABox::new(Expression::IntLiteral(4), allocator)?,
-            ),
-            allocator,
-        )?,
-    ))
+fn parse_factor<'a, A: Allocator>(
+    tokens: &mut TokenStream,
+    allocator: A,
+) -> Result<Expression<'a, A>, ParseError> {
+    parse_binary(
+        tokens,
+        &[
+            (Token::Star, BinaryOp::Mul),
+            (Token::Slash, BinaryOp::Div),
+        ],
+        parse_primary,
+        allocator,
+    )
+}
+
+fn parse_primary<'a, A: Allocator>(
+    tokens: &mut TokenStream,
+    allocator: A,
+) -> Result<Expression<'a, A>, ParseError> {
+    match tokens.peek() {
+        Token::IntLiteral(i) => {
+            tokens.advance();
+            Ok(Expression::IntLiteral(i))
+        },
+        _ => return Err(PureParseError::Generic(b"Unknown token when parsing primary").into()),
+    }
+}
+
+fn parse_binary<'a, A: Allocator>(
+    tokens: &mut TokenStream,
+    op_table: &[(Token, BinaryOp)],
+    next: fn(&mut TokenStream, A) -> Result<Expression<'a, A>, ParseError>,
+    allocator: A,
+) -> Result<Expression<'a, A>, ParseError> {
+    let mut expr = next(tokens, allocator)?;
+    while tokens.peek() != Token::EOF {
+        let token = tokens.peek();
+        if let Some(op) = op_table
+            .iter()
+            .find(|(table_token, _)| token == *table_token)
+            .map(|(_, op)| op)
+        {
+            // Consume the token we peeked
+            tokens.advance();
+
+            let right_expr = next(tokens, allocator)?;
+            expr = Expression::Binary(
+                *op,
+                ABox::new(expr, allocator)?,
+                ABox::new(right_expr, allocator)?,
+            );
+        } else {
+            break;
+        }
+    }
+
+    Ok(expr)
+}
+
+fn parse_expression<'a, A: Allocator>(
+    tokens: &mut TokenStream,
+    allocator: A,
+) -> Result<Expression<'a, A>, ParseError> {
+    parse_term(tokens, allocator)
 }
 
 pub struct Interpreter<'a, A: Allocator> {
@@ -476,22 +529,39 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
 
     pub fn interpret_expression(&mut self, expr: &Expression<A>) -> i128 {
         match expr {
+            Expression::Identifier(_) => {
+                self.print(b"Can't interpret identifier\n");
+                42
+            },
             Expression::IntLiteral(i) => *i,
             Expression::Binary(op, left, right) => {
                 let left = self.interpret_expression(&*left);
                 let right = self.interpret_expression(&*right);
+
                 // TODO: wrapping / non-wrapping stuff
                 match op {
                     BinaryOp::Add => left + right,
+                    BinaryOp::Sub => left - right,
                     BinaryOp::Mul => left * right,
+                    BinaryOp::Div => left / right,
                 }
             }
         }
     }
 
-    pub fn interpret(&mut self, text: &[u8]) -> Result<(), ShimError> {
+    pub fn interpret(&mut self, text: &'a [u8]) -> Result<(), ShimError> {
         let mut tokens = TokenStream::new(text);
-        let expr = parse_expression(&mut tokens, self.allocator)?;
+        let expr = match parse_expression(&mut tokens, self.allocator) {
+            Ok(expr) => expr,
+            Err(ParseError::PureParseError(PureParseError::Generic(msg))) => {
+                self.print(msg);
+                return Err(ParseError::PureParseError(PureParseError::Generic(msg)).into());
+            },
+            Err(err) => {
+                self.print(b"Error parsing input");
+                return Err(err.into());
+            }
+        };
 
         let result = self.interpret_expression(&expr);
         self.print_int(result);
