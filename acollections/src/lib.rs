@@ -177,6 +177,14 @@ impl<T, A: Allocator> AVec<T, A> {
 
         Ok(())
     }
+
+    pub fn get(&self, idx: usize) -> Option<&T> {
+        if idx >= self.len {
+            None
+        } else {
+            Some(&self[idx])
+        }
+    }
 }
 
 unsafe impl<#[may_dangle] T, A: Allocator> Drop for AVec<T, A> {
