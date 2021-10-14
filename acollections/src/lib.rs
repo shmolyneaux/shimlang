@@ -187,6 +187,36 @@ impl<T, A: Allocator> AVec<T, A> {
     }
 }
 
+impl<T: Clone, A: Allocator> AVec<T, A> {
+    pub fn extend_from_slice(&mut self, other: &[T]) {
+        for item in other {
+            self.push(item.clone());
+        }
+    }
+}
+
+impl<T, A: Allocator> Deref for AVec<T, A> {
+    type Target = [T];
+
+    fn deref(&self) -> &[T] {
+        if let Some(ptr) = self.ptr {
+            unsafe { &*std::ptr::slice_from_raw_parts_mut(ptr.as_ptr(), self.len) }
+        } else {
+            &[]
+        }
+    }
+}
+
+impl<T, A: Allocator> DerefMut for AVec<T, A> {
+    fn deref_mut(&mut self) -> &mut [T] {
+        if let Some(ptr) = self.ptr {
+            unsafe { &mut *std::ptr::slice_from_raw_parts_mut(ptr.as_ptr(), self.len) }
+        } else {
+            &mut []
+        }
+    }
+}
+
 unsafe impl<#[may_dangle] T, A: Allocator> Drop for AVec<T, A> {
     fn drop(&mut self) {
         if let Some(ptr) = self.ptr {
