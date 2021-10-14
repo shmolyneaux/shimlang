@@ -301,12 +301,14 @@ impl<'a> TokenStream<'a> {
                         }
                     }
                     b'A'..=b'Z' | b'a'..=b'z' | b'_' => {
+                        let start_idx = self.idx + inc;
+
                         while self.idx + inc < self.text.len()
                             && matches!(self.text[self.idx + inc], b'A'..=b'Z' | b'a'..=b'z' | b'_' | b'0'..=b'9' )
                         {
                             inc += 1;
                         }
-                        let slice = &self.text[self.idx..self.idx + inc];
+                        let slice = &self.text[start_idx..self.idx + inc];
                         match slice {
                             b"and" => (Token::AndKeyword, inc),
                             b"as" => (Token::AsKeyword, inc),
@@ -380,6 +382,10 @@ pub enum Expression<'a, A: Allocator> {
         ABox<Expression<'a, A>, A>,
     ),
     Call(CallExpr<'a, A>),
+}
+
+pub enum Statement<'a, A: Allocator> {
+    Expression(Expression<'a, A>),
 }
 
 #[derive(Debug)]
@@ -526,6 +532,30 @@ fn parse_binary<'a, A: Allocator>(
     }
 
     Ok(expr)
+}
+
+fn parse_script<'a, A: Allocator>(
+    tokens: &mut TokenStream,
+    allocator: A,
+) -> Result<AVec<Statement<'a, A>, A>, ParseError> {
+    let mut stmts = AVec::new(allocator);
+    while tokens.peek() != Token::EOF {
+        stmts.push(parse_statement(tokens, allocator)?)?;
+    }
+
+    Ok(stmts)
+}
+
+fn parse_statement<'a, A: Allocator>(
+    tokens: &mut TokenStream,
+    allocator: A,
+) -> Result<Statement<'a, A>, ParseError> {
+    let expr = parse_expression(tokens, allocator)?;
+    if !tokens.matches(Token::Semicolon) {
+        return Err(PureParseError::Generic(b"Missing semicolon after expression").into())
+    }
+
+    Ok(Statement::Expression(expr))
 }
 
 fn parse_expression<'a, A: Allocator>(
@@ -710,10 +740,18 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
         }
     }
 
+    pub fn interpret_statement(&mut self, stmt: &Statement<A>) -> Result<(), ShimError> {
+        match stmt {
+            Statement::Expression(expr) => self.interpret_expression(expr),
+        };
+
+        Ok(())
+    }
+
     pub fn interpret(&mut self, text: &'a [u8]) -> Result<(), ShimError> {
         let mut tokens = TokenStream::new(text);
-        let expr = match parse_expression(&mut tokens, self.allocator) {
-            Ok(expr) => expr,
+        let stmts = match parse_script(&mut tokens, self.allocator) {
+            Ok(stmts) => stmts,
             Err(ParseError::PureParseError(PureParseError::Generic(msg))) => {
                 self.print(msg);
                 return Err(ParseError::PureParseError(PureParseError::Generic(msg)).into());
@@ -724,7 +762,9 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
             }
         };
 
-        let _ = self.interpret_expression(&expr);
+        for stmt in stmts.iter() {
+            self.interpret_statement(stmt);
+        }
 
         Ok(())
     }
@@ -749,5 +789,23 @@ mod tests {
 
         // Make sure that `matches` doesn't always return true :)
         assert!(!tokens.matches(Token::DoubleStar));
+    }
+
+    #[test]
+    fn tokenize_with_newline() {
+        let text = b"print(0);\nprint(0);";
+        let mut tokens = TokenStream::new(text);
+
+        for _ in 1..=2 {
+            assert!(tokens.peek() == Token::Identifier(b"print"));
+            tokens.advance();
+            assert!(tokens.matches(Token::LeftParen));
+            assert!(tokens.peek() == Token::IntLiteral(0));
+            tokens.advance();
+            assert!(tokens.matches(Token::RightParen));
+            assert!(tokens.matches(Token::Semicolon));
+        }
+
+        assert!(tokens.matches(Token::EOF));
     }
 }
