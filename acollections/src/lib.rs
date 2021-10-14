@@ -17,13 +17,14 @@ use std::borrow::{Borrow, BorrowMut};
 use std::ops::{Deref, DerefMut, Index};
 use std::ptr::NonNull;
 
+#[derive(Debug)]
 pub struct ABox<T: ?Sized, A: Allocator>(NonNull<T>, A);
 
 impl<T, A: Allocator> ABox<T, A> {
     pub fn new(val: T, allocator: A) -> Result<Self, AllocError> {
         let layout = Layout::new::<T>();
-        let mut ptr = allocator.allocate(layout)?.cast();
-        unsafe { *ptr.as_mut() = val };
+        let mut ptr: NonNull<T> = allocator.allocate(layout)?.cast();
+        unsafe { ptr.as_ptr().write(val) };
 
         Ok(Self(ptr, allocator))
     }
@@ -108,6 +109,7 @@ impl<'a, T, A: Allocator> Iterator for AVecIterator<'a, T, A> {
     }
 }
 
+#[derive(Debug)]
 pub struct AVec<T, A: Allocator> {
     ptr: Option<NonNull<T>>,
     len: usize,
@@ -151,7 +153,7 @@ impl<T, A: Allocator> AVec<T, A> {
         // Since we have capacity, we must have a valid pointer
         let ptr = self.ptr.unwrap();
 
-        unsafe { *ptr.as_ptr().offset(self.len as isize) = value };
+        unsafe { ptr.as_ptr().offset(self.len as isize).write(value) };
 
         self.len += 1;
 

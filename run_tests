@@ -10,7 +10,7 @@ import textwrap
 
 input_test_names = [Path(path).resolve() for path in sys.argv[1:]]
 
-zig = Path(__file__).parent.joinpath("zig-out/bin/shimlang").as_posix()
+zig = Path(__file__).parent.joinpath("target/debug/shimlang").as_posix()
 
 test_dir = Path(__file__).parent / "tests"
 
