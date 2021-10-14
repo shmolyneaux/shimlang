@@ -584,7 +584,6 @@ impl ShimValue {
             },
         }
 
-        println!("returning vec");
         vec
     }
 }
