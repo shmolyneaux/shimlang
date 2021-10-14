@@ -546,6 +546,49 @@ pub enum ShimValue {
     I128(i128)
 }
 
+impl ShimValue {
+    fn stringify<A: Allocator>(&self, allocator: A) -> AVec<u8, A> {
+        let mut vec = AVec::new(allocator);
+        match self {
+            Self::I128(val) => {
+                let mut val: i128 = *val;
+                if val < 0 {
+                    vec.push(b'-');
+                    // Hopefully this isn't i128::MIN! (since it can't be expressed as a positive)
+                    val = val * -1;
+                }
+
+                // The largest 128-bit int is 39 characters long
+                let mut slice = [b'0'; 39];
+
+                // TODO: check for off-by-one errors in the length
+                let mut length = 1;
+                for idx in (0..=38).rev() {
+                    slice[idx] = b'0' + (val % 10) as u8;
+                    val /= 10;
+                    if val > 0 {
+                        length += 1;
+                    }
+                }
+
+                vec.extend_from_slice(&slice[39 - length..39]);
+            },
+            Self::Freed => {
+                vec.extend_from_slice(b"*freed*")
+            },
+            Self::PrintFn => {
+                vec.extend_from_slice(b"<function print>")
+            },
+            Self::Unit => {
+                vec.extend_from_slice(b"()")
+            },
+        }
+
+        println!("returning vec");
+        vec
+    }
+}
+
 // A newtype which represents an index into a GC'd collection of ShimValue
 pub struct Id(usize);
 
@@ -605,29 +648,6 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
         self.print.as_mut().map(|p| p.print(text));
     }
 
-    pub fn print_int(&mut self, mut val: i128) {
-        if val < 0 {
-            self.print(b"-");
-            // Hopefully this isn't i128::MIN! (since it can't be expressed as a positive)
-            val = val * -1;
-        }
-
-        // The largest 128-bit int is 39 characters long
-        let mut slice = [b'0'; 39];
-
-        // TODO: check for off-by-one errors in the length
-        let mut length = 1;
-        for idx in (0..=38).rev() {
-            slice[idx] = b'0' + (val % 10) as u8;
-            val /= 10;
-            if val > 0 {
-                length += 1;
-            }
-        }
-
-        self.print(&slice[39 - length..39]);
-    }
-
     pub fn interpret_expression(&mut self, expr: &Expression<A>) -> Id {
         match expr {
             Expression::Identifier(b"print") => {
@@ -671,10 +691,9 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
                         let last_idx = cexpr.args.len() - 1;
                         for (idx, arg) in cexpr.args.iter().enumerate() {
                             let arg = self.interpret_expression(arg);
-                            match self.values[arg.0] {
-                                ShimValue::I128(i) => self.print_int(i),
-                                _ => self.print(b"other"),
-                            }
+
+                            let arg_str = self.values[arg.0].stringify(self.allocator);
+                            self.print(&arg_str);
 
                             if idx != last_idx {
                                 self.print(b" ");
