@@ -21,7 +21,7 @@ extern "C" {
     pub fn free(ptr: *mut u8);
 }
 
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
 struct StephenAllocator {}
 
 impl libshim::Allocator for StephenAllocator {}

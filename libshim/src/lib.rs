@@ -20,7 +20,7 @@ impl From<ParseError> for ShimError {
 
 // TODO: Forcing the allocator to be copyable doesn't seem right in the general
 // case of having sized allocators. It's perfect for zero-sized ones though!
-pub trait Allocator: std::alloc::Allocator + Copy {}
+pub trait Allocator: std::alloc::Allocator + Copy + std::fmt::Debug {}
 
 #[derive(Debug, Copy, Clone)]
 pub enum BinaryOp {
@@ -368,11 +368,13 @@ impl<'a> TokenStream<'a> {
     }
 }
 
+#[derive(Debug)]
 pub struct CallExpr<'a, A: Allocator> {
     func: ABox<Expression<'a, A>, A>,
     args: AVec<Expression<'a, A>, A>,
 }
 
+#[derive(Debug)]
 pub enum Expression<'a, A: Allocator> {
     Identifier(&'a [u8]),
     IntLiteral(i128),
@@ -384,6 +386,7 @@ pub enum Expression<'a, A: Allocator> {
     Call(CallExpr<'a, A>),
 }
 
+#[derive(Debug)]
 pub enum Statement<'a, A: Allocator> {
     Expression(Expression<'a, A>),
 }
@@ -473,7 +476,7 @@ fn parse_args<'a, A: Allocator>(
     allocator: A,
 ) -> Result<AVec<Expression<'a, A>, A>, ParseError> {
     let mut args = AVec::new(allocator);
-    while tokens.peek() != Token::EOF {
+    while tokens.peek() != Token::EOF && tokens.peek() != Token::RightParen {
         args.push(parse_expression(tokens, allocator)?);
         if tokens.matches(Token::Comma) {
             continue;
@@ -541,7 +544,8 @@ fn parse_script<'a, A: Allocator>(
 ) -> Result<AVec<Statement<'a, A>, A>, ParseError> {
     let mut stmts = AVec::new(allocator);
     while tokens.peek() != Token::EOF {
-        stmts.push(parse_statement(tokens, allocator)?)?;
+        let stmt = parse_statement(tokens, allocator)?;
+        stmts.push(stmt)?;
     }
 
     Ok(stmts)
@@ -718,14 +722,14 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
                 let func = self.interpret_expression(&cexpr.func);
                 match self.values[func.0] {
                     ShimValue::PrintFn => {
-                        let last_idx = cexpr.args.len() - 1;
+                        let last_idx = cexpr.args.len() as isize - 1;
                         for (idx, arg) in cexpr.args.iter().enumerate() {
                             let arg = self.interpret_expression(arg);
 
                             let arg_str = self.values[arg.0].stringify(self.allocator);
                             self.print(&arg_str);
 
-                            if idx != last_idx {
+                            if idx as isize != last_idx {
                                 self.print(b" ");
                             }
                         }
