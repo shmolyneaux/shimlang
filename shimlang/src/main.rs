@@ -51,7 +51,7 @@ fn stdout() -> File {
 }
 
 fn stderr() -> File {
-    unsafe { File::from_raw_fd(1) }
+    unsafe { File::from_raw_fd(2) }
 }
 
 struct FilePrinter {
@@ -79,14 +79,6 @@ pub fn main(argc: i32, _argv: *const *const i8) -> Result<(), std::alloc::AllocE
 
     let allocator = StephenAllocator {};
     let script_name = unsafe { *_argv.offset(1) };
-
-    stderr.write(b"Reading ").unwrap();
-    unsafe {
-        stderr
-            .write(CStr::from_ptr(script_name).to_bytes())
-            .unwrap()
-    };
-    stderr.write(b"\n").unwrap();
 
     // TODO: handle error codes
     // We open this ourselves since there's no way to open a file from a path
