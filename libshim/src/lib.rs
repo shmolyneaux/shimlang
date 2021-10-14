@@ -475,9 +475,10 @@ fn parse_args<'a, A: Allocator>(
     let mut args = AVec::new(allocator);
     while tokens.peek() != Token::EOF {
         args.push(parse_expression(tokens, allocator)?);
-        if tokens.peek() != Token::Comma {
-            break;
+        if tokens.matches(Token::Comma) {
+            continue;
         }
+        break;
     }
 
 
