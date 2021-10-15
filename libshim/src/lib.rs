@@ -3,7 +3,7 @@
 use acollections::{ABox, AVec};
 use std::alloc::AllocError;
 
-use lexical_core::FormattedSize; 
+use lexical_core::FormattedSize;
 
 #[derive(Debug)]
 pub enum ShimError {
@@ -453,18 +453,20 @@ fn parse_call<'a, A: Allocator>(
                 let args = parse_args(tokens, allocator)?;
 
                 if !tokens.matches(Token::RightParen) {
-                    return Err(PureParseError::Generic(b"Right paren did not follow arglist").into());
+                    return Err(
+                        PureParseError::Generic(b"Right paren did not follow arglist").into(),
+                    );
                 }
 
-                expr = Expression::Call( CallExpr {
+                expr = Expression::Call(CallExpr {
                     func: ABox::new(expr, allocator)?,
                     args: args,
                 });
-            },
+            }
             Token::Dot => {
                 // TODO: property access
                 return Err(PureParseError::Generic(b"Property access not supported").into());
-            },
+            }
             _ => {
                 break;
             }
@@ -487,7 +489,6 @@ fn parse_args<'a, A: Allocator>(
         break;
     }
 
-
     Ok(args)
 }
 
@@ -499,18 +500,16 @@ fn parse_primary<'a, A: Allocator>(
         Token::IntLiteral(i) => {
             tokens.advance();
             Ok(Expression::IntLiteral(i))
-        },
+        }
         Token::FloatLiteral(f) => {
             tokens.advance();
             Ok(Expression::FloatLiteral(f))
-        },
+        }
         Token::Identifier(b"print") => {
             tokens.advance();
             Ok(Expression::Identifier(b"print"))
-        },
-        other => {
-            return Err(PureParseError::Generic(b"Unknown token when parsing primary").into())
-        },
+        }
+        other => return Err(PureParseError::Generic(b"Unknown token when parsing primary").into()),
     }
 }
 
@@ -564,7 +563,7 @@ fn parse_statement<'a, A: Allocator>(
 ) -> Result<Statement<'a, A>, ParseError> {
     let expr = parse_expression(tokens, allocator)?;
     if !tokens.matches(Token::Semicolon) {
-        return Err(PureParseError::Generic(b"Missing semicolon after expression").into())
+        return Err(PureParseError::Generic(b"Missing semicolon after expression").into());
     }
 
     Ok(Statement::Expression(expr))
@@ -615,21 +614,15 @@ impl ShimValue {
                 }
 
                 vec.extend_from_slice(&slice[39 - length..39]);
-            },
+            }
             Self::F64(val) => {
                 let mut buffer = [0u8; f64::FORMATTED_SIZE];
                 lexical_core::write(*val, &mut buffer);
                 vec.extend_from_slice(&buffer)
-            },
-            Self::Freed => {
-                vec.extend_from_slice(b"*freed*")
-            },
-            Self::PrintFn => {
-                vec.extend_from_slice(b"<function print>")
-            },
-            Self::Unit => {
-                vec.extend_from_slice(b"()")
-            },
+            }
+            Self::Freed => vec.extend_from_slice(b"*freed*"),
+            Self::PrintFn => vec.extend_from_slice(b"<function print>"),
+            Self::Unit => vec.extend_from_slice(b"()"),
         }
 
         vec
@@ -706,19 +699,13 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
 
     pub fn interpret_expression(&mut self, expr: &Expression<A>) -> Id {
         match expr {
-            Expression::Identifier(b"print") => {
-                self.new_value(ShimValue::PrintFn)
-            },
+            Expression::Identifier(b"print") => self.new_value(ShimValue::PrintFn),
             Expression::Identifier(_) => {
                 self.print(b"Can't interpret identifier\n");
                 self.new_value(42)
-            },
-            Expression::IntLiteral(i) => {
-                self.new_value(*i)
-            },
-            Expression::FloatLiteral(f) => {
-                self.new_value(*f)
-            },
+            }
+            Expression::IntLiteral(i) => self.new_value(*i),
+            Expression::FloatLiteral(f) => self.new_value(*f),
             Expression::Binary(op, left, right) => {
                 let left = self.interpret_expression(&*left);
                 let right = self.interpret_expression(&*right);
@@ -732,9 +719,9 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
                                 BinaryOp::Sub => a - b,
                                 BinaryOp::Mul => a * b,
                                 BinaryOp::Div => a / b,
-                            }
+                            },
                         )
-                    },
+                    }
                     _ => {
                         self.print(b"TODO: values can't be added\n");
                         ShimValue::I128(42)
@@ -742,7 +729,7 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
                 };
 
                 self.new_value(result)
-            },
+            }
             Expression::Call(cexpr) => {
                 let func = self.interpret_expression(&cexpr.func);
                 match self.values[func.0] {
@@ -760,7 +747,7 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
                         }
                         self.print(b"\n");
                         self.new_value(ShimValue::Unit)
-                    },
+                    }
                     _ => {
                         self.print(b"Can't call value\n");
                         self.new_value(ShimValue::I128(42))
