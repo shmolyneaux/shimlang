@@ -3,6 +3,8 @@
 use acollections::{ABox, AVec};
 use std::alloc::AllocError;
 
+use lexical_core::FormattedSize; 
+
 #[derive(Debug)]
 pub enum ShimError {
     PureParseError(PureParseError),
@@ -244,7 +246,7 @@ impl<'a> TokenStream<'a> {
                                 (NumericParseState::LeadingZero, b'b') => {
                                     parse_state = NumericParseState::Binary;
                                 }
-                                (NumericParseState::LeadingZero, b'.') => {
+                                (NumericParseState::LeadingZero | NumericParseState::Int, b'.') => {
                                     float_value = int_value as f64;
                                     parse_state = NumericParseState::Float;
                                 }
@@ -378,6 +380,7 @@ pub struct CallExpr<'a, A: Allocator> {
 pub enum Expression<'a, A: Allocator> {
     Identifier(&'a [u8]),
     IntLiteral(i128),
+    FloatLiteral(f64),
     Binary(
         BinaryOp,
         ABox<Expression<'a, A>, A>,
@@ -496,7 +499,11 @@ fn parse_primary<'a, A: Allocator>(
         Token::IntLiteral(i) => {
             tokens.advance();
             Ok(Expression::IntLiteral(i))
-        }
+        },
+        Token::FloatLiteral(f) => {
+            tokens.advance();
+            Ok(Expression::FloatLiteral(f))
+        },
         Token::Identifier(b"print") => {
             tokens.advance();
             Ok(Expression::Identifier(b"print"))
@@ -578,7 +585,8 @@ pub enum ShimValue {
     // Hard-code this for now until we can declare values
     PrintFn,
     Unit,
-    I128(i128)
+    I128(i128),
+    F64(f64),
 }
 
 impl ShimValue {
@@ -607,6 +615,11 @@ impl ShimValue {
                 }
 
                 vec.extend_from_slice(&slice[39 - length..39]);
+            },
+            Self::F64(val) => {
+                let mut buffer = [0u8; f64::FORMATTED_SIZE];
+                lexical_core::write(*val, &mut buffer);
+                vec.extend_from_slice(&buffer)
             },
             Self::Freed => {
                 vec.extend_from_slice(b"*freed*")
@@ -656,6 +669,15 @@ impl<'a, A: Allocator> NewValue<i128> for Interpreter<'a, A> {
     }
 }
 
+impl<'a, A: Allocator> NewValue<f64> for Interpreter<'a, A> {
+    fn new_value(&mut self, val: f64) -> Id {
+        let id = Id::new(self.values.len());
+        self.values.push(ShimValue::F64(val));
+
+        id
+    }
+}
+
 impl<'a, A: Allocator> NewValue<ShimValue> for Interpreter<'a, A> {
     fn new_value(&mut self, val: ShimValue) -> Id {
         let id = Id::new(self.values.len());
@@ -686,13 +708,16 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
         match expr {
             Expression::Identifier(b"print") => {
                 self.new_value(ShimValue::PrintFn)
-            }
+            },
             Expression::Identifier(_) => {
                 self.print(b"Can't interpret identifier\n");
                 self.new_value(42)
-            }
+            },
             Expression::IntLiteral(i) => {
                 self.new_value(*i)
+            },
+            Expression::FloatLiteral(f) => {
+                self.new_value(*f)
             },
             Expression::Binary(op, left, right) => {
                 let left = self.interpret_expression(&*left);
@@ -794,6 +819,14 @@ mod tests {
 
         // Make sure that `matches` doesn't always return true :)
         assert!(!tokens.matches(Token::DoubleStar));
+    }
+
+    #[test]
+    fn tokenize_float() {
+        let text = b"1.1";
+        let mut tokens = TokenStream::new(text);
+
+        assert_eq!(tokens.peek(), Token::FloatLiteral(1.1));
     }
 
     #[test]

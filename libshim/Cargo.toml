@@ -7,3 +7,8 @@ edition = "2021"
 
 [dependencies]
 acollections = {path = "../acollections"}
+
+[dependencies.lexical-core]
+version = "0.8"
+default-features = false
+features = ["write-floats", "compact"]

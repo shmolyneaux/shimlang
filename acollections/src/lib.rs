@@ -245,6 +245,17 @@ impl<T, A: Allocator> Index<usize> for AVec<T, A> {
     }
 }
 
+impl<A: Allocator> std::io::Write for AVec<u8, A> {
+    fn write(&mut self, buf: &[u8]) -> Result<usize, std::io::Error> {
+        self.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> Result<(), std::io::Error> {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::*;
