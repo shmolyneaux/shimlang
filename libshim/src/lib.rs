@@ -379,6 +379,7 @@ pub struct CallExpr<'a, A: Allocator> {
 #[derive(Debug)]
 pub enum Expression<'a, A: Allocator> {
     Identifier(&'a [u8]),
+    BoolLiteral(bool),
     IntLiteral(i128),
     FloatLiteral(f64),
     Binary(
@@ -497,6 +498,10 @@ fn parse_primary<'a, A: Allocator>(
     allocator: A,
 ) -> Result<Expression<'a, A>, ParseError> {
     match tokens.peek() {
+        Token::BoolLiteral(b) => {
+            tokens.advance();
+            Ok(Expression::BoolLiteral(b))
+        }
         Token::IntLiteral(i) => {
             tokens.advance();
             Ok(Expression::IntLiteral(i))
@@ -584,6 +589,7 @@ pub enum ShimValue {
     // Hard-code this for now until we can declare values
     PrintFn,
     Unit,
+    Bool(bool),
     I128(i128),
     F64(f64),
 }
@@ -617,9 +623,11 @@ impl ShimValue {
             }
             Self::F64(val) => {
                 let mut buffer = [0u8; f64::FORMATTED_SIZE];
-                lexical_core::write(*val, &mut buffer);
-                vec.extend_from_slice(&buffer)
+                let slice = lexical_core::write(*val, &mut buffer);
+                vec.extend_from_slice(&slice)
             }
+            Self::Bool(true) => vec.extend_from_slice(b"true"),
+            Self::Bool(false) => vec.extend_from_slice(b"false"),
             Self::Freed => vec.extend_from_slice(b"*freed*"),
             Self::PrintFn => vec.extend_from_slice(b"<function print>"),
             Self::Unit => vec.extend_from_slice(b"()"),
@@ -651,6 +659,15 @@ pub trait Printer {
 
 trait NewValue<T> {
     fn new_value(&mut self, val: T) -> Id;
+}
+
+impl<'a, A: Allocator> NewValue<bool> for Interpreter<'a, A> {
+    fn new_value(&mut self, val: bool) -> Id {
+        let id = Id::new(self.values.len());
+        self.values.push(ShimValue::Bool(val));
+
+        id
+    }
 }
 
 impl<'a, A: Allocator> NewValue<i128> for Interpreter<'a, A> {
@@ -706,6 +723,7 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
             }
             Expression::IntLiteral(i) => self.new_value(*i),
             Expression::FloatLiteral(f) => self.new_value(*f),
+            Expression::BoolLiteral(b) => self.new_value(*b),
             Expression::Binary(op, left, right) => {
                 let left = self.interpret_expression(&*left);
                 let right = self.interpret_expression(&*right);
