@@ -391,8 +391,14 @@ pub enum Expression<'a, A: Allocator> {
 }
 
 #[derive(Debug)]
+pub struct Block<'a, A: Allocator> {
+    stmts: AVec<Statement<'a, A>, A>,
+ }
+
+#[derive(Debug)]
 pub enum Statement<'a, A: Allocator> {
     Expression(Expression<'a, A>),
+    Block(Block<'a, A>),
 }
 
 #[derive(Debug)]
@@ -552,26 +558,48 @@ fn parse_binary<'a, A: Allocator>(
 fn parse_script<'a, A: Allocator>(
     tokens: &mut TokenStream,
     allocator: A,
-) -> Result<AVec<Statement<'a, A>, A>, ParseError> {
+) -> Result<Block<'a, A>, ParseError> {
+    // TODO: shebang
+    parse_block(tokens, allocator)
+}
+
+fn parse_block<'a, A: Allocator>(
+    tokens: &mut TokenStream,
+    allocator: A,
+) -> Result<Block<'a, A>, ParseError> {
     let mut stmts = AVec::new(allocator);
-    while tokens.peek() != Token::EOF {
+    while tokens.peek() != Token::EOF && tokens.peek() != Token::RightCurly {
         let stmt = parse_statement(tokens, allocator)?;
         stmts.push(stmt)?;
     }
 
-    Ok(stmts)
+    Ok(Block {stmts})
 }
 
 fn parse_statement<'a, A: Allocator>(
     tokens: &mut TokenStream,
     allocator: A,
 ) -> Result<Statement<'a, A>, ParseError> {
-    let expr = parse_expression(tokens, allocator)?;
-    if !tokens.matches(Token::Semicolon) {
-        return Err(PureParseError::Generic(b"Missing semicolon after expression").into());
-    }
+    if tokens.matches(Token::LeftCurly) {
+        let block = parse_block(tokens, allocator)?;
 
-    Ok(Statement::Expression(expr))
+        if !tokens.matches(Token::RightCurly) {
+            return Err(PureParseError::Generic(b"Block statement does not end with closing '}'").into());
+        }
+
+        // TODO: if there's a semicolon this was actually a block _expression_
+
+        Ok(Statement::Block(block))
+    }
+    else {
+        let expr = parse_expression(tokens, allocator)?;
+
+        if !tokens.matches(Token::Semicolon) {
+            return Err(PureParseError::Generic(b"Missing semicolon after expression").into());
+        }
+
+        Ok(Statement::Expression(expr))
+    }
 }
 
 fn parse_expression<'a, A: Allocator>(
@@ -775,18 +803,30 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
         }
     }
 
+    pub fn interpret_block(&mut self, block: &Block<A>) -> Result<(), ShimError> {
+        for stmt in block.stmts.iter() {
+            self.interpret_statement(stmt);
+        }
+
+        // TODO: return a type indicating whether we hit a return/break/continue
+        // TODO: return a ShimValue if the last expression didn't end with a
+        // semicolon (like Rust)
+        Ok(())
+    }
+
     pub fn interpret_statement(&mut self, stmt: &Statement<A>) -> Result<(), ShimError> {
         match stmt {
-            Statement::Expression(expr) => self.interpret_expression(expr),
-        };
+            Statement::Expression(expr) => {self.interpret_expression(expr);},
+            Statement::Block(block) => {self.interpret_block(block)?;},
+        }
 
         Ok(())
     }
 
     pub fn interpret(&mut self, text: &'a [u8]) -> Result<(), ShimError> {
         let mut tokens = TokenStream::new(text);
-        let stmts = match parse_script(&mut tokens, self.allocator) {
-            Ok(stmts) => stmts,
+        let script = match parse_script(&mut tokens, self.allocator) {
+            Ok(script) => script,
             Err(ParseError::PureParseError(PureParseError::Generic(msg))) => {
                 self.print(msg);
                 return Err(ParseError::PureParseError(PureParseError::Generic(msg)).into());
@@ -797,9 +837,7 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
             }
         };
 
-        for stmt in stmts.iter() {
-            self.interpret_statement(stmt);
-        }
+        self.interpret_block(&script)?;
 
         Ok(())
     }
