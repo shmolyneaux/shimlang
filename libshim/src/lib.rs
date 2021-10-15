@@ -212,7 +212,8 @@ impl<'a> TokenStream<'a> {
                             // Consume the closing quote
                             inc += 1;
                             (
-                                Token::StringLiteral(&self.text[self.idx + 1..self.idx + inc]),
+                                // Subtract 1 from `inc` to _not_ include the closing quote
+                                Token::StringLiteral(&self.text[self.idx + 1..self.idx + inc - 1]),
                                 inc,
                             )
                         }
@@ -320,7 +321,7 @@ impl<'a> TokenStream<'a> {
                             b"enum" => (Token::EnumKeyword, inc),
                             b"fn" => (Token::FnKeyword, inc),
                             b"for" => (Token::ForKeyword, inc),
-                            b"in" => (Token::IfKeyword, inc),
+                            b"if" => (Token::IfKeyword, inc),
                             b"or" => (Token::OrKeyword, inc),
                             b"return" => (Token::ReturnKeyword, inc),
                             b"struct" => (Token::StructKeyword, inc),
@@ -382,6 +383,7 @@ pub enum Expression<'a, A: Allocator> {
     BoolLiteral(bool),
     IntLiteral(i128),
     FloatLiteral(f64),
+    StringLiteral(AVec<u8, A>),
     Binary(
         BinaryOp,
         ABox<Expression<'a, A>, A>,
@@ -393,12 +395,20 @@ pub enum Expression<'a, A: Allocator> {
 #[derive(Debug)]
 pub struct Block<'a, A: Allocator> {
     stmts: AVec<Statement<'a, A>, A>,
- }
+}
+
+#[derive(Debug)]
+pub struct IfStatement<'a, A: Allocator> {
+    predicate: Expression<'a, A>,
+    if_block: Block<'a, A>,
+    else_block: Option<Block<'a, A>>,
+}
 
 #[derive(Debug)]
 pub enum Statement<'a, A: Allocator> {
     Expression(Expression<'a, A>),
     Block(Block<'a, A>),
+    IfStatement(IfStatement<'a, A>),
 }
 
 #[derive(Debug)]
@@ -516,6 +526,13 @@ fn parse_primary<'a, A: Allocator>(
             tokens.advance();
             Ok(Expression::FloatLiteral(f))
         }
+        Token::StringLiteral(s) => {
+            let mut new_str = AVec::new(allocator);
+            new_str.extend_from_slice(&s);
+
+            tokens.advance();
+            Ok(Expression::StringLiteral(new_str))
+        }
         Token::Identifier(b"print") => {
             tokens.advance();
             Ok(Expression::Identifier(b"print"))
@@ -560,10 +577,33 @@ fn parse_script<'a, A: Allocator>(
     allocator: A,
 ) -> Result<Block<'a, A>, ParseError> {
     // TODO: shebang
-    parse_block(tokens, allocator)
+    let block = parse_block_open(tokens, allocator)?;
+    if tokens.matches(Token::EOF) {
+        Ok(block)
+    } else {
+        Err(PureParseError::Generic(b"Unconsumed tokens!").into())
+    }
 }
 
+// NOTE: consumes open and closing curly
 fn parse_block<'a, A: Allocator>(
+    tokens: &mut TokenStream,
+    allocator: A,
+) -> Result<Block<'a, A>, ParseError> {
+    if !tokens.matches(Token::LeftCurly) {
+        return Err(PureParseError::Generic(b"Block does not start with opening '{'").into());
+    }
+
+    let block = parse_block_open(tokens, allocator)?;
+
+    if !tokens.matches(Token::RightCurly) {
+        return Err(PureParseError::Generic(b"Block does not end with closing '}'").into());
+    }
+
+    Ok(block)
+}
+
+fn parse_block_open<'a, A: Allocator>(
     tokens: &mut TokenStream,
     allocator: A,
 ) -> Result<Block<'a, A>, ParseError> {
@@ -573,25 +613,52 @@ fn parse_block<'a, A: Allocator>(
         stmts.push(stmt)?;
     }
 
-    Ok(Block {stmts})
+    Ok(Block { stmts })
+}
+
+fn parse_if<'a, A: Allocator>(
+    tokens: &mut TokenStream,
+    allocator: A,
+) -> Result<Statement<'a, A>, ParseError> {
+    if tokens.matches(Token::IfKeyword) {
+        let predicate = parse_expression(tokens, allocator)?;
+        let if_block = parse_block(tokens, allocator)?;
+
+        let else_block = if tokens.matches(Token::ElseKeyword) {
+            if tokens.peek() == Token::IfKeyword {
+                let mut stmts = AVec::new(allocator);
+                stmts.push(parse_if(tokens, allocator)?)?;
+                Some(Block { stmts })
+            } else {
+                Some(parse_block(tokens, allocator)?)
+            }
+        } else {
+            None
+        };
+
+        Ok(Statement::IfStatement(IfStatement {
+            predicate,
+            if_block,
+            else_block,
+        }))
+    } else {
+        Err(PureParseError::Generic(b"(Internal) expected to match if").into())
+    }
 }
 
 fn parse_statement<'a, A: Allocator>(
     tokens: &mut TokenStream,
     allocator: A,
 ) -> Result<Statement<'a, A>, ParseError> {
-    if tokens.matches(Token::LeftCurly) {
+    if tokens.peek() == Token::LeftCurly {
         let block = parse_block(tokens, allocator)?;
-
-        if !tokens.matches(Token::RightCurly) {
-            return Err(PureParseError::Generic(b"Block statement does not end with closing '}'").into());
-        }
 
         // TODO: if there's a semicolon this was actually a block _expression_
 
         Ok(Statement::Block(block))
-    }
-    else {
+    } else if tokens.peek() == Token::IfKeyword {
+        Ok(parse_if(tokens, allocator)?)
+    } else {
         let expr = parse_expression(tokens, allocator)?;
 
         if !tokens.matches(Token::Semicolon) {
@@ -611,7 +678,7 @@ fn parse_expression<'a, A: Allocator>(
 
 // These values do not get a copy of the Allocator since they are GC'd, and
 // the memory is handled externally.
-pub enum ShimValue {
+pub enum ShimValue<A: Allocator> {
     // A variant used to replace a previous-valid value after GC
     Freed,
     // Hard-code this for now until we can declare values
@@ -620,10 +687,13 @@ pub enum ShimValue {
     Bool(bool),
     I128(i128),
     F64(f64),
+    // This one actually _does_ get a copy of the Allocator, but that's because
+    // it doesn't have any external references.
+    SString(AVec<u8, A>),
 }
 
-impl ShimValue {
-    fn stringify<A: Allocator>(&self, allocator: A) -> AVec<u8, A> {
+impl<A: Allocator> ShimValue<A> {
+    fn stringify(&self, allocator: A) -> AVec<u8, A> {
         let mut vec = AVec::new(allocator);
         match self {
             Self::I128(val) => {
@@ -659,9 +729,22 @@ impl ShimValue {
             Self::Freed => vec.extend_from_slice(b"*freed*"),
             Self::PrintFn => vec.extend_from_slice(b"<function print>"),
             Self::Unit => vec.extend_from_slice(b"()"),
+            Self::SString(s) => vec.extend_from_slice(s),
         }
 
         vec
+    }
+
+    fn is_truthy(&self) -> bool {
+        match self {
+            Self::I128(val) => *val != 0,
+            Self::F64(val) => *val != 0.0,
+            Self::Bool(b) => *b,
+            Self::Freed => false,
+            Self::PrintFn => true,
+            Self::Unit => false,
+            Self::SString(s) => s.len() > 0,
+        }
     }
 }
 
@@ -676,7 +759,7 @@ impl Id {
 
 pub struct Interpreter<'a, A: Allocator> {
     allocator: A,
-    values: AVec<ShimValue, A>,
+    values: AVec<ShimValue<A>, A>,
     // TODO: figure out how to make the ABox work like this
     print: Option<&'a mut dyn Printer>,
 }
@@ -716,8 +799,8 @@ impl<'a, A: Allocator> NewValue<f64> for Interpreter<'a, A> {
     }
 }
 
-impl<'a, A: Allocator> NewValue<ShimValue> for Interpreter<'a, A> {
-    fn new_value(&mut self, val: ShimValue) -> Id {
+impl<'a, A: Allocator> NewValue<ShimValue<A>> for Interpreter<'a, A> {
+    fn new_value(&mut self, val: ShimValue<A>) -> Id {
         let id = Id::new(self.values.len());
         self.values.push(val);
 
@@ -752,6 +835,11 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
             Expression::IntLiteral(i) => self.new_value(*i),
             Expression::FloatLiteral(f) => self.new_value(*f),
             Expression::BoolLiteral(b) => self.new_value(*b),
+            Expression::StringLiteral(s) => {
+                let mut new_str = AVec::new(self.allocator);
+                new_str.extend_from_slice(s);
+                self.new_value(ShimValue::SString(new_str))
+            }
             Expression::Binary(op, left, right) => {
                 let left = self.interpret_expression(&*left);
                 let right = self.interpret_expression(&*right);
@@ -816,8 +904,20 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
 
     pub fn interpret_statement(&mut self, stmt: &Statement<A>) -> Result<(), ShimError> {
         match stmt {
-            Statement::Expression(expr) => {self.interpret_expression(expr);},
-            Statement::Block(block) => {self.interpret_block(block)?;},
+            Statement::Expression(expr) => {
+                self.interpret_expression(expr);
+            }
+            Statement::Block(block) => {
+                self.interpret_block(block)?;
+            }
+            Statement::IfStatement(if_stmt) => {
+                let predicate_result = self.interpret_expression(&if_stmt.predicate);
+                if self.values[predicate_result.0].is_truthy() {
+                    self.interpret_block(&if_stmt.if_block);
+                } else if let Some(else_block) = &if_stmt.else_block {
+                    self.interpret_block(else_block);
+                }
+            }
         }
 
         Ok(())
@@ -829,6 +929,7 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
             Ok(script) => script,
             Err(ParseError::PureParseError(PureParseError::Generic(msg))) => {
                 self.print(msg);
+                self.print(b"\n");
                 return Err(ParseError::PureParseError(PureParseError::Generic(msg)).into());
             }
             Err(err) => {
@@ -888,5 +989,27 @@ mod tests {
         }
 
         assert!(tokens.matches(Token::EOF));
+    }
+
+    #[test]
+    fn tokenize_if() {
+        let text = b"if";
+        let mut tokens = TokenStream::new(text);
+
+        assert!(tokens.peek() == Token::IfKeyword);
+    }
+
+    #[test]
+    fn tokenize_str() {
+        let text = br#"print("hi");"#;
+        let mut tokens = TokenStream::new(text);
+
+        assert!(tokens.peek() == Token::Identifier(b"print"));
+        tokens.advance();
+        assert!(tokens.matches(Token::LeftParen));
+        assert!(tokens.peek() == Token::StringLiteral(b"hi"));
+        tokens.advance();
+        assert!(tokens.matches(Token::RightParen));
+        assert!(tokens.matches(Token::Semicolon));
     }
 }
