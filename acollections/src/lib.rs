@@ -14,7 +14,7 @@
 /// those are exposed (looking at you RawVec 👀)
 use std::alloc::{AllocError, Allocator, Layout};
 use std::borrow::{Borrow, BorrowMut};
-use std::ops::{Deref, DerefMut, Index};
+use std::ops::{Deref, DerefMut, Index, IndexMut};
 use std::ptr::NonNull;
 
 #[derive(Debug)]
@@ -84,31 +84,6 @@ impl<T: ?Sized, A: Allocator> BorrowMut<T> for ABox<T, A> {
     }
 }
 
-pub struct AVecIterator<'a, T, A: Allocator> {
-    vec: &'a AVec<T, A>,
-    pos: usize,
-}
-
-impl<'a, T, A: Allocator> AVecIterator<'a, T, A> {
-    fn new(vec: &'a AVec<T, A>) -> Self {
-        let pos = 0;
-        AVecIterator { vec, pos }
-    }
-}
-
-impl<'a, T, A: Allocator> Iterator for AVecIterator<'a, T, A> {
-    type Item = &'a T;
-
-    fn next(&mut self) -> Option<&'a T> {
-        if self.pos < self.vec.len() {
-            self.pos += 1;
-            Some(&self.vec[self.pos - 1])
-        } else {
-            None
-        }
-    }
-}
-
 #[derive(Debug)]
 pub struct AVec<T, A: Allocator> {
     ptr: Option<NonNull<T>>,
@@ -131,8 +106,14 @@ impl<T, A: Allocator> AVec<T, A> {
         self.len
     }
 
-    pub fn iter(&self) -> AVecIterator<'_, T, A> {
-        AVecIterator::new(self)
+    pub fn iter(&self) -> std::slice::Iter<'_, T> {
+        let slice: &[T] = self;
+        slice.iter()
+    }
+
+    pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, T> {
+        let slice: &mut [T] = self;
+        slice.iter_mut()
     }
 
     pub fn push(&mut self, value: T) -> Result<(), AllocError> {
@@ -158,6 +139,22 @@ impl<T, A: Allocator> AVec<T, A> {
         self.len += 1;
 
         Ok(())
+    }
+
+    pub fn remove(&mut self, index: usize) -> T {
+        assert!(index < self.len);
+
+        unsafe {
+            // Since we have an index less than len, we must have a valid pointer
+            let ptr = self.ptr.unwrap().as_ptr().offset(index as isize);
+            let value = std::ptr::read(ptr);
+
+            std::ptr::copy(ptr.offset(1), ptr, self.len - index - 1);
+
+            self.len -= 1;
+
+            value
+        }
     }
 
     pub fn reserve(&mut self, additional: usize) -> Result<(), AllocError> {
@@ -246,16 +243,84 @@ impl<T, A: Allocator> Index<usize> for AVec<T, A> {
     }
 }
 
+impl<T, A: Allocator> IndexMut<usize> for AVec<T, A> {
+    fn index_mut(&mut self, idx: usize) -> &mut T {
+        assert!(idx < self.len);
+
+        // Since we have length, we must have a valid pointer
+        let ptr = self.ptr.unwrap();
+
+        unsafe { &mut *ptr.as_ptr().offset(idx as isize) }
+    }
+}
+
 impl<A: Allocator> std::io::Write for AVec<u8, A> {
     fn write(&mut self, buf: &[u8]) -> Result<usize, std::io::Error> {
         self.extend_from_slice(buf)
-            .map_err(|alloc_err|
-                std::io::Error::new(std::io::ErrorKind::OutOfMemory, alloc_err))?;
+            .map_err(|alloc_err| std::io::Error::new(std::io::ErrorKind::OutOfMemory, alloc_err))?;
         Ok(buf.len())
     }
 
     fn flush(&mut self) -> Result<(), std::io::Error> {
         Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct AHashEntry<K, V> {
+    key: K,
+    value: V,
+}
+
+// TODO: Actually make this a hashmap, rather than an associative array
+#[derive(Debug)]
+pub struct AHashMap<K, V, A: Allocator> {
+    vec: AVec<AHashEntry<K, V>, A>,
+}
+
+impl<K: std::cmp::PartialEq, V, A: Allocator> AHashMap<K, V, A> {
+    pub fn new(allocator: A) -> Self {
+        let vec = AVec::new(allocator);
+        AHashMap { vec }
+    }
+
+    pub fn get(&self, key: &K) -> Option<&V> {
+        self.get_entry(key).map(|entry| &entry.value)
+    }
+
+    pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
+        self.get_entry_mut(key).map(|entry| &mut entry.value)
+    }
+
+    pub fn get_entry(&self, key: &K) -> Option<&AHashEntry<K, V>> {
+        self.vec.iter().find(|entry| entry.key == *key)
+    }
+
+    pub fn get_entry_mut(&mut self, key: &K) -> Option<&mut AHashEntry<K, V>> {
+        self.vec.iter_mut().find(|entry| entry.key == *key)
+    }
+
+    pub fn insert(&mut self, key: K, value: V) -> Result<Option<V>, AllocError> {
+        if let Some(entry) = self.get_entry_mut(&key) {
+            Ok(Some(std::mem::replace(&mut entry.value, value)))
+        } else {
+            self.vec.push(AHashEntry { key, value })?;
+            Ok(None)
+        }
+    }
+
+    pub fn remove(&mut self, key: &K) -> Option<V> {
+        if let Some(idx) = self
+            .vec
+            .iter()
+            .enumerate()
+            .find(|(_, entry)| entry.key == *key)
+            .map(|(idx, _)| idx)
+        {
+            Some(self.vec.remove(idx).value)
+        } else {
+            None
+        }
     }
 }
 
@@ -309,7 +374,7 @@ mod tests {
     #[should_panic]
     fn vec_panic_when_empty() {
         let allocator = std::alloc::Global;
-        let mut vec: AVec<u8, _> = AVec::new(allocator);
+        let vec: AVec<u8, _> = AVec::new(allocator);
         vec[0];
     }
 
@@ -321,5 +386,20 @@ mod tests {
         vec.push(0).unwrap();
 
         vec[1];
+    }
+
+    #[test]
+    fn hashmap_basic() {
+        let allocator = std::alloc::Global;
+        let mut map = AHashMap::new(allocator);
+        map.insert(1, "world".to_string()).unwrap();
+        map.insert(0, "hello".to_string()).unwrap();
+
+        assert_eq!(map.get(&0), Some(&"hello".to_string()));
+        assert_eq!(map.get(&1), Some(&"world".to_string()));
+        assert_eq!(map.get(&-1), None);
+        assert_eq!(map.remove(&1), Some("world".to_string()));
+        assert_eq!(map.remove(&1), None);
+        assert_eq!(map.get(&1), None);
     }
 }
