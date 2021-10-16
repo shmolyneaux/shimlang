@@ -197,7 +197,12 @@ impl<'a> TokenStream<'a> {
                     }
                     b'"' => {
                         inc += 1;
-                        while self.idx + inc < self.text.len() && self.text[self.idx + inc] != b'"'
+                        // Keep going if:
+                        // - There's more text, and
+                        //   - It's not a quote, or
+                        //   - The quote is escaped
+                        // NOTE: the escaped quote will be handled by the parser
+                        while self.idx + inc < self.text.len() && (self.text[self.idx + inc - 1] == b'\\' || self.text[self.idx + inc] != b'"')
                         {
                             inc += 1;
                         }
@@ -528,7 +533,30 @@ fn parse_primary<'a, A: Allocator>(
         }
         Token::StringLiteral(s) => {
             let mut new_str = AVec::new(allocator);
-            new_str.extend_from_slice(&s);
+            let mut slash = false;
+            for c in s {
+                new_str.push(
+                    match (c, slash) {
+                        (b'\\', false) => {
+                            slash = true;
+                            continue;
+                        }
+                        (b'n', true) => {
+                            b'\n'
+                        }
+                        (b't', true) => {
+                            b'\t'
+                        }
+                        (b'r', true) => {
+                            b'\r'
+                        }
+                        _ => {
+                            *c
+                        }
+                    }
+                );
+                slash = false;
+            }
 
             tokens.advance();
             Ok(Expression::StringLiteral(new_str))
