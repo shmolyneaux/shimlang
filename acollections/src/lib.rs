@@ -186,6 +186,15 @@ impl<T, A: Allocator> AVec<T, A> {
     }
 }
 
+impl<T: std::clone::Clone, A: Allocator> AVec<T, A> {
+    pub fn clone(&self, allocator: A) -> Result<Self, AllocError> {
+        let mut new_vec = AVec::new(allocator);
+        new_vec.extend_from_slice(self)?;
+
+        Ok(new_vec)
+    }
+}
+
 impl<T: Clone, A: Allocator> AVec<T, A> {
     pub fn extend_from_slice(&mut self, other: &[T]) -> Result<(), AllocError> {
         for item in other {
@@ -266,6 +275,16 @@ impl<A: Allocator> std::io::Write for AVec<u8, A> {
     }
 }
 
+impl<T: std::cmp::PartialEq, A: Allocator> std::cmp::PartialEq for AVec<T, A> {
+    fn eq(&self, other: &Self) -> bool {
+        if self.len == other.len {
+            self.iter().zip(other.iter()).all(|(a,b)| a == b)
+        } else {
+            false
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct AHashEntry<K, V> {
     key: K,
@@ -274,7 +293,7 @@ pub struct AHashEntry<K, V> {
 
 // TODO: Actually make this a hashmap, rather than an associative array
 #[derive(Debug)]
-pub struct AHashMap<K, V, A: Allocator> {
+pub struct AHashMap<K: std::cmp::PartialEq, V, A: Allocator> {
     vec: AVec<AHashEntry<K, V>, A>,
 }
 
