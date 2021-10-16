@@ -5,7 +5,6 @@ use std::alloc::Allocator;
 use std::alloc::Layout;
 use std::ptr::NonNull;
 
-use std::ffi::CStr;
 use std::fs::File;
 use std::io::SeekFrom;
 use std::io::{Read, Seek, Write};
@@ -50,10 +49,6 @@ fn stdout() -> File {
     unsafe { File::from_raw_fd(1) }
 }
 
-fn stderr() -> File {
-    unsafe { File::from_raw_fd(2) }
-}
-
 struct FilePrinter {
     f: File,
 }
@@ -67,7 +62,6 @@ impl libshim::Printer for FilePrinter {
 #[no_mangle]
 pub fn main(argc: i32, _argv: *const *const i8) -> Result<(), std::alloc::AllocError> {
     let mut stdout = stdout();
-    let mut stderr = stderr();
 
     // TODO: implement a REPL
     if argc != 2 {
