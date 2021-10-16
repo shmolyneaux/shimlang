@@ -1,6 +1,6 @@
 #![feature(allocator_api)]
 
-use acollections::{ABox, AVec};
+use acollections::{ABox, AVec, AHashMap};
 use std::alloc::AllocError;
 
 use lexical_core::FormattedSize;
@@ -9,6 +9,7 @@ use lexical_core::FormattedSize;
 pub enum ShimError {
     PureParseError(PureParseError),
     AllocError(AllocError),
+    Other(&'static [u8]),
 }
 
 impl From<ParseError> for ShimError {
@@ -203,12 +204,15 @@ impl<'a> TokenStream<'a> {
                     }
                     b'"' => {
                         inc += 1;
+                        let start_idx = self.idx + inc;
                         // Keep going if:
                         // - There's more text, and
                         //   - It's not a quote, or
                         //   - The quote is escaped
                         // NOTE: the escaped quote will be handled by the parser
-                        while self.idx + inc < self.text.len() && (self.text[self.idx + inc - 1] == b'\\' || self.text[self.idx + inc] != b'"')
+                        while self.idx + inc < self.text.len()
+                            && (self.text[self.idx + inc - 1] == b'\\'
+                                || self.text[self.idx + inc] != b'"')
                         {
                             inc += 1;
                         }
@@ -224,7 +228,7 @@ impl<'a> TokenStream<'a> {
                             inc += 1;
                             (
                                 // Subtract 1 from `inc` to _not_ include the closing quote
-                                Token::StringLiteral(&self.text[self.idx + 1..self.idx + inc - 1]),
+                                Token::StringLiteral(&self.text[start_idx..self.idx + inc - 1]),
                                 inc,
                             )
                         }
@@ -383,45 +387,45 @@ impl<'a> TokenStream<'a> {
 }
 
 #[derive(Debug)]
-pub struct CallExpr<'a, A: Allocator> {
-    func: ABox<Expression<'a, A>, A>,
-    args: AVec<Expression<'a, A>, A>,
+pub struct CallExpr<A: Allocator> {
+    func: ABox<Expression<A>, A>,
+    args: AVec<Expression<A>, A>,
 }
 
 #[derive(Debug)]
-pub enum Expression<'a, A: Allocator> {
-    Identifier(&'a [u8]),
+pub enum Expression<A: Allocator> {
+    Identifier(AVec<u8, A>),
     BoolLiteral(bool),
     IntLiteral(i128),
     FloatLiteral(f64),
     StringLiteral(AVec<u8, A>),
     Binary(
         BinaryOp,
-        ABox<Expression<'a, A>, A>,
-        ABox<Expression<'a, A>, A>,
+        ABox<Expression<A>, A>,
+        ABox<Expression<A>, A>,
     ),
-    Call(CallExpr<'a, A>),
+    Call(CallExpr<A>),
 }
 
 #[derive(Debug)]
-pub struct Block<'a, A: Allocator> {
-    stmts: AVec<Statement<'a, A>, A>,
+pub struct Block<A: Allocator> {
+    stmts: AVec<Statement<A>, A>,
 }
 
 #[derive(Debug)]
-pub struct IfStatement<'a, A: Allocator> {
-    predicate: Expression<'a, A>,
-    if_block: Block<'a, A>,
-    else_block: Option<Block<'a, A>>,
+pub struct IfStatement<A: Allocator> {
+    predicate: Expression<A>,
+    if_block: Block<A>,
+    else_block: Option<Block<A>>,
 }
 
 #[derive(Debug)]
-pub enum Statement<'a, A: Allocator> {
-    Expression(Expression<'a, A>),
-    Declaration(AVec<u8, A>, Expression<'a, A>),
-    Assignment(AVec<u8, A>, Expression<'a, A>),
-    Block(Block<'a, A>),
-    IfStatement(IfStatement<'a, A>),
+pub enum Statement<A: Allocator> {
+    Expression(Expression<A>),
+    Declaration(AVec<u8, A>, Expression<A>),
+    Assignment(AVec<u8, A>, Expression<A>),
+    Block(Block<A>),
+    IfStatement(IfStatement<A>),
 }
 
 #[derive(Debug)]
@@ -450,7 +454,7 @@ impl From<AllocError> for ParseError {
 fn parse_term<'a, A: Allocator>(
     tokens: &mut TokenStream,
     allocator: A,
-) -> Result<Expression<'a, A>, ParseError> {
+) -> Result<Expression<A>, ParseError> {
     parse_binary(
         tokens,
         &[(Token::Plus, BinaryOp::Add), (Token::Minus, BinaryOp::Sub)],
@@ -462,7 +466,7 @@ fn parse_term<'a, A: Allocator>(
 fn parse_factor<'a, A: Allocator>(
     tokens: &mut TokenStream,
     allocator: A,
-) -> Result<Expression<'a, A>, ParseError> {
+) -> Result<Expression<A>, ParseError> {
     parse_binary(
         tokens,
         &[(Token::Star, BinaryOp::Mul), (Token::Slash, BinaryOp::Div)],
@@ -474,7 +478,7 @@ fn parse_factor<'a, A: Allocator>(
 fn parse_call<'a, A: Allocator>(
     tokens: &mut TokenStream,
     allocator: A,
-) -> Result<Expression<'a, A>, ParseError> {
+) -> Result<Expression<A>, ParseError> {
     let mut expr = parse_primary(tokens, allocator)?;
     while tokens.peek() != Token::EOF {
         match tokens.peek() {
@@ -509,7 +513,7 @@ fn parse_call<'a, A: Allocator>(
 fn parse_args<'a, A: Allocator>(
     tokens: &mut TokenStream,
     allocator: A,
-) -> Result<AVec<Expression<'a, A>, A>, ParseError> {
+) -> Result<AVec<Expression<A>, A>, ParseError> {
     let mut args = AVec::new(allocator);
     while tokens.peek() != Token::EOF && tokens.peek() != Token::RightParen {
         args.push(parse_expression(tokens, allocator)?)?;
@@ -525,7 +529,7 @@ fn parse_args<'a, A: Allocator>(
 fn parse_primary<'a, A: Allocator>(
     tokens: &mut TokenStream,
     allocator: A,
-) -> Result<Expression<'a, A>, ParseError> {
+) -> Result<Expression<A>, ParseError> {
     match tokens.peek() {
         Token::BoolLiteral(b) => {
             tokens.advance();
@@ -543,46 +547,45 @@ fn parse_primary<'a, A: Allocator>(
             let mut new_str = AVec::new(allocator);
             let mut slash = false;
             for c in s {
-                new_str.push(
-                    match (c, slash) {
-                        (b'\\', false) => {
-                            slash = true;
-                            continue;
-                        }
-                        (b'n', true) => {
-                            b'\n'
-                        }
-                        (b't', true) => {
-                            b'\t'
-                        }
-                        (b'r', true) => {
-                            b'\r'
-                        }
-                        _ => {
-                            *c
-                        }
+                new_str.push(match (c, slash) {
+                    (b'\\', false) => {
+                        slash = true;
+                        continue;
                     }
-                )?;
+                    (b'n', true) => b'\n',
+                    (b't', true) => b'\t',
+                    (b'r', true) => b'\r',
+                    _ => *c,
+                })?;
                 slash = false;
             }
 
             tokens.advance();
             Ok(Expression::StringLiteral(new_str))
         }
-        Token::Identifier(b"print") => {
+        Token::Identifier(ident) => {
+            let mut vec = AVec::new(allocator);
+            vec.extend_from_slice(ident)?;
+
             tokens.advance();
-            Ok(Expression::Identifier(b"print"))
+            Ok(Expression::Identifier(vec))
         }
-        _ => return Err(PureParseError::Generic(b"Unknown token when parsing primary").into()),
+        token => {
+            if cfg!(debug_assertions) {
+                println!("Token: {:?}", token);
+            }
+
+            Err(PureParseError::Generic(b"Unknown token when parsing primary").into())
+        },
     }
 }
 
 fn parse_binary<'a, A: Allocator>(
     tokens: &mut TokenStream,
     op_table: &[(Token, BinaryOp)],
-    next: fn(&mut TokenStream, A) -> Result<Expression<'a, A>, ParseError>,
+    next: fn(&mut TokenStream, A) -> Result<Expression<A>, ParseError>,
     allocator: A,
-) -> Result<Expression<'a, A>, ParseError> {
+) -> Result<Expression<A>, ParseError> {
     let mut expr = next(tokens, allocator)?;
     while tokens.peek() != Token::EOF {
         let token = tokens.peek();
@@ -611,7 +614,7 @@ fn parse_binary<'a, A: Allocator>(
 fn parse_script<'a, A: Allocator>(
     tokens: &mut TokenStream,
     allocator: A,
-) -> Result<Block<'a, A>, ParseError> {
+) -> Result<Block<A>, ParseError> {
     // TODO: shebang
     let block = parse_block_open(tokens, allocator)?;
     if tokens.matches(Token::EOF) {
@@ -625,7 +628,7 @@ fn parse_script<'a, A: Allocator>(
 fn parse_block<'a, A: Allocator>(
     tokens: &mut TokenStream,
     allocator: A,
-) -> Result<Block<'a, A>, ParseError> {
+) -> Result<Block<A>, ParseError> {
     if !tokens.matches(Token::LeftCurly) {
         return Err(PureParseError::Generic(b"Block does not start with opening '{'").into());
     }
@@ -642,7 +645,7 @@ fn parse_block<'a, A: Allocator>(
 fn parse_block_open<'a, A: Allocator>(
     tokens: &mut TokenStream,
     allocator: A,
-) -> Result<Block<'a, A>, ParseError> {
+) -> Result<Block<A>, ParseError> {
     let mut stmts = AVec::new(allocator);
     while tokens.peek() != Token::EOF && tokens.peek() != Token::RightCurly {
         let stmt = parse_statement(tokens, allocator)?;
@@ -655,7 +658,7 @@ fn parse_block_open<'a, A: Allocator>(
 fn parse_if<'a, A: Allocator>(
     tokens: &mut TokenStream,
     allocator: A,
-) -> Result<Statement<'a, A>, ParseError> {
+) -> Result<Statement<A>, ParseError> {
     if tokens.matches(Token::IfKeyword) {
         let predicate = parse_expression(tokens, allocator)?;
         let if_block = parse_block(tokens, allocator)?;
@@ -685,7 +688,7 @@ fn parse_if<'a, A: Allocator>(
 fn parse_statement<'a, A: Allocator>(
     tokens: &mut TokenStream,
     allocator: A,
-) -> Result<Statement<'a, A>, ParseError> {
+) -> Result<Statement<A>, ParseError> {
     if tokens.peek() == Token::LeftCurly {
         let block = parse_block(tokens, allocator)?;
 
@@ -702,6 +705,10 @@ fn parse_statement<'a, A: Allocator>(
                 return Err(PureParseError::Generic(b"Missing equal in declaration").into());
             }
             let expr = parse_expression(tokens, allocator)?;
+
+            if !tokens.matches(Token::Semicolon) {
+                return Err(PureParseError::Generic(b"Missing semicolon after declaration").into());
+            }
 
             Ok(Statement::Declaration(name_vec, expr))
         } else {
@@ -723,7 +730,7 @@ fn parse_statement<'a, A: Allocator>(
 fn parse_expression<'a, A: Allocator>(
     tokens: &mut TokenStream,
     allocator: A,
-) -> Result<Expression<'a, A>, ParseError> {
+) -> Result<Expression<A>, ParseError> {
     parse_term(tokens, allocator)
 }
 
@@ -800,6 +807,7 @@ impl<A: Allocator> ShimValue<A> {
 }
 
 // A newtype which represents an index into a GC'd collection of ShimValue
+#[derive(Copy, Clone)]
 pub struct Id(usize);
 
 impl Id {
@@ -808,9 +816,14 @@ impl Id {
     }
 }
 
+struct Environment<A: Allocator> {
+    map: AHashMap<AVec<u8, A>, Id, A>
+}
+
 pub struct Interpreter<'a, A: Allocator> {
     allocator: A,
     values: AVec<ShimValue<A>, A>,
+    env: Environment<A>,
     // TODO: figure out how to make the ABox work like this
     print: Option<&'a mut dyn Printer>,
 }
@@ -864,6 +877,7 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
         Interpreter {
             allocator,
             values: AVec::new(allocator),
+            env: Environment { map: AHashMap::new(allocator) },
             print: None,
         }
     }
@@ -876,13 +890,22 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
         self.print.as_mut().map(|p| p.print(text));
     }
 
-    pub fn interpret_expression(&mut self, expr: &Expression<A>) -> Result<Id, AllocError> {
-        Ok(
-        match expr {
-            Expression::Identifier(b"print") => self.new_value(ShimValue::PrintFn)?,
-            Expression::Identifier(_) => {
-                self.print(b"Can't interpret identifier\n");
-                self.new_value(42)?
+    pub fn interpret_expression(&mut self, expr: &Expression<A>) -> Result<Id, ShimError> {
+        Ok(match expr {
+            Expression::Identifier(ident) => {
+                let ident_slice: &[u8] = ident;
+                if ident_slice == b"print" {
+                    return self.new_value(ShimValue::PrintFn).map_err(|e| e.into());
+                }
+                // TODO: this is very dumb. AHashMap should be updated so that
+                // the get method does deref-magic.
+                let mut vec = AVec::new(self.allocator);
+                vec.extend_from_slice(ident)?;
+                let id = self.env.map.get(&vec).ok_or(
+                    ShimError::Other(b"ident not found")
+                )?;
+
+                *id
             }
             Expression::IntLiteral(i) => self.new_value(*i)?,
             Expression::FloatLiteral(f) => self.new_value(*f)?,
@@ -924,7 +947,8 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
                         for (idx, arg) in cexpr.args.iter().enumerate() {
                             let arg = self.interpret_expression(arg)?;
 
-                            let arg_str: AVec<u8, A> = self.values[arg.0].stringify(self.allocator)?;
+                            let arg_str: AVec<u8, A> =
+                                self.values[arg.0].stringify(self.allocator)?;
                             self.print(&arg_str);
 
                             if idx as isize != last_idx {
@@ -940,8 +964,7 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
                     }
                 }
             }
-        }
-        )
+        })
     }
 
     pub fn interpret_block(&mut self, block: &Block<A>) -> Result<(), ShimError> {
@@ -960,11 +983,16 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
             Statement::Expression(expr) => {
                 self.interpret_expression(expr)?;
             }
-            Statement::Declaration(_, _) => {
-                todo!();
+            Statement::Declaration(name, expr) => {
+                let id = self.interpret_expression(expr)?;
+                let name_clone: AVec<u8, A> = name.clone(self.allocator)?;
+                self.env.map.insert(name_clone, id)?;
             }
-            Statement::Assignment(_, _) => {
-                todo!();
+            Statement::Assignment(name, expr) => {
+                // TODO: this should write the value to the existing id rather
+                // than writing a new id.
+                let id = self.interpret_expression(expr)?;
+                self.env.map.get_mut(&name).map(|env_id| *env_id = id);
             }
             Statement::Block(block) => {
                 self.interpret_block(block)?;
@@ -1067,6 +1095,41 @@ mod tests {
         tokens.advance();
         assert!(tokens.matches(Token::LeftParen));
         assert!(tokens.peek() == Token::StringLiteral(b"hi"));
+        tokens.advance();
+        assert!(tokens.matches(Token::RightParen));
+        assert!(tokens.matches(Token::Semicolon));
+    }
+
+    #[test]
+    fn tokenize_str2() {
+        let text = br#"
+            let a = "foo";
+            let b = a;
+            print(b);
+        "#;
+        let mut tokens = TokenStream::new(text);
+
+        assert!(tokens.matches(Token::LetKeyword));
+        assert!(tokens.peek() == Token::Identifier(b"a"));
+        tokens.advance();
+        assert!(tokens.matches(Token::Equal));
+        assert!(tokens.peek() == Token::StringLiteral(b"foo"));
+        tokens.advance();
+        assert!(tokens.matches(Token::Semicolon));
+
+        dbg!(tokens.peek());
+        assert!(tokens.matches(Token::LetKeyword));
+        assert!(tokens.peek() == Token::Identifier(b"b"));
+        tokens.advance();
+        assert!(tokens.matches(Token::Equal));
+        assert!(tokens.peek() == Token::Identifier(b"a"));
+        tokens.advance();
+        assert!(tokens.matches(Token::Semicolon));
+
+        assert!(tokens.peek() == Token::Identifier(b"print"));
+        tokens.advance();
+        assert!(tokens.matches(Token::LeftParen));
+        assert!(tokens.peek() == Token::Identifier(b"b"));
         tokens.advance();
         assert!(tokens.matches(Token::RightParen));
         assert!(tokens.matches(Token::Semicolon));
