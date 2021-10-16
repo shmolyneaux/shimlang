@@ -20,6 +20,12 @@ impl From<ParseError> for ShimError {
     }
 }
 
+impl From<AllocError> for ShimError {
+    fn from(err: AllocError) -> ShimError {
+        ShimError::AllocError(err)
+    }
+}
+
 // TODO: Forcing the allocator to be copyable doesn't seem right in the general
 // case of having sized allocators. It's perfect for zero-sized ones though!
 pub trait Allocator: std::alloc::Allocator + Copy + std::fmt::Debug {}
@@ -412,6 +418,8 @@ pub struct IfStatement<'a, A: Allocator> {
 #[derive(Debug)]
 pub enum Statement<'a, A: Allocator> {
     Expression(Expression<'a, A>),
+    Declaration(AVec<u8, A>, Expression<'a, A>),
+    Assignment(AVec<u8, A>, Expression<'a, A>),
     Block(Block<'a, A>),
     IfStatement(IfStatement<'a, A>),
 }
@@ -504,7 +512,7 @@ fn parse_args<'a, A: Allocator>(
 ) -> Result<AVec<Expression<'a, A>, A>, ParseError> {
     let mut args = AVec::new(allocator);
     while tokens.peek() != Token::EOF && tokens.peek() != Token::RightParen {
-        args.push(parse_expression(tokens, allocator)?);
+        args.push(parse_expression(tokens, allocator)?)?;
         if tokens.matches(Token::Comma) {
             continue;
         }
@@ -554,7 +562,7 @@ fn parse_primary<'a, A: Allocator>(
                             *c
                         }
                     }
-                );
+                )?;
                 slash = false;
             }
 
@@ -565,7 +573,7 @@ fn parse_primary<'a, A: Allocator>(
             tokens.advance();
             Ok(Expression::Identifier(b"print"))
         }
-        other => return Err(PureParseError::Generic(b"Unknown token when parsing primary").into()),
+        _ => return Err(PureParseError::Generic(b"Unknown token when parsing primary").into()),
     }
 }
 
@@ -684,6 +692,21 @@ fn parse_statement<'a, A: Allocator>(
         // TODO: if there's a semicolon this was actually a block _expression_
 
         Ok(Statement::Block(block))
+    } else if tokens.matches(Token::LetKeyword) {
+        if let Token::Identifier(name) = tokens.peek() {
+            let mut name_vec = AVec::new(allocator);
+            name_vec.extend_from_slice(&name)?;
+
+            tokens.advance();
+            if !tokens.matches(Token::Equal) {
+                return Err(PureParseError::Generic(b"Missing equal in declaration").into());
+            }
+            let expr = parse_expression(tokens, allocator)?;
+
+            Ok(Statement::Declaration(name_vec, expr))
+        } else {
+            return Err(PureParseError::Generic(b"Missing identifier after let").into());
+        }
     } else if tokens.peek() == Token::IfKeyword {
         Ok(parse_if(tokens, allocator)?)
     } else {
@@ -721,13 +744,13 @@ pub enum ShimValue<A: Allocator> {
 }
 
 impl<A: Allocator> ShimValue<A> {
-    fn stringify(&self, allocator: A) -> AVec<u8, A> {
+    fn stringify(&self, allocator: A) -> Result<AVec<u8, A>, AllocError> {
         let mut vec = AVec::new(allocator);
         match self {
             Self::I128(val) => {
                 let mut val: i128 = *val;
                 if val < 0 {
-                    vec.push(b'-');
+                    vec.push(b'-')?;
                     // Hopefully this isn't i128::MIN! (since it can't be expressed as a positive)
                     val = val * -1;
                 }
@@ -745,22 +768,22 @@ impl<A: Allocator> ShimValue<A> {
                     }
                 }
 
-                vec.extend_from_slice(&slice[39 - length..39]);
+                vec.extend_from_slice(&slice[39 - length..39])?;
             }
             Self::F64(val) => {
                 let mut buffer = [0u8; f64::FORMATTED_SIZE];
                 let slice = lexical_core::write(*val, &mut buffer);
-                vec.extend_from_slice(&slice)
+                vec.extend_from_slice(&slice)?
             }
-            Self::Bool(true) => vec.extend_from_slice(b"true"),
-            Self::Bool(false) => vec.extend_from_slice(b"false"),
-            Self::Freed => vec.extend_from_slice(b"*freed*"),
-            Self::PrintFn => vec.extend_from_slice(b"<function print>"),
-            Self::Unit => vec.extend_from_slice(b"()"),
-            Self::SString(s) => vec.extend_from_slice(s),
+            Self::Bool(true) => vec.extend_from_slice(b"true")?,
+            Self::Bool(false) => vec.extend_from_slice(b"false")?,
+            Self::Freed => vec.extend_from_slice(b"*freed*")?,
+            Self::PrintFn => vec.extend_from_slice(b"<function print>")?,
+            Self::Unit => vec.extend_from_slice(b"()")?,
+            Self::SString(s) => vec.extend_from_slice(s)?,
         }
 
-        vec
+        Ok(vec)
     }
 
     fn is_truthy(&self) -> bool {
@@ -797,42 +820,42 @@ pub trait Printer {
 }
 
 trait NewValue<T> {
-    fn new_value(&mut self, val: T) -> Id;
+    fn new_value(&mut self, val: T) -> Result<Id, AllocError>;
 }
 
 impl<'a, A: Allocator> NewValue<bool> for Interpreter<'a, A> {
-    fn new_value(&mut self, val: bool) -> Id {
+    fn new_value(&mut self, val: bool) -> Result<Id, AllocError> {
         let id = Id::new(self.values.len());
-        self.values.push(ShimValue::Bool(val));
+        self.values.push(ShimValue::Bool(val))?;
 
-        id
+        Ok(id)
     }
 }
 
 impl<'a, A: Allocator> NewValue<i128> for Interpreter<'a, A> {
-    fn new_value(&mut self, val: i128) -> Id {
+    fn new_value(&mut self, val: i128) -> Result<Id, AllocError> {
         let id = Id::new(self.values.len());
-        self.values.push(ShimValue::I128(val));
+        self.values.push(ShimValue::I128(val))?;
 
-        id
+        Ok(id)
     }
 }
 
 impl<'a, A: Allocator> NewValue<f64> for Interpreter<'a, A> {
-    fn new_value(&mut self, val: f64) -> Id {
+    fn new_value(&mut self, val: f64) -> Result<Id, AllocError> {
         let id = Id::new(self.values.len());
-        self.values.push(ShimValue::F64(val));
+        self.values.push(ShimValue::F64(val))?;
 
-        id
+        Ok(id)
     }
 }
 
 impl<'a, A: Allocator> NewValue<ShimValue<A>> for Interpreter<'a, A> {
-    fn new_value(&mut self, val: ShimValue<A>) -> Id {
+    fn new_value(&mut self, val: ShimValue<A>) -> Result<Id, AllocError> {
         let id = Id::new(self.values.len());
-        self.values.push(val);
+        self.values.push(val)?;
 
-        id
+        Ok(id)
     }
 }
 
@@ -853,24 +876,25 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
         self.print.as_mut().map(|p| p.print(text));
     }
 
-    pub fn interpret_expression(&mut self, expr: &Expression<A>) -> Id {
+    pub fn interpret_expression(&mut self, expr: &Expression<A>) -> Result<Id, AllocError> {
+        Ok(
         match expr {
-            Expression::Identifier(b"print") => self.new_value(ShimValue::PrintFn),
+            Expression::Identifier(b"print") => self.new_value(ShimValue::PrintFn)?,
             Expression::Identifier(_) => {
                 self.print(b"Can't interpret identifier\n");
-                self.new_value(42)
+                self.new_value(42)?
             }
-            Expression::IntLiteral(i) => self.new_value(*i),
-            Expression::FloatLiteral(f) => self.new_value(*f),
-            Expression::BoolLiteral(b) => self.new_value(*b),
+            Expression::IntLiteral(i) => self.new_value(*i)?,
+            Expression::FloatLiteral(f) => self.new_value(*f)?,
+            Expression::BoolLiteral(b) => self.new_value(*b)?,
             Expression::StringLiteral(s) => {
                 let mut new_str = AVec::new(self.allocator);
-                new_str.extend_from_slice(s);
-                self.new_value(ShimValue::SString(new_str))
+                new_str.extend_from_slice(s)?;
+                self.new_value(ShimValue::SString(new_str))?
             }
             Expression::Binary(op, left, right) => {
-                let left = self.interpret_expression(&*left);
-                let right = self.interpret_expression(&*right);
+                let left = self.interpret_expression(&*left)?;
+                let right = self.interpret_expression(&*right)?;
 
                 let result = match (&self.values[left.0], &self.values[right.0]) {
                     (ShimValue::I128(a), ShimValue::I128(b)) => {
@@ -890,17 +914,17 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
                     }
                 };
 
-                self.new_value(result)
+                self.new_value(result)?
             }
             Expression::Call(cexpr) => {
-                let func = self.interpret_expression(&cexpr.func);
+                let func = self.interpret_expression(&cexpr.func)?;
                 match self.values[func.0] {
                     ShimValue::PrintFn => {
                         let last_idx = cexpr.args.len() as isize - 1;
                         for (idx, arg) in cexpr.args.iter().enumerate() {
-                            let arg = self.interpret_expression(arg);
+                            let arg = self.interpret_expression(arg)?;
 
-                            let arg_str = self.values[arg.0].stringify(self.allocator);
+                            let arg_str: AVec<u8, A> = self.values[arg.0].stringify(self.allocator)?;
                             self.print(&arg_str);
 
                             if idx as isize != last_idx {
@@ -908,20 +932,21 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
                             }
                         }
                         self.print(b"\n");
-                        self.new_value(ShimValue::Unit)
+                        self.new_value(ShimValue::Unit)?
                     }
                     _ => {
                         self.print(b"Can't call value\n");
-                        self.new_value(ShimValue::I128(42))
+                        self.new_value(ShimValue::I128(42))?
                     }
                 }
             }
         }
+        )
     }
 
     pub fn interpret_block(&mut self, block: &Block<A>) -> Result<(), ShimError> {
         for stmt in block.stmts.iter() {
-            self.interpret_statement(stmt);
+            self.interpret_statement(stmt)?;
         }
 
         // TODO: return a type indicating whether we hit a return/break/continue
@@ -933,17 +958,23 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
     pub fn interpret_statement(&mut self, stmt: &Statement<A>) -> Result<(), ShimError> {
         match stmt {
             Statement::Expression(expr) => {
-                self.interpret_expression(expr);
+                self.interpret_expression(expr)?;
+            }
+            Statement::Declaration(_, _) => {
+                todo!();
+            }
+            Statement::Assignment(_, _) => {
+                todo!();
             }
             Statement::Block(block) => {
                 self.interpret_block(block)?;
             }
             Statement::IfStatement(if_stmt) => {
-                let predicate_result = self.interpret_expression(&if_stmt.predicate);
+                let predicate_result = self.interpret_expression(&if_stmt.predicate)?;
                 if self.values[predicate_result.0].is_truthy() {
-                    self.interpret_block(&if_stmt.if_block);
+                    self.interpret_block(&if_stmt.if_block)?;
                 } else if let Some(else_block) = &if_stmt.else_block {
-                    self.interpret_block(else_block);
+                    self.interpret_block(else_block)?;
                 }
             }
         }
