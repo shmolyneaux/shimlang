@@ -23,7 +23,7 @@ pub struct ABox<T: ?Sized, A: Allocator>(NonNull<T>, A);
 impl<T, A: Allocator> ABox<T, A> {
     pub fn new(val: T, allocator: A) -> Result<Self, AllocError> {
         let layout = Layout::new::<T>();
-        let mut ptr: NonNull<T> = allocator.allocate(layout)?.cast();
+        let ptr: NonNull<T> = allocator.allocate(layout)?.cast();
         unsafe { ptr.as_ptr().write(val) };
 
         Ok(Self(ptr, allocator))
@@ -190,10 +190,11 @@ impl<T, A: Allocator> AVec<T, A> {
 }
 
 impl<T: Clone, A: Allocator> AVec<T, A> {
-    pub fn extend_from_slice(&mut self, other: &[T]) {
+    pub fn extend_from_slice(&mut self, other: &[T]) -> Result<(), AllocError> {
         for item in other {
-            self.push(item.clone());
+            self.push(item.clone())?;
         }
+        Ok(())
     }
 }
 
@@ -247,7 +248,9 @@ impl<T, A: Allocator> Index<usize> for AVec<T, A> {
 
 impl<A: Allocator> std::io::Write for AVec<u8, A> {
     fn write(&mut self, buf: &[u8]) -> Result<usize, std::io::Error> {
-        self.extend_from_slice(buf);
+        self.extend_from_slice(buf)
+            .map_err(|alloc_err|
+                std::io::Error::new(std::io::ErrorKind::OutOfMemory, alloc_err))?;
         Ok(buf.len())
     }
 
