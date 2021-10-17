@@ -55,9 +55,9 @@ for script in check_script_output:
         failed = True
         print("FAIL -", script, "(output does not match expected)")
         print("    Expected:")
-        print(textwrap.indent(expected, "        "))
+        print(textwrap.indent(repr(expected), "        "))
         print("    Got:")
-        print(textwrap.indent(result.stdout, "        "))
+        print(textwrap.indent(repr(result.stdout), "        "))
 
 if failed:
     sys.exit(1)
