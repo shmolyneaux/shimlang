@@ -1,6 +1,6 @@
 #![feature(allocator_api)]
 
-use acollections::{ABox, AVec, AHashMap};
+use acollections::{ABox, AHashMap, AVec};
 use std::alloc::AllocError;
 
 use lexical_core::FormattedSize;
@@ -405,11 +405,7 @@ pub enum Expression<A: Allocator> {
     IntLiteral(i128),
     FloatLiteral(f64),
     StringLiteral(AVec<u8, A>),
-    Binary(
-        BinaryOp,
-        ABox<Expression<A>, A>,
-        ABox<Expression<A>, A>,
-    ),
+    Binary(BinaryOp, ABox<Expression<A>, A>, ABox<Expression<A>, A>),
     Call(CallExpr<A>),
 }
 
@@ -466,7 +462,10 @@ fn parse_equality<'a, A: Allocator>(
 ) -> Result<Expression<A>, ParseError> {
     parse_binary(
         tokens,
-        &[(Token::DoubleEqual, BinaryOp::Eq), (Token::BangEqual, BinaryOp::Neq)],
+        &[
+            (Token::DoubleEqual, BinaryOp::Eq),
+            (Token::BangEqual, BinaryOp::Neq),
+        ],
         parse_comparison,
         allocator,
     )
@@ -614,7 +613,7 @@ fn parse_primary<'a, A: Allocator>(
             }
 
             Err(PureParseError::Generic(b"Unknown token when parsing primary").into())
-        },
+        }
     }
 }
 
@@ -781,9 +780,7 @@ fn parse_statement<'a, A: Allocator>(
 
                 Statement::Assignment(ident, expr)
             }
-            (expr, _) => {
-                Statement::Expression(expr)
-            }
+            (expr, _) => Statement::Expression(expr),
         };
 
         if !tokens.matches(Token::Semicolon) {
@@ -884,7 +881,36 @@ impl Id {
 }
 
 struct Environment<A: Allocator> {
-    map: AHashMap<AVec<u8, A>, Id, A>
+    prev: Option<ABox<Environment<A>, A>>,
+    map: AHashMap<AVec<u8, A>, Id, A>,
+}
+
+impl<A: Allocator> Environment<A> {
+    fn assign(&mut self, name: &AVec<u8, A>, id: Id) -> Result<(), ()> {
+        if let Some(env_id) = self.map.get_mut(name) {
+            Ok(*env_id = id)
+        } else if let Some(env) = &mut self.prev {
+            env.assign(name, id)
+        } else {
+            // TODO: better error type
+            Err(())
+        }
+    }
+
+    fn declare(&mut self, name: AVec<u8, A>, id: Id) -> Result<(), ShimError> {
+        self.map.insert(name, id)?;
+        Ok(())
+    }
+
+    fn find(&mut self, name: &AVec<u8, A>) -> Option<Id> {
+        if let Some(id) = self.map.get(name) {
+            Some(*id)
+        } else if let Some(env) = &mut self.prev {
+            env.find(name)
+        } else {
+            None
+        }
+    }
 }
 
 pub struct Interpreter<'a, A: Allocator> {
@@ -950,7 +976,10 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
         Interpreter {
             allocator,
             values: AVec::new(allocator),
-            env: Environment { map: AHashMap::new(allocator) },
+            env: Environment {
+                prev: None,
+                map: AHashMap::new(allocator),
+            },
             print: None,
         }
     }
@@ -974,17 +1003,12 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
                 // the get method does deref-magic.
                 let mut vec = AVec::new(self.allocator);
                 vec.extend_from_slice(ident)?;
-                let id = self
-                    .env
-                    .map
-                    .get(&vec)
-                    .map(|id| *id)
-                    .ok_or_else(|| {
-                        self.print(b"Could not find ");
-                        self.print(&vec);
-                        self.print(b" in current environment\n");
-                        ShimError::Other(b"ident not found")
-                    })?;
+                let id = self.env.find(&vec).ok_or_else(|| {
+                    self.print(b"Could not find ");
+                    self.print(&vec);
+                    self.print(b" in current environment\n");
+                    ShimError::Other(b"ident not found")
+                })?;
 
                 id
             }
@@ -1001,20 +1025,18 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
                 let right = self.interpret_expression(&*right)?;
 
                 let result = match (&self.values[left.0], &self.values[right.0]) {
-                    (ShimValue::I128(a), ShimValue::I128(b)) => {
-                        match op {
-                            BinaryOp::Add => ShimValue::I128(a + b),
-                            BinaryOp::Sub => ShimValue::I128(a - b),
-                            BinaryOp::Mul => ShimValue::I128(a * b),
-                            BinaryOp::Div => ShimValue::I128(a / b),
-                            BinaryOp::Eq => ShimValue::Bool(a == b),
-                            BinaryOp::Neq => ShimValue::Bool(a != b),
-                            BinaryOp::Gt => ShimValue::Bool(a > b),
-                            BinaryOp::Gte => ShimValue::Bool(a >= b),
-                            BinaryOp::Lt => ShimValue::Bool(a < b),
-                            BinaryOp::Lte => ShimValue::Bool(a <= b),
-                        }
-                    }
+                    (ShimValue::I128(a), ShimValue::I128(b)) => match op {
+                        BinaryOp::Add => ShimValue::I128(a + b),
+                        BinaryOp::Sub => ShimValue::I128(a - b),
+                        BinaryOp::Mul => ShimValue::I128(a * b),
+                        BinaryOp::Div => ShimValue::I128(a / b),
+                        BinaryOp::Eq => ShimValue::Bool(a == b),
+                        BinaryOp::Neq => ShimValue::Bool(a != b),
+                        BinaryOp::Gt => ShimValue::Bool(a > b),
+                        BinaryOp::Gte => ShimValue::Bool(a >= b),
+                        BinaryOp::Lt => ShimValue::Bool(a < b),
+                        BinaryOp::Lte => ShimValue::Bool(a <= b),
+                    },
                     _ => {
                         self.print(b"TODO: values can't be bin-opped\n");
                         ShimValue::I128(42)
@@ -1051,11 +1073,11 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
         })
     }
 
-    fn interpret_block(&mut self, block: &Block<A>) -> Result<BlockExit, ShimError> {
+    fn interpret_block_inner(&mut self, block: &Block<A>) -> Result<BlockExit, ShimError> {
         for stmt in block.stmts.iter() {
             match self.interpret_statement(stmt)? {
-                Some(BlockExit::Finish) => {},
-                None => {},
+                Some(BlockExit::Finish) => {}
+                None => {}
 
                 // Special exit cases
                 Some(BlockExit::Break) => return Ok(BlockExit::Break),
@@ -1068,6 +1090,35 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
         Ok(BlockExit::Finish)
     }
 
+    fn interpret_block(&mut self, block: &Block<A>) -> Result<BlockExit, ShimError> {
+        fn enter_block<A: Allocator>(interpreter: &mut Interpreter<A>) -> Result<(), AllocError> {
+            let mut new_env = Environment {
+                prev: None,
+                map: AHashMap::new(interpreter.allocator),
+            };
+
+            // Assign new_env to .env
+            std::mem::swap(&mut interpreter.env, &mut new_env);
+
+            // Assign the old env to .prev (since it's now in new_env)
+            interpreter.env.prev = Some(ABox::new(new_env, interpreter.allocator)?);
+
+            Ok(())
+        }
+
+        fn exit_block<A: Allocator>(interpreter: &mut Interpreter<A>) {
+            let prev_env = interpreter.env.prev.take().unwrap().into_inner();
+
+            interpreter.env = prev_env;
+        }
+
+        enter_block(self)?;
+        let res = self.interpret_block_inner(block);
+        exit_block(self);
+
+        res
+    }
+
     fn interpret_statement(&mut self, stmt: &Statement<A>) -> Result<Option<BlockExit>, ShimError> {
         match stmt {
             Statement::Expression(expr) => {
@@ -1076,22 +1127,18 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
             Statement::Declaration(name, expr) => {
                 let id = self.interpret_expression(expr)?;
                 let name_clone: AVec<u8, A> = name.clone(self.allocator)?;
-                self.env.map.insert(name_clone, id)?;
+                self.env.declare(name_clone, id)?;
             }
             Statement::Assignment(name, expr) => {
                 // TODO: this should write the value to the existing id rather
                 // than writing a new id.
                 let id = self.interpret_expression(expr)?;
-                self.env
-                    .map
-                    .get_mut(&name)
-                    .map(|env_id| *env_id = id)
-                    .ok_or_else(|| {
-                        self.print(b"Variable ");
-                        self.print(&name);
-                        self.print(b" has not been declared\n");
-                        ShimError::Other(b"ident not found")
-                    })?;
+                self.env.assign(name, id).map_err(|_| {
+                    self.print(b"Variable ");
+                    self.print(&name);
+                    self.print(b" has not been declared\n");
+                    ShimError::Other(b"ident not found")
+                })?;
             }
             Statement::Block(block) => {
                 self.interpret_block(block)?;
@@ -1109,27 +1156,21 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
                 match exit_result {
                     BlockExit::Break => return Ok(Some(BlockExit::Break)),
                     BlockExit::Continue => return Ok(Some(BlockExit::Continue)),
-                    BlockExit::Finish => {},
+                    BlockExit::Finish => {}
                 }
             }
-            Statement::WhileStatement(predicate, block) => {
-                loop {
-                    let id = self.interpret_expression(&predicate)?;
-                    if !self.values[id.0].is_truthy() {
-                        break;
-                    }
-                    match self.interpret_block(&block)? {
-                        BlockExit::Break => return Ok(Some(BlockExit::Finish)),
-                        BlockExit::Continue | BlockExit::Finish => continue,
-                    }
+            Statement::WhileStatement(predicate, block) => loop {
+                let id = self.interpret_expression(&predicate)?;
+                if !self.values[id.0].is_truthy() {
+                    break;
                 }
-            }
-            Statement::BreakStatement => {
-                return Ok(Some(BlockExit::Break))
-            }
-            Statement::ContinueStatement => {
-                return Ok(Some(BlockExit::Continue))
-            }
+                match self.interpret_block(&block)? {
+                    BlockExit::Break => return Ok(Some(BlockExit::Finish)),
+                    BlockExit::Continue | BlockExit::Finish => continue,
+                }
+            },
+            Statement::BreakStatement => return Ok(Some(BlockExit::Break)),
+            Statement::ContinueStatement => return Ok(Some(BlockExit::Continue)),
         }
 
         Ok(None)
@@ -1151,7 +1192,7 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
         };
 
         match self.interpret_block(&script) {
-            Ok(_) => {},
+            Ok(_) => {}
             Err(ShimError::Other(msg)) => {
                 self.print(b"ERROR: ");
                 self.print(msg);
