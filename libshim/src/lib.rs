@@ -37,6 +37,12 @@ pub enum BinaryOp {
     Sub,
     Mul,
     Div,
+    Eq,
+    Neq,
+    Gt,
+    Gte,
+    Lt,
+    Lte,
 }
 
 #[derive(PartialEq, Debug, Copy, Clone)]
@@ -426,6 +432,9 @@ pub enum Statement<A: Allocator> {
     Assignment(AVec<u8, A>, Expression<A>),
     Block(Block<A>),
     IfStatement(IfStatement<A>),
+    WhileStatement(Expression<A>, Block<A>),
+    BreakStatement,
+    ContinueStatement,
 }
 
 #[derive(Debug)]
@@ -449,6 +458,35 @@ impl From<AllocError> for ParseError {
     fn from(err: AllocError) -> ParseError {
         ParseError::AllocError(err)
     }
+}
+
+fn parse_equality<'a, A: Allocator>(
+    tokens: &mut TokenStream,
+    allocator: A,
+) -> Result<Expression<A>, ParseError> {
+    parse_binary(
+        tokens,
+        &[(Token::DoubleEqual, BinaryOp::Eq), (Token::BangEqual, BinaryOp::Neq)],
+        parse_comparison,
+        allocator,
+    )
+}
+
+fn parse_comparison<'a, A: Allocator>(
+    tokens: &mut TokenStream,
+    allocator: A,
+) -> Result<Expression<A>, ParseError> {
+    parse_binary(
+        tokens,
+        &[
+            (Token::LeftAngle, BinaryOp::Lt),
+            (Token::Lte, BinaryOp::Lte),
+            (Token::RightAngle, BinaryOp::Gt),
+            (Token::Gte, BinaryOp::Gte),
+        ],
+        parse_term,
+        allocator,
+    )
 }
 
 fn parse_term<'a, A: Allocator>(
@@ -630,6 +668,10 @@ fn parse_block<'a, A: Allocator>(
     allocator: A,
 ) -> Result<Block<A>, ParseError> {
     if !tokens.matches(Token::LeftCurly) {
+        if cfg!(debug_assertions) {
+            let token = tokens.peek();
+            println!("Token: {:?}", token);
+        }
         return Err(PureParseError::Generic(b"Block does not start with opening '{'").into());
     }
 
@@ -716,14 +758,39 @@ fn parse_statement<'a, A: Allocator>(
         }
     } else if tokens.peek() == Token::IfKeyword {
         Ok(parse_if(tokens, allocator)?)
+    } else if tokens.matches(Token::WhileKeyword) {
+        let predicate = parse_expression(tokens, allocator)?;
+        let block = parse_block(tokens, allocator)?;
+        Ok(Statement::WhileStatement(predicate, block))
+    } else if tokens.matches(Token::BreakKeyword) {
+        if !tokens.matches(Token::Semicolon) {
+            return Err(PureParseError::Generic(b"Missing semicolon after break").into());
+        }
+        Ok(Statement::BreakStatement)
+    } else if tokens.matches(Token::ContinueKeyword) {
+        if !tokens.matches(Token::Semicolon) {
+            return Err(PureParseError::Generic(b"Missing semicolon after continue").into());
+        }
+        Ok(Statement::ContinueStatement)
     } else {
         let expr = parse_expression(tokens, allocator)?;
+        let stmt = match (expr, tokens.peek()) {
+            (Expression::Identifier(ident), Token::Equal) => {
+                tokens.advance();
+                let expr = parse_expression(tokens, allocator)?;
+
+                Statement::Assignment(ident, expr)
+            }
+            (expr, _) => {
+                Statement::Expression(expr)
+            }
+        };
 
         if !tokens.matches(Token::Semicolon) {
             return Err(PureParseError::Generic(b"Missing semicolon after expression").into());
         }
 
-        Ok(Statement::Expression(expr))
+        Ok(stmt)
     }
 }
 
@@ -731,7 +798,7 @@ fn parse_expression<'a, A: Allocator>(
     tokens: &mut TokenStream,
     allocator: A,
 ) -> Result<Expression<A>, ParseError> {
-    parse_term(tokens, allocator)
+    parse_equality(tokens, allocator)
 }
 
 // These values do not get a copy of the Allocator since they are GC'd, and
@@ -872,6 +939,12 @@ impl<'a, A: Allocator> NewValue<ShimValue<A>> for Interpreter<'a, A> {
     }
 }
 
+enum BlockExit {
+    Break,
+    Continue,
+    Finish,
+}
+
 impl<'a, A: Allocator> Interpreter<'a, A> {
     pub fn new(allocator: A) -> Interpreter<'a, A> {
         Interpreter {
@@ -901,11 +974,19 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
                 // the get method does deref-magic.
                 let mut vec = AVec::new(self.allocator);
                 vec.extend_from_slice(ident)?;
-                let id = self.env.map.get(&vec).ok_or(
-                    ShimError::Other(b"ident not found")
-                )?;
+                let id = self
+                    .env
+                    .map
+                    .get(&vec)
+                    .map(|id| *id)
+                    .ok_or_else(|| {
+                        self.print(b"Could not find ");
+                        self.print(&vec);
+                        self.print(b" in current environment\n");
+                        ShimError::Other(b"ident not found")
+                    })?;
 
-                *id
+                id
             }
             Expression::IntLiteral(i) => self.new_value(*i)?,
             Expression::FloatLiteral(f) => self.new_value(*f)?,
@@ -921,18 +1002,21 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
 
                 let result = match (&self.values[left.0], &self.values[right.0]) {
                     (ShimValue::I128(a), ShimValue::I128(b)) => {
-                        ShimValue::I128(
-                            // TODO: wrapping / non-wrapping stuff
-                            match op {
-                                BinaryOp::Add => a + b,
-                                BinaryOp::Sub => a - b,
-                                BinaryOp::Mul => a * b,
-                                BinaryOp::Div => a / b,
-                            },
-                        )
+                        match op {
+                            BinaryOp::Add => ShimValue::I128(a + b),
+                            BinaryOp::Sub => ShimValue::I128(a - b),
+                            BinaryOp::Mul => ShimValue::I128(a * b),
+                            BinaryOp::Div => ShimValue::I128(a / b),
+                            BinaryOp::Eq => ShimValue::Bool(a == b),
+                            BinaryOp::Neq => ShimValue::Bool(a != b),
+                            BinaryOp::Gt => ShimValue::Bool(a > b),
+                            BinaryOp::Gte => ShimValue::Bool(a >= b),
+                            BinaryOp::Lt => ShimValue::Bool(a < b),
+                            BinaryOp::Lte => ShimValue::Bool(a <= b),
+                        }
                     }
                     _ => {
-                        self.print(b"TODO: values can't be added\n");
+                        self.print(b"TODO: values can't be bin-opped\n");
                         ShimValue::I128(42)
                     }
                 };
@@ -967,18 +1051,24 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
         })
     }
 
-    pub fn interpret_block(&mut self, block: &Block<A>) -> Result<(), ShimError> {
+    fn interpret_block(&mut self, block: &Block<A>) -> Result<BlockExit, ShimError> {
         for stmt in block.stmts.iter() {
-            self.interpret_statement(stmt)?;
+            match self.interpret_statement(stmt)? {
+                Some(BlockExit::Finish) => {},
+                None => {},
+
+                // Special exit cases
+                Some(BlockExit::Break) => return Ok(BlockExit::Break),
+                Some(BlockExit::Continue) => return Ok(BlockExit::Continue),
+            }
         }
 
-        // TODO: return a type indicating whether we hit a return/break/continue
         // TODO: return a ShimValue if the last expression didn't end with a
         // semicolon (like Rust)
-        Ok(())
+        Ok(BlockExit::Finish)
     }
 
-    pub fn interpret_statement(&mut self, stmt: &Statement<A>) -> Result<(), ShimError> {
+    fn interpret_statement(&mut self, stmt: &Statement<A>) -> Result<Option<BlockExit>, ShimError> {
         match stmt {
             Statement::Expression(expr) => {
                 self.interpret_expression(expr)?;
@@ -992,22 +1082,57 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
                 // TODO: this should write the value to the existing id rather
                 // than writing a new id.
                 let id = self.interpret_expression(expr)?;
-                self.env.map.get_mut(&name).map(|env_id| *env_id = id);
+                self.env
+                    .map
+                    .get_mut(&name)
+                    .map(|env_id| *env_id = id)
+                    .ok_or_else(|| {
+                        self.print(b"Variable ");
+                        self.print(&name);
+                        self.print(b" has not been declared\n");
+                        ShimError::Other(b"ident not found")
+                    })?;
             }
             Statement::Block(block) => {
                 self.interpret_block(block)?;
             }
             Statement::IfStatement(if_stmt) => {
                 let predicate_result = self.interpret_expression(&if_stmt.predicate)?;
-                if self.values[predicate_result.0].is_truthy() {
-                    self.interpret_block(&if_stmt.if_block)?;
+                let exit_result = if self.values[predicate_result.0].is_truthy() {
+                    self.interpret_block(&if_stmt.if_block)?
                 } else if let Some(else_block) = &if_stmt.else_block {
-                    self.interpret_block(else_block)?;
+                    self.interpret_block(else_block)?
+                } else {
+                    BlockExit::Finish
+                };
+
+                match exit_result {
+                    BlockExit::Break => return Ok(Some(BlockExit::Break)),
+                    BlockExit::Continue => return Ok(Some(BlockExit::Continue)),
+                    BlockExit::Finish => {},
                 }
+            }
+            Statement::WhileStatement(predicate, block) => {
+                loop {
+                    let id = self.interpret_expression(&predicate)?;
+                    if !self.values[id.0].is_truthy() {
+                        break;
+                    }
+                    match self.interpret_block(&block)? {
+                        BlockExit::Break => return Ok(Some(BlockExit::Finish)),
+                        BlockExit::Continue | BlockExit::Finish => continue,
+                    }
+                }
+            }
+            Statement::BreakStatement => {
+                return Ok(Some(BlockExit::Break))
+            }
+            Statement::ContinueStatement => {
+                return Ok(Some(BlockExit::Continue))
             }
         }
 
-        Ok(())
+        Ok(None)
     }
 
     pub fn interpret(&mut self, text: &'a [u8]) -> Result<(), ShimError> {
@@ -1025,7 +1150,17 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
             }
         };
 
-        self.interpret_block(&script)?;
+        match self.interpret_block(&script) {
+            Ok(_) => {},
+            Err(ShimError::Other(msg)) => {
+                self.print(b"ERROR: ");
+                self.print(msg);
+                self.print(b"\n");
+            }
+            Err(_) => {
+                self.print(b"ERROR: Misc error\n");
+            }
+        }
 
         Ok(())
     }
