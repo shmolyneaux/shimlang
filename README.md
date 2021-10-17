@@ -44,11 +44,11 @@ Instructions for other platforms will come when support for them is available.
 
 There are a handful of languages that can support the goals of this project.
 Namely:
-    - C
-    - C++
-    - D
-    - Rust
-    - Zig
+- C
+- C++
+- D
+- Rust
+- Zig
 
 Other languages include runtimes that are too big for the goals of this project.
 
