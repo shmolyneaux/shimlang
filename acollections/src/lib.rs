@@ -28,6 +28,22 @@ impl<T, A: Allocator> ABox<T, A> {
 
         Ok(Self(ptr, allocator))
     }
+
+    pub fn into_inner(self) -> T {
+        // Read the value, and have the pointer get freed
+        let val = unsafe { self.0.as_ptr().read() };
+
+        // TODO: we don't actually read layout in the allocator, so we're giving
+        // some garbage information since we can't get the layout for unsized
+        // types, and I don't otherwise know how to deallocate.
+        let layout = Layout::new::<u8>();
+        unsafe { self.1.deallocate(self.0.cast(), layout) };
+
+        // We don't want to drop self since we already deallocated the pointer.
+        std::mem::forget(self);
+
+        val
+    }
 }
 
 unsafe impl<#[may_dangle] T: ?Sized, A: Allocator> Drop for ABox<T, A> {
@@ -278,7 +294,7 @@ impl<A: Allocator> std::io::Write for AVec<u8, A> {
 impl<T: std::cmp::PartialEq, A: Allocator> std::cmp::PartialEq for AVec<T, A> {
     fn eq(&self, other: &Self) -> bool {
         if self.len == other.len {
-            self.iter().zip(other.iter()).all(|(a,b)| a == b)
+            self.iter().zip(other.iter()).all(|(a, b)| a == b)
         } else {
             false
         }
