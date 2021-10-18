@@ -4,6 +4,7 @@ members = [
     "shimlang",
     "libshim",
     "acollections",
+    "tally-ho",
 ]
 
 exclude = [
