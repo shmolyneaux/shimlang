@@ -7,6 +7,7 @@ edition = "2021"
 
 [dependencies]
 acollections = {path = "../acollections"}
+tally-ho = {path = "../tally-ho"}
 
 [dependencies.lexical-core]
 version = "0.8"

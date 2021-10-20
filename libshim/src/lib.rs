@@ -1,9 +1,9 @@
 #![feature(allocator_api)]
 
 use acollections::{ABox, AHashMap, AVec};
-use std::alloc::AllocError;
-
 use lexical_core::FormattedSize;
+use std::alloc::AllocError;
+use tally_ho::{Collector, Gc, Manage};
 
 #[derive(Debug)]
 pub enum ShimError {
@@ -870,41 +870,55 @@ impl<A: Allocator> ShimValue<A> {
     }
 }
 
-// A newtype which represents an index into a GC'd collection of ShimValue
-#[derive(Copy, Clone)]
-pub struct Id(usize);
+impl<A: Allocator> Manage for ShimValue<A> {
+    fn trace<'a>(&'a self, _: &mut Vec<&'a Gc<Self>>) {
+        match self {
+            // Immutable values don't contain Gc's
+            Self::I128(_) => {}
+            Self::F64(_) => {}
+            Self::Bool(_) => {}
+            Self::Freed => {}
+            Self::PrintFn => {}
+            Self::Unit => {}
+            Self::SString(_) => {}
+            // Rest...
+        }
+    }
 
-impl Id {
-    fn new(id: usize) -> Self {
-        Id(id)
+    fn cycle_break(&mut self) {
+        *self = ShimValue::Freed;
     }
 }
 
 struct Environment<A: Allocator> {
     prev: Option<ABox<Environment<A>, A>>,
-    map: AHashMap<AVec<u8, A>, Id, A>,
+    map: AHashMap<AVec<u8, A>, Gc<ShimValue<A>>, A>,
 }
 
 impl<A: Allocator> Environment<A> {
-    fn assign(&mut self, name: &AVec<u8, A>, id: Id) -> Result<(), ()> {
-        if let Some(env_id) = self.map.get_mut(name) {
-            Ok(*env_id = id)
+    fn assign(&mut self, name: &AVec<u8, A>, val: Gc<ShimValue<A>>) -> Result<(), ()> {
+        // TODO: for values captured by closures this needs to be different.
+        // Imagine an pair of closure `get_count` and `inc_count`. Incrementing
+        // needs to mutate the reference shared with get_count, it can't merely
+        // assign a new reference to the count when incrementing.
+        if let Some(env_val) = self.map.get_mut(name) {
+            Ok(*env_val = val)
         } else if let Some(env) = &mut self.prev {
-            env.assign(name, id)
+            env.assign(name, val)
         } else {
             // TODO: better error type
             Err(())
         }
     }
 
-    fn declare(&mut self, name: AVec<u8, A>, id: Id) -> Result<(), ShimError> {
-        self.map.insert(name, id)?;
+    fn declare(&mut self, name: AVec<u8, A>, val: Gc<ShimValue<A>>) -> Result<(), ShimError> {
+        self.map.insert(name, val)?;
         Ok(())
     }
 
-    fn find(&mut self, name: &AVec<u8, A>) -> Option<Id> {
-        if let Some(id) = self.map.get(name) {
-            Some(*id)
+    fn find(&mut self, name: &AVec<u8, A>) -> Option<Gc<ShimValue<A>>> {
+        if let Some(val) = self.map.get(name) {
+            Some(val.clone())
         } else if let Some(env) = &mut self.prev {
             env.find(name)
         } else {
@@ -915,7 +929,7 @@ impl<A: Allocator> Environment<A> {
 
 pub struct Interpreter<'a, A: Allocator> {
     allocator: A,
-    values: AVec<ShimValue<A>, A>,
+    collector: Collector<ShimValue<A>>,
     env: Environment<A>,
     // TODO: figure out how to make the ABox work like this
     print: Option<&'a mut dyn Printer>,
@@ -925,43 +939,31 @@ pub trait Printer {
     fn print(&mut self, text: &[u8]);
 }
 
-trait NewValue<T> {
-    fn new_value(&mut self, val: T) -> Result<Id, AllocError>;
+trait NewValue<T, A: Allocator> {
+    fn new_value(&mut self, val: T) -> Result<Gc<ShimValue<A>>, AllocError>;
 }
 
-impl<'a, A: Allocator> NewValue<bool> for Interpreter<'a, A> {
-    fn new_value(&mut self, val: bool) -> Result<Id, AllocError> {
-        let id = Id::new(self.values.len());
-        self.values.push(ShimValue::Bool(val))?;
-
-        Ok(id)
+impl<'a, A: Allocator> NewValue<bool, A> for Interpreter<'a, A> {
+    fn new_value(&mut self, val: bool) -> Result<Gc<ShimValue<A>>, AllocError> {
+        Ok(self.collector.manage(ShimValue::Bool(val)))
     }
 }
 
-impl<'a, A: Allocator> NewValue<i128> for Interpreter<'a, A> {
-    fn new_value(&mut self, val: i128) -> Result<Id, AllocError> {
-        let id = Id::new(self.values.len());
-        self.values.push(ShimValue::I128(val))?;
-
-        Ok(id)
+impl<'a, A: Allocator> NewValue<i128, A> for Interpreter<'a, A> {
+    fn new_value(&mut self, val: i128) -> Result<Gc<ShimValue<A>>, AllocError> {
+        Ok(self.collector.manage(ShimValue::I128(val)))
     }
 }
 
-impl<'a, A: Allocator> NewValue<f64> for Interpreter<'a, A> {
-    fn new_value(&mut self, val: f64) -> Result<Id, AllocError> {
-        let id = Id::new(self.values.len());
-        self.values.push(ShimValue::F64(val))?;
-
-        Ok(id)
+impl<'a, A: Allocator> NewValue<f64, A> for Interpreter<'a, A> {
+    fn new_value(&mut self, val: f64) -> Result<Gc<ShimValue<A>>, AllocError> {
+        Ok(self.collector.manage(ShimValue::F64(val)))
     }
 }
 
-impl<'a, A: Allocator> NewValue<ShimValue<A>> for Interpreter<'a, A> {
-    fn new_value(&mut self, val: ShimValue<A>) -> Result<Id, AllocError> {
-        let id = Id::new(self.values.len());
-        self.values.push(val)?;
-
-        Ok(id)
+impl<'a, A: Allocator> NewValue<ShimValue<A>, A> for Interpreter<'a, A> {
+    fn new_value(&mut self, val: ShimValue<A>) -> Result<Gc<ShimValue<A>>, AllocError> {
+        Ok(self.collector.manage(val))
     }
 }
 
@@ -975,7 +977,7 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
     pub fn new(allocator: A) -> Interpreter<'a, A> {
         Interpreter {
             allocator,
-            values: AVec::new(allocator),
+            collector: Collector::new(),
             env: Environment {
                 prev: None,
                 map: AHashMap::new(allocator),
@@ -992,7 +994,10 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
         self.print.as_mut().map(|p| p.print(text));
     }
 
-    pub fn interpret_expression(&mut self, expr: &Expression<A>) -> Result<Id, ShimError> {
+    pub fn interpret_expression(
+        &mut self,
+        expr: &Expression<A>,
+    ) -> Result<Gc<ShimValue<A>>, ShimError> {
         Ok(match expr {
             Expression::Identifier(ident) => {
                 let ident_slice: &[u8] = ident;
@@ -1024,7 +1029,7 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
                 let left = self.interpret_expression(&*left)?;
                 let right = self.interpret_expression(&*right)?;
 
-                let result = match (&self.values[left.0], &self.values[right.0]) {
+                let result = match (&*left.borrow(), &*right.borrow()) {
                     (ShimValue::I128(a), ShimValue::I128(b)) => match op {
                         BinaryOp::Add => ShimValue::I128(a + b),
                         BinaryOp::Sub => ShimValue::I128(a - b),
@@ -1047,14 +1052,13 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
             }
             Expression::Call(cexpr) => {
                 let func = self.interpret_expression(&cexpr.func)?;
-                match self.values[func.0] {
+                let x = match *func.borrow() {
                     ShimValue::PrintFn => {
                         let last_idx = cexpr.args.len() as isize - 1;
                         for (idx, arg) in cexpr.args.iter().enumerate() {
                             let arg = self.interpret_expression(arg)?;
 
-                            let arg_str: AVec<u8, A> =
-                                self.values[arg.0].stringify(self.allocator)?;
+                            let arg_str: AVec<u8, A> = arg.borrow().stringify(self.allocator)?;
                             self.print(&arg_str);
 
                             if idx as isize != last_idx {
@@ -1068,7 +1072,8 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
                         self.print(b"Can't call value\n");
                         self.new_value(ShimValue::I128(42))?
                     }
-                }
+                };
+                x
             }
         })
     }
@@ -1145,7 +1150,7 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
             }
             Statement::IfStatement(if_stmt) => {
                 let predicate_result = self.interpret_expression(&if_stmt.predicate)?;
-                let exit_result = if self.values[predicate_result.0].is_truthy() {
+                let exit_result = if predicate_result.borrow().is_truthy() {
                     self.interpret_block(&if_stmt.if_block)?
                 } else if let Some(else_block) = &if_stmt.else_block {
                     self.interpret_block(else_block)?
@@ -1160,8 +1165,8 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
                 }
             }
             Statement::WhileStatement(predicate, block) => loop {
-                let id = self.interpret_expression(&predicate)?;
-                if !self.values[id.0].is_truthy() {
+                let predicate = self.interpret_expression(&predicate)?;
+                if !predicate.borrow().is_truthy() {
                     break;
                 }
                 match self.interpret_block(&block)? {
@@ -1202,6 +1207,9 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
                 self.print(b"ERROR: Misc error\n");
             }
         }
+
+        // TODO: figure out where to put this...
+        self.collector.collect_cycles();
 
         Ok(())
     }

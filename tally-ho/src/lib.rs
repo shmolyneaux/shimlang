@@ -1,10 +1,9 @@
-use std::cell::{Cell, RefCell, Ref, RefMut};
+use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::rc::{Rc, Weak};
 
 /// A type that can have and break cycles.
 pub trait Manage {
-    // TODO: it seems like we could do some lifetime stuff to make sure that
-    // we're only tracing things that are relevant to _this_ Collector
+    // TODO: Replace with AVec
     /// Updates `traces` with all the GC-tracked references directly accessible
     /// to this object.
     fn trace<'a>(&'a self, traces: &mut Vec<&'a Gc<Self>>);
@@ -33,11 +32,13 @@ impl<T> Gc<T> {
         }
     }
 
-    fn inner_mut(&mut self) -> RefMut<'_, T> {
+    /// Panics when there's any outstanding borrow
+    pub fn borrow_mut(&mut self) -> RefMut<'_, T> {
         self.value.1.borrow_mut()
     }
 
-    fn inner(&self) -> Ref<'_, T> {
+    /// Panics when there's an outstanding mutable borrow
+    pub fn borrow(&self) -> Ref<'_, T> {
         self.value.1.borrow()
     }
 
@@ -65,15 +66,14 @@ impl<T> Gc<T> {
 impl<T: ?Sized> Clone for Gc<T> {
     fn clone(&self) -> Self {
         Self {
-            value: self.value.clone()
+            value: self.value.clone(),
         }
     }
 }
 
 pub struct Collector<T: Manage> {
-    // TODO: these should be weak RC's so that objects without cycles get freed
-    // mor eagerly
-    items: Vec<Weak<(Cell<usize>, RefCell<T>)>>
+    // TODO: Replace with AVec
+    items: Vec<Weak<(Cell<usize>, RefCell<T>)>>,
 }
 
 impl<T: Manage> Collector<T> {
@@ -109,7 +109,7 @@ impl<T: Manage> Collector<T> {
             // to constantly create/resize it?
             let mut items_to_tally = Vec::new();
 
-            let item_ref = item.inner();
+            let item_ref = item.borrow();
             item_ref.trace(&mut items_to_tally);
 
             let mut drop_item = false;
@@ -129,7 +129,7 @@ impl<T: Manage> Collector<T> {
             std::mem::drop(item_ref);
 
             if drop_item {
-                item.inner_mut().cycle_break();
+                item.borrow_mut().cycle_break();
             }
 
             // Decrement the tally as the Gc we created in the predicate gets dropped
@@ -144,7 +144,7 @@ impl<T: Manage> Collector<T> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Gc, Collector, Manage};
+    use crate::{Collector, Gc, Manage};
 
     enum Value {
         Int(u8),
@@ -155,9 +155,7 @@ mod tests {
         fn push(&mut self, value: Gc<Value>) {
             match self {
                 Value::Int(_) => panic!("Cannot push to int"),
-                Value::List(v) => {
-                    v.push(value)
-                }
+                Value::List(v) => v.push(value),
             }
         }
     }
@@ -166,18 +164,14 @@ mod tests {
         fn trace<'a>(&'a self, traces: &mut Vec<&'a Gc<Self>>) {
             match self {
                 Value::Int(_) => {}
-                Value::List(v) => {
-                    *traces = v.iter().collect()
-                }
+                Value::List(v) => *traces = v.iter().collect(),
             }
         }
 
         fn cycle_break(&mut self) {
             match self {
                 Value::Int(_) => {}
-                Value::List(v) => {
-                    v.clear()
-                }
+                Value::List(v) => v.clear(),
             }
         }
     }
