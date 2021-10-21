@@ -1,7 +1,0 @@
-// Functions that appear in a block can be called anywhere in the block they're
-// declared. This allows for recursion and mutual recursion.
-tell();
-
-fn tell() {
-    print("in fn");
-}

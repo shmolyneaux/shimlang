@@ -904,6 +904,7 @@ fn parse_expression<'a, A: Allocator>(
     parse_equality(tokens, allocator)
 }
 
+#[derive(Debug)]
 pub enum ShimValue<A: Allocator> {
     // A variant used to replace a previous-valid value after GC
     Freed,
@@ -996,6 +997,7 @@ impl<A: Allocator> Manage for ShimValue<A> {
     }
 }
 
+#[derive(Debug)]
 struct Environment<A: Allocator> {
     prev: Option<ABox<Environment<A>, A>>,
     map: AHashMap<AVec<u8, A>, Gc<ShimValue<A>>, A>,
@@ -1180,22 +1182,21 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
                             return Err(ShimError::Other(b"incorrect arity"));
                         }
 
-                        let mut env = Environment {
+                        let mut fn_env = Environment {
                             prev: None,
                             map: AHashMap::new(self.allocator),
                         };
 
-                        std::mem::swap(&mut env, &mut self.env);
-
                         for (name, expr) in args.iter().zip(cexpr.args.iter()) {
                             let value = self.interpret_expression(expr)?;
                             let name: AVec<u8, A> = name.aclone()?;
-                            self.env.declare(name, value)?;
+                            fn_env.declare(name, value)?;
                         }
 
-                        let exit_result = self.interpret_block(&block)?;
-
-                        std::mem::swap(&mut env, &mut self.env);
+                        std::mem::swap(&mut fn_env, &mut self.env);
+                        let exit_result = self.interpret_block(&block);
+                        std::mem::swap(&mut fn_env, &mut self.env);
+                        let exit_result = exit_result?;
 
                         match exit_result {
                             BlockExit::Finish => self.new_value(ShimValue::Unit)?,

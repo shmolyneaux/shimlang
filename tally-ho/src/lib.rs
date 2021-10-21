@@ -13,6 +13,7 @@ pub trait Manage {
     fn cycle_break(&mut self);
 }
 
+#[derive(Debug)]
 pub struct Gc<T: ?Sized> {
     value: Rc<(Cell<usize>, RefCell<T>)>,
 }
