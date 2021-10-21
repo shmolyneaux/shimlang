@@ -1,6 +1,6 @@
 #![feature(allocator_api)]
 
-use acollections::{ABox, AHashMap, AVec};
+use acollections::{ABox, AHashMap, AVec, AClone};
 use lexical_core::FormattedSize;
 use std::alloc::AllocError;
 use tally_ho::{Collector, Gc, Manage};
@@ -398,6 +398,17 @@ pub struct CallExpr<A: Allocator> {
     args: AVec<Expression<A>, A>,
 }
 
+impl<A: Allocator> AClone for CallExpr<A> {
+    fn aclone(&self) -> Result<Self, AllocError> {
+        Ok(
+            CallExpr {
+                func: ABox::aclone(&self.func)?,
+                args: self.args.aclone()?
+            }
+        )
+    }
+}
+
 #[derive(Debug)]
 pub enum Expression<A: Allocator> {
     Identifier(AVec<u8, A>),
@@ -409,9 +420,35 @@ pub enum Expression<A: Allocator> {
     Call(CallExpr<A>),
 }
 
+impl<A: Allocator> AClone for Expression<A> {
+    fn aclone(&self) -> Result<Self, AllocError> {
+        let res = match self {
+            Expression::Identifier(vec) => Expression::Identifier(vec.clone(vec.allocator.clone())?),
+            Expression::BoolLiteral(b) => Expression::BoolLiteral(*b),
+            Expression::IntLiteral(i) => Expression::IntLiteral(*i),
+            Expression::FloatLiteral(f) => Expression::FloatLiteral(*f),
+            Expression::StringLiteral(vec) => Expression::StringLiteral(vec.clone(vec.allocator.clone())?),
+            Expression::Binary(op, expr_a, expr_b) => {
+                Expression::Binary(*op, ABox::aclone(expr_a)?, ABox::aclone(expr_b)?)
+            }
+            Expression::Call(cexpr) => Expression::Call(cexpr.aclone()?)
+        };
+
+        Ok(res)
+    }
+}
+
 #[derive(Debug)]
 pub struct Block<A: Allocator> {
     stmts: AVec<Statement<A>, A>,
+}
+
+impl<A: Allocator> AClone for Block<A> {
+    fn aclone(&self) -> Result<Self, AllocError> {
+        Ok(Block {
+            stmts: self.stmts.aclone()?
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -419,6 +456,20 @@ pub struct IfStatement<A: Allocator> {
     predicate: Expression<A>,
     if_block: Block<A>,
     else_block: Option<Block<A>>,
+}
+
+impl<A: Allocator> AClone for IfStatement<A> {
+    fn aclone(&self) -> Result<Self, AllocError> {
+        Ok(IfStatement {
+            predicate: self.predicate.aclone()?,
+            if_block: self.if_block.aclone()?,
+            else_block: if let Some(block) = &self.else_block {
+                Some(block.aclone()?)
+            } else {
+                None
+            }
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -429,8 +480,27 @@ pub enum Statement<A: Allocator> {
     Block(Block<A>),
     IfStatement(IfStatement<A>),
     WhileStatement(Expression<A>, Block<A>),
+    FnDef(AVec<u8, A>, AVec<AVec<u8, A>, A>, Block<A>),
     BreakStatement,
     ContinueStatement,
+}
+
+impl<A: Allocator> AClone for Statement<A> {
+    fn aclone(&self) -> Result<Self, AllocError> {
+        let res = match self {
+            Statement::Expression(expr) => Statement::Expression(expr.aclone()?),
+            Statement::Declaration(name, expr) => Statement::Declaration(name.aclone()?, expr.aclone()?),
+            Statement::Assignment(name, expr) => Statement::Assignment(name.aclone()?, expr.aclone()?),
+            Statement::Block(block) =>  Statement::Block(block.aclone()?),
+            Statement::IfStatement(if_stmt) => Statement::IfStatement(if_stmt.aclone()?),
+            Statement::WhileStatement(predicate, block) => Statement::WhileStatement(predicate.aclone()?, block.aclone()?),
+            Statement::FnDef(name, arg_list, block) =>  Statement::FnDef(name.aclone()?, arg_list.aclone()?, block.aclone()?),
+            Statement::BreakStatement =>  Statement::BreakStatement,
+            Statement::ContinueStatement => Statement::ContinueStatement,
+        };
+
+        Ok(res)
+    }
 }
 
 #[derive(Debug)]
@@ -771,6 +841,42 @@ fn parse_statement<'a, A: Allocator>(
             return Err(PureParseError::Generic(b"Missing semicolon after continue").into());
         }
         Ok(Statement::ContinueStatement)
+    } else if tokens.matches(Token::FnKeyword) {
+        if let Token::Identifier(name) = tokens.peek() {
+            let mut name_vec = AVec::new(allocator);
+            name_vec.extend_from_slice(&name)?;
+
+            tokens.advance();
+            if !tokens.matches(Token::LeftParen) {
+                return Err(PureParseError::Generic(b"Missing paren after fn identifier").into());
+            }
+
+            let mut arg_names = AVec::new(allocator);
+            while tokens.peek() != Token::RightParen && !tokens.matches(Token::EOF) {
+                if let Token::Identifier(arg_name) = tokens.peek() {
+                    let arg_name = AVec::from_slice(&arg_name, allocator)?;
+                    arg_names.push(arg_name)?;
+                } else {
+                    return Err(PureParseError::Generic(b"Expected identifier in fn arg list").into());
+                }
+
+                tokens.advance();
+
+                if tokens.matches(Token::Comma) {
+                    continue;
+                }
+                break;
+            }
+            if !tokens.matches(Token::RightParen) {
+                return Err(PureParseError::Generic(b"Expected right paren after fn arg list").into());
+            }
+
+            let block = parse_block(tokens, allocator)?;
+
+            Ok(Statement::FnDef(name_vec, arg_names, block))
+        } else {
+            Err(PureParseError::Generic(b"Missing identifier after fn").into())
+        }
     } else {
         let expr = parse_expression(tokens, allocator)?;
         let stmt = match (expr, tokens.peek()) {
@@ -798,8 +904,6 @@ fn parse_expression<'a, A: Allocator>(
     parse_equality(tokens, allocator)
 }
 
-// These values do not get a copy of the Allocator since they are GC'd, and
-// the memory is handled externally.
 pub enum ShimValue<A: Allocator> {
     // A variant used to replace a previous-valid value after GC
     Freed,
@@ -809,9 +913,8 @@ pub enum ShimValue<A: Allocator> {
     Bool(bool),
     I128(i128),
     F64(f64),
-    // This one actually _does_ get a copy of the Allocator, but that's because
-    // it doesn't have any external references.
     SString(AVec<u8, A>),
+    SFn(AVec<AVec<u8, A>, A>, Block<A>),
 }
 
 impl<A: Allocator> ShimValue<A> {
@@ -852,6 +955,7 @@ impl<A: Allocator> ShimValue<A> {
             Self::PrintFn => vec.extend_from_slice(b"<function print>")?,
             Self::Unit => vec.extend_from_slice(b"()")?,
             Self::SString(s) => vec.extend_from_slice(s)?,
+            Self::SFn(_, _) => vec.extend_from_slice(b"<function>")?,
         }
 
         Ok(vec)
@@ -866,6 +970,7 @@ impl<A: Allocator> ShimValue<A> {
             Self::PrintFn => true,
             Self::Unit => false,
             Self::SString(s) => s.len() > 0,
+            Self::SFn(_, _) => true,
         }
     }
 }
@@ -881,7 +986,8 @@ impl<A: Allocator> Manage for ShimValue<A> {
             Self::PrintFn => {}
             Self::Unit => {}
             Self::SString(_) => {}
-            // Rest...
+            // Functions don't hold GC'd values (closures will though...)
+            Self::SFn(_, _) => {},
         }
     }
 
@@ -1052,7 +1158,7 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
             }
             Expression::Call(cexpr) => {
                 let func = self.interpret_expression(&cexpr.func)?;
-                let x = match *func.borrow() {
+                let x = match &*func.borrow() {
                     ShimValue::PrintFn => {
                         let last_idx = cexpr.args.len() as isize - 1;
                         for (idx, arg) in cexpr.args.iter().enumerate() {
@@ -1067,6 +1173,35 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
                         }
                         self.print(b"\n");
                         self.new_value(ShimValue::Unit)?
+                    }
+                    ShimValue::SFn(args, block) => {
+                        if args.len() != cexpr.args.len() {
+                            self.print(b"Got unexpected number of arguments\n");
+                            return Err(ShimError::Other(b"incorrect arity"));
+                        }
+
+                        let mut env = Environment {
+                            prev: None,
+                            map: AHashMap::new(self.allocator),
+                        };
+
+                        std::mem::swap(&mut env, &mut self.env);
+
+                        for (name, expr) in args.iter().zip(cexpr.args.iter()) {
+                            let value = self.interpret_expression(expr)?;
+                            let name: AVec<u8, A> = name.aclone()?;
+                            self.env.declare(name, value)?;
+                        }
+
+                        let exit_result = self.interpret_block(&block)?;
+
+                        std::mem::swap(&mut env, &mut self.env);
+
+                        match exit_result {
+                            BlockExit::Finish => self.new_value(ShimValue::Unit)?,
+                            BlockExit::Break => self.new_value(ShimValue::Unit)?,
+                            BlockExit::Continue => self.new_value(ShimValue::Unit)?,
+                        }
                     }
                     _ => {
                         self.print(b"Can't call value\n");
@@ -1131,7 +1266,7 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
             }
             Statement::Declaration(name, expr) => {
                 let id = self.interpret_expression(expr)?;
-                let name_clone: AVec<u8, A> = name.clone(self.allocator)?;
+                let name_clone: AVec<u8, A> = name.aclone()?;
                 self.env.declare(name_clone, id)?;
             }
             Statement::Assignment(name, expr) => {
@@ -1176,6 +1311,19 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
             },
             Statement::BreakStatement => return Ok(Some(BlockExit::Break)),
             Statement::ContinueStatement => return Ok(Some(BlockExit::Continue)),
+            Statement::FnDef(name, args, block) => {
+                let name = name.aclone()?;
+                let args = args.aclone()?;
+
+                // TODO: a significant amount of effort would be saved if this
+                // block didn't need to be cloned since it forces a _bunch_ of
+                // other types to need to be cloned as well.
+                let block = block.aclone()?;
+
+                let fn_obj = self.new_value(ShimValue::SFn(args, block))?;
+
+                self.env.declare(name, fn_obj)?;
+            }
         }
 
         Ok(None)

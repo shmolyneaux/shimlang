@@ -20,6 +20,16 @@ use std::ptr::NonNull;
 #[derive(Debug)]
 pub struct ABox<T: ?Sized, A: Allocator>(NonNull<T>, A);
 
+pub trait AClone {
+    fn aclone(&self) -> Result<Self, AllocError> where Self: Sized;
+}
+
+impl<T: Clone+Sized> AClone for T {
+    fn aclone(&self) -> Result<Self, AllocError> {
+        Ok(self.clone())
+    }
+}
+
 impl<T, A: Allocator> ABox<T, A> {
     pub fn new(val: T, allocator: A) -> Result<Self, AllocError> {
         let layout = Layout::new::<T>();
@@ -100,12 +110,21 @@ impl<T: ?Sized, A: Allocator> BorrowMut<T> for ABox<T, A> {
     }
 }
 
+impl<T: AClone, A: Clone + Allocator> AClone for ABox<T, A> {
+    fn aclone(&self) -> Result<Self, AllocError> {
+        let val: T = self.deref().aclone()?;
+        let new_box: ABox<T, A> = ABox::new(val, self.1.clone())?;
+
+        Ok(new_box)
+    }
+}
+
 #[derive(Debug)]
 pub struct AVec<T, A: Allocator> {
     ptr: Option<NonNull<T>>,
     len: usize,
     capacity: usize,
-    allocator: A,
+    pub allocator: A,
 }
 
 impl<T, A: Allocator> AVec<T, A> {
@@ -211,10 +230,26 @@ impl<T: std::clone::Clone, A: Allocator> AVec<T, A> {
     }
 }
 
-impl<T: Clone, A: Allocator> AVec<T, A> {
+impl<T: AClone, A: Clone + Allocator> AClone for AVec<T, A> {
+    fn aclone(&self) -> Result<Self, AllocError> {
+        let mut new_vec = AVec::new(self.allocator.clone());
+        new_vec.extend_from_slice(self)?;
+
+        Ok(new_vec)
+    }
+}
+
+impl<T: AClone, A: Allocator> AVec<T, A> {
+    pub fn from_slice(slice: &[T], allocator: A) -> Result<Self, AllocError> {
+        let mut new_vec = Self::new(allocator);
+        new_vec.extend_from_slice(slice)?;
+
+        Ok(new_vec)
+    }
+
     pub fn extend_from_slice(&mut self, other: &[T]) -> Result<(), AllocError> {
         for item in other {
-            self.push(item.clone())?;
+            self.push(item.aclone()?)?;
         }
         Ok(())
     }
