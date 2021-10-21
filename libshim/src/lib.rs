@@ -5,6 +5,9 @@ use lexical_core::FormattedSize;
 use std::alloc::AllocError;
 use tally_ho::{Collector, Gc, Manage};
 
+// TODO: remove this import so that we don't get the baggage of the global allocator
+use std::rc::Rc;
+
 #[derive(Debug)]
 pub enum ShimError {
     PureParseError(PureParseError),
@@ -423,11 +426,11 @@ pub enum Expression<A: Allocator> {
 impl<A: Allocator> AClone for Expression<A> {
     fn aclone(&self) -> Result<Self, AllocError> {
         let res = match self {
-            Expression::Identifier(vec) => Expression::Identifier(vec.clone(vec.allocator.clone())?),
+            Expression::Identifier(vec) => Expression::Identifier(vec.aclone()?),
             Expression::BoolLiteral(b) => Expression::BoolLiteral(*b),
             Expression::IntLiteral(i) => Expression::IntLiteral(*i),
             Expression::FloatLiteral(f) => Expression::FloatLiteral(*f),
-            Expression::StringLiteral(vec) => Expression::StringLiteral(vec.clone(vec.allocator.clone())?),
+            Expression::StringLiteral(vec) => Expression::StringLiteral(vec.aclone()?),
             Expression::Binary(op, expr_a, expr_b) => {
                 Expression::Binary(*op, ABox::aclone(expr_a)?, ABox::aclone(expr_b)?)
             }
@@ -473,6 +476,34 @@ impl<A: Allocator> AClone for IfStatement<A> {
 }
 
 #[derive(Debug)]
+pub struct FnDef<A: Allocator> {
+    name: AVec<u8, A>,
+    args: AVec<AVec<u8, A>, A>,
+    block: Block<A>,
+    //env: Rc<Environment<A>>
+}
+
+impl<A: Allocator> FnDef<A> {
+    fn new(name: AVec<u8, A>,args: AVec<AVec<u8, A>, A>,block: Block<A>) -> Self {
+        Self {
+            name, args, block
+        }
+    }
+}
+
+impl<A: Allocator> AClone for FnDef<A> {
+    fn aclone(&self) -> Result<Self, AllocError> {
+        Ok(
+            FnDef {
+                name: self.name.aclone()?,
+                args: self.args.aclone()?,
+                block: self.block.aclone()?
+            }
+        )
+    }
+}
+
+#[derive(Debug)]
 pub enum Statement<A: Allocator> {
     Expression(Expression<A>),
     Declaration(AVec<u8, A>, Expression<A>),
@@ -480,7 +511,7 @@ pub enum Statement<A: Allocator> {
     Block(Block<A>),
     IfStatement(IfStatement<A>),
     WhileStatement(Expression<A>, Block<A>),
-    FnDef(AVec<u8, A>, AVec<AVec<u8, A>, A>, Block<A>),
+    FnDef(FnDef<A>),
     BreakStatement,
     ContinueStatement,
 }
@@ -494,7 +525,7 @@ impl<A: Allocator> AClone for Statement<A> {
             Statement::Block(block) =>  Statement::Block(block.aclone()?),
             Statement::IfStatement(if_stmt) => Statement::IfStatement(if_stmt.aclone()?),
             Statement::WhileStatement(predicate, block) => Statement::WhileStatement(predicate.aclone()?, block.aclone()?),
-            Statement::FnDef(name, arg_list, block) =>  Statement::FnDef(name.aclone()?, arg_list.aclone()?, block.aclone()?),
+            Statement::FnDef(def) =>  Statement::FnDef(def.aclone()?),
             Statement::BreakStatement =>  Statement::BreakStatement,
             Statement::ContinueStatement => Statement::ContinueStatement,
         };
@@ -873,7 +904,7 @@ fn parse_statement<'a, A: Allocator>(
 
             let block = parse_block(tokens, allocator)?;
 
-            Ok(Statement::FnDef(name_vec, arg_names, block))
+            Ok(Statement::FnDef(FnDef::new(name_vec, arg_names, block)))
         } else {
             Err(PureParseError::Generic(b"Missing identifier after fn").into())
         }
@@ -1004,6 +1035,15 @@ struct Environment<A: Allocator> {
 }
 
 impl<A: Allocator> Environment<A> {
+    fn new(allocator: A) -> Self {
+        Environment {
+            prev: None,
+            map: AHashMap::new(allocator),
+        }
+    }
+}
+
+impl<A: Allocator> Environment<A> {
     fn assign(&mut self, name: &AVec<u8, A>, val: Gc<ShimValue<A>>) -> Result<(), ()> {
         // TODO: for values captured by closures this needs to be different.
         // Imagine an pair of closure `get_count` and `inc_count`. Incrementing
@@ -1026,6 +1066,8 @@ impl<A: Allocator> Environment<A> {
 
     fn find(&mut self, name: &AVec<u8, A>) -> Option<Gc<ShimValue<A>>> {
         if let Some(val) = self.map.get(name) {
+            // NOTE: this clone does not allocate and can't fail (even when it
+            // eventually moves to using ARc)
             Some(val.clone())
         } else if let Some(env) = &mut self.prev {
             env.find(name)
@@ -1086,10 +1128,7 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
         Interpreter {
             allocator,
             collector: Collector::new(),
-            env: Environment {
-                prev: None,
-                map: AHashMap::new(allocator),
-            },
+            env: Environment::new(allocator),
             print: None,
         }
     }
@@ -1182,10 +1221,7 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
                             return Err(ShimError::Other(b"incorrect arity"));
                         }
 
-                        let mut fn_env = Environment {
-                            prev: None,
-                            map: AHashMap::new(self.allocator),
-                        };
+                        let mut fn_env = Environment::new(self.allocator);
 
                         for (name, expr) in args.iter().zip(cexpr.args.iter()) {
                             let value = self.interpret_expression(expr)?;
@@ -1233,10 +1269,7 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
 
     fn interpret_block(&mut self, block: &Block<A>) -> Result<BlockExit, ShimError> {
         fn enter_block<A: Allocator>(interpreter: &mut Interpreter<A>) -> Result<(), AllocError> {
-            let mut new_env = Environment {
-                prev: None,
-                map: AHashMap::new(interpreter.allocator),
-            };
+            let mut new_env = Environment::new(interpreter.allocator);
 
             // Assign new_env to .env
             std::mem::swap(&mut interpreter.env, &mut new_env);
@@ -1312,14 +1345,15 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
             },
             Statement::BreakStatement => return Ok(Some(BlockExit::Break)),
             Statement::ContinueStatement => return Ok(Some(BlockExit::Continue)),
-            Statement::FnDef(name, args, block) => {
-                let name = name.aclone()?;
-                let args = args.aclone()?;
+            Statement::FnDef(def) => {
+                let name = def.name.aclone()?;
+                let args = def.args.aclone()?;
 
                 // TODO: a significant amount of effort would be saved if this
                 // block didn't need to be cloned since it forces a _bunch_ of
                 // other types to need to be cloned as well.
-                let block = block.aclone()?;
+                // Maybe it should be an Rc block?
+                let block = def.block.aclone()?;
 
                 let fn_obj = self.new_value(ShimValue::SFn(args, block))?;
 

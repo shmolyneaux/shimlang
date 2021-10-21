@@ -221,15 +221,6 @@ impl<T, A: Allocator> AVec<T, A> {
     }
 }
 
-impl<T: std::clone::Clone, A: Allocator> AVec<T, A> {
-    pub fn clone(&self, allocator: A) -> Result<Self, AllocError> {
-        let mut new_vec = AVec::new(allocator);
-        new_vec.extend_from_slice(self)?;
-
-        Ok(new_vec)
-    }
-}
-
 impl<T: AClone, A: Clone + Allocator> AClone for AVec<T, A> {
     fn aclone(&self) -> Result<Self, AllocError> {
         let mut new_vec = AVec::new(self.allocator.clone());
