@@ -78,6 +78,10 @@ pub fn main(argc: i32, _argv: *const *const i8) -> Result<(), std::alloc::AllocE
     // We open this ourselves since there's no way to open a file from a path
     // without using the global allocator...
     let fd = unsafe { libc::open(script_name, libc::O_RDONLY) };
+    if fd == -1 {
+        stdout.write(b"Error while opening script\n").unwrap();
+        return Ok(());
+    }
     let mut file = unsafe { File::from_raw_fd(fd) };
 
     let file_length = file.seek(SeekFrom::End(0)).unwrap() as usize;
