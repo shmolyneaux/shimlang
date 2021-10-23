@@ -1,0 +1,26 @@
+fn Obj() {
+    fn foo() {
+        print("foo'd");
+    }
+
+    fn bar() {
+        print("bar'd");
+    }
+
+    fn run_fn(method) {
+        if method == "foo" {
+            foo();
+        } else if method == "bar" {
+            bar();
+        } else {
+            print("unknown fn", method);
+        }
+    }
+
+    return run_fn;
+}
+
+let obj = Obj();
+obj("foo");
+obj("bar");
+obj("can");

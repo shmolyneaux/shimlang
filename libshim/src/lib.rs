@@ -1203,8 +1203,8 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
                 let left = self.interpret_expression(&*left)?;
                 let right = self.interpret_expression(&*right)?;
 
-                let result = match (&*left.borrow(), &*right.borrow()) {
-                    (ShimValue::I128(a), ShimValue::I128(b)) => match op {
+                let result = match (&*left.borrow(), &*right.borrow(), op) {
+                    (ShimValue::I128(a), ShimValue::I128(b), _) => match op {
                         BinaryOp::Add => ShimValue::I128(a + b),
                         BinaryOp::Sub => ShimValue::I128(a - b),
                         BinaryOp::Mul => ShimValue::I128(a * b),
@@ -1216,6 +1216,8 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
                         BinaryOp::Lt => ShimValue::Bool(a < b),
                         BinaryOp::Lte => ShimValue::Bool(a <= b),
                     },
+                    (ShimValue::SString(a), ShimValue::SString(b), BinaryOp::Eq) => ShimValue::Bool(a == b),
+                    (ShimValue::SString(a), ShimValue::SString(b), BinaryOp::Neq) => ShimValue::Bool(a != b),
                     _ => {
                         self.print(b"TODO: values can't be bin-opped\n");
                         ShimValue::I128(42)
