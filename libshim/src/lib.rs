@@ -1057,9 +1057,7 @@ impl<A: Allocator> Environment<A> {
             map: AHashMap::new(allocator),
         }
     }
-}
 
-impl<A: Allocator> Environment<A> {
     /// May panic if there's an outstanding borrow of `prev`
     fn assign(&mut self, name: &AVec<u8, A>, val: Gc<ShimValue<A>>) -> Result<(), ()> {
         // TODO: for values captured by closures this needs to be different.
@@ -1318,9 +1316,10 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
         }
 
         fn exit_block<A: Allocator>(interpreter: &mut Interpreter<A>) {
-            let prev_env = interpreter.env.borrow_mut().prev.take().unwrap();
+            let mut prev_env = interpreter.env.borrow().prev.as_ref().unwrap().clone();
 
-            interpreter.env = prev_env;
+            std::mem::swap(&mut interpreter.env, &mut prev_env);
+
             interpreter.env.borrow().depth().unwrap();
         }
 
