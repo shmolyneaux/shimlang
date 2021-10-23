@@ -514,6 +514,7 @@ pub enum Statement<A: Allocator> {
     FnDef(FnDef<A>),
     BreakStatement,
     ContinueStatement,
+    ReturnStatement(Expression<A>),
 }
 
 impl<A: Allocator> AClone for Statement<A> {
@@ -528,6 +529,7 @@ impl<A: Allocator> AClone for Statement<A> {
             Statement::FnDef(def) =>  Statement::FnDef(def.aclone()?),
             Statement::BreakStatement =>  Statement::BreakStatement,
             Statement::ContinueStatement => Statement::ContinueStatement,
+            Statement::ReturnStatement(expr) => Statement::ReturnStatement(expr.aclone()?),
         };
 
         Ok(res)
@@ -872,6 +874,12 @@ fn parse_statement<'a, A: Allocator>(
             return Err(PureParseError::Generic(b"Missing semicolon after continue").into());
         }
         Ok(Statement::ContinueStatement)
+    } else if tokens.matches(Token::ReturnKeyword) {
+        let expr = parse_expression(tokens, allocator)?;
+        if !tokens.matches(Token::Semicolon) {
+            return Err(PureParseError::Generic(b"Missing semicolon after return").into());
+        }
+        Ok(Statement::ReturnStatement(expr))
     } else if tokens.matches(Token::FnKeyword) {
         if let Token::Identifier(name) = tokens.peek() {
             let mut name_vec = AVec::new(allocator);
@@ -1135,10 +1143,11 @@ impl<'a, A: Allocator> NewValue<ShimValue<A>, A> for Interpreter<'a, A> {
     }
 }
 
-enum BlockExit {
+enum BlockExit<A: Allocator> {
     Break,
     Continue,
     Finish,
+    Return(Gc<ShimValue<A>>),
 }
 
 impl<'a, A: Allocator> Interpreter<'a, A> {
@@ -1261,6 +1270,7 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
                             BlockExit::Finish => self.new_value(ShimValue::Unit)?,
                             BlockExit::Break => self.new_value(ShimValue::Unit)?,
                             BlockExit::Continue => self.new_value(ShimValue::Unit)?,
+                            BlockExit::Return(val) => val,
                         }
                     }
                     _ => {
@@ -1273,7 +1283,7 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
         })
     }
 
-    fn interpret_block_inner(&mut self, block: &Block<A>) -> Result<BlockExit, ShimError> {
+    fn interpret_block_inner(&mut self, block: &Block<A>) -> Result<BlockExit<A>, ShimError> {
         for stmt in block.stmts.iter() {
             match self.interpret_statement(stmt)? {
                 Some(BlockExit::Finish) => {}
@@ -1282,6 +1292,7 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
                 // Special exit cases
                 Some(BlockExit::Break) => return Ok(BlockExit::Break),
                 Some(BlockExit::Continue) => return Ok(BlockExit::Continue),
+                Some(BlockExit::Return(val)) => return Ok(BlockExit::Return(val)),
             }
         }
 
@@ -1290,7 +1301,7 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
         Ok(BlockExit::Finish)
     }
 
-    fn interpret_block(&mut self, block: &Block<A>) -> Result<BlockExit, ShimError> {
+    fn interpret_block(&mut self, block: &Block<A>) -> Result<BlockExit<A>, ShimError> {
         fn enter_block<A: Allocator>(interpreter: &mut Interpreter<A>) -> Result<(), AllocError> {
             let mut new_env = Rc::new(RefCell::new(Environment::new(interpreter.allocator)));
             new_env.borrow().depth().unwrap();
@@ -1320,7 +1331,7 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
         res
     }
 
-    fn interpret_statement(&mut self, stmt: &Statement<A>) -> Result<Option<BlockExit>, ShimError> {
+    fn interpret_statement(&mut self, stmt: &Statement<A>) -> Result<Option<BlockExit<A>>, ShimError> {
         match stmt {
             Statement::Expression(expr) => {
                 self.interpret_expression(expr)?;
@@ -1359,6 +1370,7 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
                     BlockExit::Break => return Ok(Some(BlockExit::Break)),
                     BlockExit::Continue => return Ok(Some(BlockExit::Continue)),
                     BlockExit::Finish => {}
+                    BlockExit::Return(expr) => return Ok(Some(BlockExit::Return(expr))),
                 }
             }
             Statement::WhileStatement(predicate, block) => loop {
@@ -1369,10 +1381,15 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
                 match self.interpret_block(&block)? {
                     BlockExit::Break => return Ok(Some(BlockExit::Finish)),
                     BlockExit::Continue | BlockExit::Finish => continue,
+                    BlockExit::Return(expr) => return Ok(Some(BlockExit::Return(expr))),
                 }
             },
             Statement::BreakStatement => return Ok(Some(BlockExit::Break)),
             Statement::ContinueStatement => return Ok(Some(BlockExit::Continue)),
+            Statement::ReturnStatement(expr) => {
+                let val = self.interpret_expression(expr)?;
+                return Ok(Some(BlockExit::Return(val)));
+            }
             Statement::FnDef(def) => {
                 let name = def.name.aclone()?;
                 let args = def.args.aclone()?;
