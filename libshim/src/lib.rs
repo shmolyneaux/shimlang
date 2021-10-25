@@ -4,6 +4,7 @@ use acollections::{ABox, AHashMap, AVec, AClone};
 use lexical_core::FormattedSize;
 use std::alloc::AllocError;
 use tally_ho::{Collector, Gc, Manage};
+use std::fmt::Debug;
 
 #[derive(Debug)]
 pub enum ShimError {
@@ -939,19 +940,33 @@ fn parse_expression<'a, A: Allocator>(
     parse_equality(tokens, allocator)
 }
 
-#[derive(Debug)]
 pub enum ShimValue<A: Allocator> {
     // A variant used to replace a previous-valid value after GC
     Freed,
-    // Hard-code this for now until we can declare values
-    PrintFn,
     Unit,
     Bool(bool),
     I128(i128),
     F64(f64),
     SString(AVec<u8, A>),
     SFn(AVec<AVec<u8, A>, A>, Block<A>, Gc<ShimValue<A>>),
+    NativeFn(Box<dyn Fn(AVec<Gc<ShimValue<A>>, A>, &mut Interpreter<A>) -> Result<Gc<ShimValue<A>>, ShimError>>),
     Env(Environment<A>),
+}
+
+impl<A: Allocator> Debug for ShimValue<A> {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        match self {
+            Self::I128(val) => fmt.write_fmt(format_args!("{}", val)),
+            Self::F64(val) => fmt.write_fmt(format_args!("{}", val)),
+            Self::Bool(b) => fmt.write_fmt(format_args!("{}", b)),
+            Self::Freed => fmt.write_fmt(format_args!("<freed>")),
+            Self::Unit => fmt.write_fmt(format_args!("()")),
+            Self::SString(s) => fmt.write_fmt(format_args!("{}", std::str::from_utf8(s).unwrap())),
+            Self::SFn(..) => fmt.write_fmt(format_args!("<fn>")),
+            Self::NativeFn(..) => fmt.write_fmt(format_args!("<native fn>")),
+            Self::Env(..) => fmt.write_fmt(format_args!("<env>")),
+        }
+    }
 }
 
 impl<A: Allocator> ShimValue<A> {
@@ -989,10 +1004,10 @@ impl<A: Allocator> ShimValue<A> {
             Self::Bool(true) => vec.extend_from_slice(b"true")?,
             Self::Bool(false) => vec.extend_from_slice(b"false")?,
             Self::Freed => vec.extend_from_slice(b"*freed*")?,
-            Self::PrintFn => vec.extend_from_slice(b"<function print>")?,
             Self::Unit => vec.extend_from_slice(b"()")?,
             Self::SString(s) => vec.extend_from_slice(s)?,
-            Self::SFn(..) => vec.extend_from_slice(b"<function>")?,
+            Self::SFn(..) => vec.extend_from_slice(b"<fn>")?,
+            Self::NativeFn(..) => vec.extend_from_slice(b"<native fn>")?,
             Self::Env(..) => vec.extend_from_slice(b"<environment>")?,
         }
 
@@ -1005,11 +1020,49 @@ impl<A: Allocator> ShimValue<A> {
             Self::F64(val) => *val != 0.0,
             Self::Bool(b) => *b,
             Self::Freed => false,
-            Self::PrintFn => true,
             Self::Unit => false,
             Self::SString(s) => s.len() > 0,
             Self::SFn(_, _, _) => true,
+            Self::NativeFn(..) => true,
             Self::Env(..) => true,
+        }
+    }
+
+    fn call(&self, args: AVec<Gc<ShimValue<A>>, A>, interpreter: &mut Interpreter<A>) -> Result<Gc<ShimValue<A>>, ShimError> {
+        match self {
+            Self::SFn(parameters, block, captured_env) => {
+                if args.len() != parameters.len() {
+                    interpreter.print(b"Got unexpected number of arguments\n");
+                    return Err(ShimError::Other(b"incorrect arity"));
+                }
+
+                let mut fn_env = Environment::new_with_prev(captured_env.clone(), interpreter.allocator);
+
+                for (name, value) in parameters.iter().zip(args.iter()) {
+                    let name: AVec<u8, A> = name.aclone()?;
+                    // TODO: don't clone this and use into_iter or something
+                    fn_env.declare(name, value.aclone()?)?;
+                }
+
+                let mut fn_env = interpreter.collector.manage(ShimValue::Env(fn_env));
+
+                std::mem::swap(&mut fn_env, &mut interpreter.env);
+
+                let exit_result = interpreter.interpret_block(&block);
+                std::mem::swap(&mut fn_env, &mut interpreter.env);
+                let exit_result = exit_result?;
+
+                match exit_result {
+                    BlockExit::Finish => interpreter.new_value(ShimValue::Unit),
+                    BlockExit::Break => interpreter.new_value(ShimValue::Unit),
+                    BlockExit::Continue => interpreter.new_value(ShimValue::Unit),
+                    BlockExit::Return(val) => Ok(val),
+                }
+            }
+            Self::NativeFn(boxed_fn) => {
+                boxed_fn(args, interpreter)
+            }
+            _ => Err(ShimError::Other(b"value not callable")),
         }
     }
 }
@@ -1022,11 +1075,12 @@ impl<A: Allocator> Manage for ShimValue<A> {
             Self::F64(_) => {}
             Self::Bool(_) => {}
             Self::Freed => {}
-            Self::PrintFn => {}
             Self::Unit => {}
             Self::SString(_) => {}
             // TODO: trace these
             Self::SFn(..) => {},
+            // TODO: It seems like we need to be careful not to leak GC's here
+            Self::NativeFn(..) => {},
             Self::Env(..) => {},
         }
     }
@@ -1112,29 +1166,29 @@ pub trait Printer {
 }
 
 trait NewValue<T, A: Allocator> {
-    fn new_value(&mut self, val: T) -> Result<Gc<ShimValue<A>>, AllocError>;
+    fn new_value(&mut self, val: T) -> Result<Gc<ShimValue<A>>, ShimError>;
 }
 
 impl<'a, A: Allocator> NewValue<bool, A> for Interpreter<'a, A> {
-    fn new_value(&mut self, val: bool) -> Result<Gc<ShimValue<A>>, AllocError> {
+    fn new_value(&mut self, val: bool) -> Result<Gc<ShimValue<A>>, ShimError> {
         Ok(self.collector.manage(ShimValue::Bool(val)))
     }
 }
 
 impl<'a, A: Allocator> NewValue<i128, A> for Interpreter<'a, A> {
-    fn new_value(&mut self, val: i128) -> Result<Gc<ShimValue<A>>, AllocError> {
+    fn new_value(&mut self, val: i128) -> Result<Gc<ShimValue<A>>, ShimError> {
         Ok(self.collector.manage(ShimValue::I128(val)))
     }
 }
 
 impl<'a, A: Allocator> NewValue<f64, A> for Interpreter<'a, A> {
-    fn new_value(&mut self, val: f64) -> Result<Gc<ShimValue<A>>, AllocError> {
+    fn new_value(&mut self, val: f64) -> Result<Gc<ShimValue<A>>, ShimError> {
         Ok(self.collector.manage(ShimValue::F64(val)))
     }
 }
 
 impl<'a, A: Allocator> NewValue<ShimValue<A>, A> for Interpreter<'a, A> {
-    fn new_value(&mut self, val: ShimValue<A>) -> Result<Gc<ShimValue<A>>, AllocError> {
+    fn new_value(&mut self, val: ShimValue<A>) -> Result<Gc<ShimValue<A>>, ShimError> {
         Ok(self.collector.manage(val))
     }
 }
@@ -1192,10 +1246,6 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
     ) -> Result<Gc<ShimValue<A>>, ShimError> {
         Ok(match expr {
             Expression::Identifier(ident) => {
-                let ident_slice: &[u8] = ident;
-                if ident_slice == b"print" {
-                    return self.new_value(ShimValue::PrintFn).map_err(|e| e.into());
-                }
                 // TODO: this is very dumb. AHashMap should be updated so that
                 // the get method does deref-magic.
                 let mut vec = AVec::new(self.allocator);
@@ -1248,56 +1298,12 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
             }
             Expression::Call(cexpr) => {
                 let func = self.interpret_expression(&cexpr.func)?;
-                let x = match &*func.borrow() {
-                    ShimValue::PrintFn => {
-                        let last_idx = cexpr.args.len() as isize - 1;
-                        for (idx, arg) in cexpr.args.iter().enumerate() {
-                            let arg = self.interpret_expression(arg)?;
 
-                            let arg_str: AVec<u8, A> = arg.borrow().stringify(self.allocator)?;
-                            self.print(&arg_str);
-
-                            if idx as isize != last_idx {
-                                self.print(b" ");
-                            }
-                        }
-                        self.print(b"\n");
-                        self.new_value(ShimValue::Unit)?
-                    }
-                    ShimValue::SFn(args, block, captured_env) => {
-                        if args.len() != cexpr.args.len() {
-                            self.print(b"Got unexpected number of arguments\n");
-                            return Err(ShimError::Other(b"incorrect arity"));
-                        }
-
-                        let mut fn_env = Environment::new_with_prev(captured_env.clone(), self.allocator);
-
-                        for (name, expr) in args.iter().zip(cexpr.args.iter()) {
-                            let value = self.interpret_expression(expr)?;
-                            let name: AVec<u8, A> = name.aclone()?;
-                            fn_env.declare(name, value)?;
-                        }
-
-                        let mut fn_env = self.collector.manage(ShimValue::Env(fn_env));
-
-                        std::mem::swap(&mut fn_env, &mut self.env);
-
-                        let exit_result = self.interpret_block(&block);
-                        std::mem::swap(&mut fn_env, &mut self.env);
-                        let exit_result = exit_result?;
-
-                        match exit_result {
-                            BlockExit::Finish => self.new_value(ShimValue::Unit)?,
-                            BlockExit::Break => self.new_value(ShimValue::Unit)?,
-                            BlockExit::Continue => self.new_value(ShimValue::Unit)?,
-                            BlockExit::Return(val) => val,
-                        }
-                    }
-                    _ => {
-                        self.print(b"Can't call value\n");
-                        self.new_value(ShimValue::I128(42))?
-                    }
-                };
+                let mut args = AVec::new(self.allocator);
+                for expr in cexpr.args.iter() {
+                    args.push(self.interpret_expression(expr)?)?;
+                }
+                let x = func.borrow().call(args, self)?;
                 x
             }
         })
@@ -1432,6 +1438,30 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
     }
 
     pub fn interpret(&mut self, text: &'a [u8]) -> Result<(), ShimError> {
+        // TODO: make `new` fallible and put this there
+        let mut print_name: AVec<u8, A> = AVec::new(self.allocator);
+        print_name.extend_from_slice(b"print")?;
+        let print_fn = self.collector.manage(
+            ShimValue::NativeFn(
+                Box::new(
+                    |args, interpreter| {
+                        let last_idx = args.len() as isize - 1;
+                        for (idx, arg) in args.iter().enumerate() {
+                            let arg_str: AVec<u8, A> = arg.borrow().stringify(interpreter.allocator)?;
+                            interpreter.print(&arg_str);
+
+                            if idx as isize != last_idx {
+                                interpreter.print(b" ");
+                            }
+                        }
+                        interpreter.print(b"\n");
+                        interpreter.new_value(ShimValue::Unit)
+                    }
+                )
+            )
+        );
+        self.env_map_mut(|env| env.declare(print_name, print_fn))?;
+
         let mut tokens = TokenStream::new(text);
         let script = match parse_script(&mut tokens, self.allocator) {
             Ok(script) => script,
