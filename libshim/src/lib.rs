@@ -5,10 +5,6 @@ use lexical_core::FormattedSize;
 use std::alloc::AllocError;
 use tally_ho::{Collector, Gc, Manage};
 
-// TODO: remove this import so that we don't get the baggage of the global allocator
-use std::rc::Rc;
-use std::cell::RefCell;
-
 #[derive(Debug)]
 pub enum ShimError {
     PureParseError(PureParseError),
@@ -954,7 +950,8 @@ pub enum ShimValue<A: Allocator> {
     I128(i128),
     F64(f64),
     SString(AVec<u8, A>),
-    SFn(AVec<AVec<u8, A>, A>, Block<A>, Rc<RefCell<Environment<A>>>),
+    SFn(AVec<AVec<u8, A>, A>, Block<A>, Gc<ShimValue<A>>),
+    Env(Environment<A>),
 }
 
 impl<A: Allocator> ShimValue<A> {
@@ -996,6 +993,7 @@ impl<A: Allocator> ShimValue<A> {
             Self::Unit => vec.extend_from_slice(b"()")?,
             Self::SString(s) => vec.extend_from_slice(s)?,
             Self::SFn(..) => vec.extend_from_slice(b"<function>")?,
+            Self::Env(..) => vec.extend_from_slice(b"<environment>")?,
         }
 
         Ok(vec)
@@ -1011,6 +1009,7 @@ impl<A: Allocator> ShimValue<A> {
             Self::Unit => false,
             Self::SString(s) => s.len() > 0,
             Self::SFn(_, _, _) => true,
+            Self::Env(..) => true,
         }
     }
 }
@@ -1026,8 +1025,9 @@ impl<A: Allocator> Manage for ShimValue<A> {
             Self::PrintFn => {}
             Self::Unit => {}
             Self::SString(_) => {}
-            // Functions don't hold GC'd values (closures will though...)
+            // TODO: trace these
             Self::SFn(..) => {},
+            Self::Env(..) => {},
         }
     }
 
@@ -1039,7 +1039,7 @@ impl<A: Allocator> Manage for ShimValue<A> {
 #[derive(Debug)]
 pub struct Environment<A: Allocator> {
     /// `assign` and `find` may panic if there's an outstanding borrow to this Rc
-    prev: Option<Rc<RefCell<Environment<A>>>>,
+    prev: Option<Gc<ShimValue<A>>>,
     map: AHashMap<AVec<u8, A>, Gc<ShimValue<A>>, A>,
 }
 
@@ -1051,7 +1051,7 @@ impl<A: Allocator> Environment<A> {
         }
     }
 
-    fn new_with_prev(prev: Rc<RefCell<Environment<A>>>, allocator: A) -> Self {
+    fn new_with_prev(prev: Gc<ShimValue<A>>, allocator: A) -> Self {
         Environment {
             prev: Some(prev),
             map: AHashMap::new(allocator),
@@ -1066,8 +1066,11 @@ impl<A: Allocator> Environment<A> {
         // assign a new reference to the count when incrementing.
         if let Some(env_val) = self.map.get_mut(name) {
             Ok(*env_val = val)
-        } else if let Some(env) = &mut self.prev {
-            env.borrow_mut().assign(name, val)
+        } else if let Some(prev) = &mut self.prev {
+            match &mut *prev.borrow_mut() {
+                ShimValue::Env(prev) => prev.assign(name, val),
+                _ => Err(()),
+            }
         } else {
             // TODO: better error type
             Err(())
@@ -1080,23 +1083,18 @@ impl<A: Allocator> Environment<A> {
     }
 
     /// May panic if there's an outstanding borrow of `prev`
-    fn find(&mut self, name: &AVec<u8, A>) -> Option<Gc<ShimValue<A>>> {
+    fn find(&self, name: &AVec<u8, A>) -> Option<Gc<ShimValue<A>>> {
         if let Some(val) = self.map.get(name) {
             // NOTE: this clone does not allocate and can't fail (even when it
             // eventually moves to using ARc)
             Some(val.clone())
-        } else if let Some(env) = &mut self.prev {
-            env.borrow_mut().find(name)
+        } else if let Some(prev) = &self.prev {
+            match &*prev.borrow() {
+                ShimValue::Env(prev) => prev.find(name),
+                _ => None,
+            }
         } else {
             None
-        }
-    }
-
-    fn depth(&self) -> Result<usize, std::cell::BorrowMutError> {
-        if let Some(prev) = &self.prev {
-            Ok(1 + prev.try_borrow_mut()?.depth()?)
-        } else {
-            Ok(1)
         }
     }
 }
@@ -1104,7 +1102,7 @@ impl<A: Allocator> Environment<A> {
 pub struct Interpreter<'a, A: Allocator> {
     allocator: A,
     collector: Collector<ShimValue<A>>,
-    env: Rc<RefCell<Environment<A>>>,
+    env: Gc<ShimValue<A>>,
     // TODO: figure out how to make the ABox work like this
     print: Option<&'a mut dyn Printer>,
 }
@@ -1150,11 +1148,33 @@ enum BlockExit<A: Allocator> {
 
 impl<'a, A: Allocator> Interpreter<'a, A> {
     pub fn new(allocator: A) -> Interpreter<'a, A> {
+        let mut collector = Collector::new();
+        let env = collector.manage(ShimValue::Env(Environment::new(allocator)));
         Interpreter {
             allocator,
-            collector: Collector::new(),
-            env: Rc::new(RefCell::new(Environment::new(allocator))),
+            collector: collector,
+            env: env,
             print: None,
+        }
+    }
+
+    fn env_map_mut<F, U>(&mut self, f: F) -> U
+        where F: FnOnce(&mut Environment<A>) -> U
+    {
+        if let ShimValue::Env(env) = &mut *self.env.borrow_mut() {
+            f(env)
+        } else {
+            panic!("Interpreter env is not an Environment!")
+        }
+    }
+
+    fn env_map<F, U>(&self, f: F) -> U
+        where F: FnOnce(&Environment<A>) -> U
+    {
+        if let ShimValue::Env(env) = &*self.env.borrow() {
+            f(env)
+        } else {
+            panic!("Interpreter env is not an Environment!")
         }
     }
 
@@ -1180,7 +1200,7 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
                 // the get method does deref-magic.
                 let mut vec = AVec::new(self.allocator);
                 vec.extend_from_slice(ident)?;
-                let maybe_id = self.env.borrow_mut().find(&vec);
+                let maybe_id = self.env_map(|env| env.find(&vec));
                 if let Some(id) = maybe_id {
                     id.clone()
                 } else {
@@ -1258,7 +1278,7 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
                             fn_env.declare(name, value)?;
                         }
 
-                        let mut fn_env = Rc::new(RefCell::new(fn_env));
+                        let mut fn_env = self.collector.manage(ShimValue::Env(fn_env));
 
                         std::mem::swap(&mut fn_env, &mut self.env);
 
@@ -1303,26 +1323,21 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
 
     fn interpret_block(&mut self, block: &Block<A>) -> Result<BlockExit<A>, ShimError> {
         fn enter_block<A: Allocator>(interpreter: &mut Interpreter<A>) -> Result<(), AllocError> {
-            let mut new_env = Rc::new(RefCell::new(Environment::new(interpreter.allocator)));
-            new_env.borrow().depth().unwrap();
-            interpreter.env.borrow().depth().unwrap();
+            let mut new_env = interpreter.collector.manage(ShimValue::Env(Environment::new(interpreter.allocator)));
 
             // Assign new_env to .env
             std::mem::swap(&mut interpreter.env, &mut new_env);
 
             // Assign the old env to .prev (since it's now in new_env)
-            interpreter.env.borrow_mut().prev = Some(new_env);
-            interpreter.env.borrow().depth().unwrap();
+            interpreter.env_map_mut(|env| env.prev = Some(new_env));
 
             Ok(())
         }
 
         fn exit_block<A: Allocator>(interpreter: &mut Interpreter<A>) {
-            let mut prev_env = interpreter.env.borrow().prev.as_ref().unwrap().clone();
+            let mut prev_env = interpreter.env_map(|env| env.prev.as_ref().unwrap().clone());
 
             std::mem::swap(&mut interpreter.env, &mut prev_env);
-
-            interpreter.env.borrow().depth().unwrap();
         }
 
         enter_block(self)?;
@@ -1340,13 +1355,13 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
             Statement::Declaration(name, expr) => {
                 let id = self.interpret_expression(expr)?;
                 let name_clone: AVec<u8, A> = name.aclone()?;
-                self.env.borrow_mut().declare(name_clone, id)?;
+                self.env_map_mut(|env| env.declare(name_clone, id))?;
             }
             Statement::Assignment(name, expr) => {
                 // TODO: this should write the value to the existing id rather
                 // than writing a new id.
-                let id = self.interpret_expression(expr)?;
-                let assign_result = self.env.borrow_mut().assign(name, id);
+                let val = self.interpret_expression(expr)?;
+                let assign_result = self.env_map_mut(|env| env.assign(name, val));
                 if assign_result.is_err() {
                     self.print(b"Variable ");
                     self.print(&name);
@@ -1409,7 +1424,7 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
                     )
                 )?;
 
-                self.env.borrow_mut().declare(name, fn_obj)?;
+                self.env_map_mut(|env| env.declare(name, fn_obj))?;
             }
         }
 
