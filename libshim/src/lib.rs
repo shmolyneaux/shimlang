@@ -5,6 +5,7 @@ use lexical_core::FormattedSize;
 use std::alloc::AllocError;
 use tally_ho::{Collector, Gc, Manage};
 use std::fmt::Debug;
+use std::ops::Deref;
 
 #[derive(Debug)]
 pub enum ShimError {
@@ -419,6 +420,7 @@ pub enum Expression<A: Allocator> {
     StringLiteral(AVec<u8, A>),
     Binary(BinaryOp, ABox<Expression<A>, A>, ABox<Expression<A>, A>),
     Call(CallExpr<A>),
+    Get(ABox<Expression<A>, A>, AVec<u8, A>),
 }
 
 impl<A: Allocator> AClone for Expression<A> {
@@ -432,7 +434,8 @@ impl<A: Allocator> AClone for Expression<A> {
             Expression::Binary(op, expr_a, expr_b) => {
                 Expression::Binary(*op, ABox::aclone(expr_a)?, ABox::aclone(expr_b)?)
             }
-            Expression::Call(cexpr) => Expression::Call(cexpr.aclone()?)
+            Expression::Call(cexpr) => Expression::Call(cexpr.aclone()?),
+            Expression::Get(gexpr, prop) => Expression::Get(gexpr.aclone()?, prop.aclone()?),
         };
 
         Ok(res)
@@ -635,8 +638,22 @@ fn parse_call<'a, A: Allocator>(
                 });
             }
             Token::Dot => {
-                // TODO: property access
-                return Err(PureParseError::Generic(b"Property access not supported").into());
+                tokens.advance();
+                if let Token::Identifier(ident) = tokens.peek() {
+                    let mut property = AVec::new(allocator);
+                    property.extend_from_slice(ident)?;
+
+                    tokens.advance();
+
+                    expr = Expression::Get(
+                        ABox::new(expr, allocator)?,
+                        property
+                    );
+                } else {
+                    return Err(
+                        PureParseError::Generic(b"Expected ident after dot").into(),
+                    );
+                }
             }
             _ => {
                 break;
@@ -949,6 +966,7 @@ pub enum ShimValue<A: Allocator> {
     F64(f64),
     SString(AVec<u8, A>),
     SFn(AVec<AVec<u8, A>, A>, Block<A>, Gc<ShimValue<A>>),
+    BoundFn(Gc<ShimValue<A>>, Gc<ShimValue<A>>),
     NativeFn(Box<dyn Fn(AVec<Gc<ShimValue<A>>, A>, &mut Interpreter<A>) -> Result<Gc<ShimValue<A>>, ShimError>>),
     Env(Environment<A>),
 }
@@ -963,6 +981,7 @@ impl<A: Allocator> Debug for ShimValue<A> {
             Self::Unit => fmt.write_fmt(format_args!("()")),
             Self::SString(s) => fmt.write_fmt(format_args!("{}", std::str::from_utf8(s).unwrap())),
             Self::SFn(..) => fmt.write_fmt(format_args!("<fn>")),
+            Self::BoundFn(..) => fmt.write_fmt(format_args!("<bound fn>")),
             Self::NativeFn(..) => fmt.write_fmt(format_args!("<native fn>")),
             Self::Env(..) => fmt.write_fmt(format_args!("<env>")),
         }
@@ -1007,6 +1026,7 @@ impl<A: Allocator> ShimValue<A> {
             Self::Unit => vec.extend_from_slice(b"()")?,
             Self::SString(s) => vec.extend_from_slice(s)?,
             Self::SFn(..) => vec.extend_from_slice(b"<fn>")?,
+            Self::BoundFn(..) => vec.extend_from_slice(b"<bound fn>")?,
             Self::NativeFn(..) => vec.extend_from_slice(b"<native fn>")?,
             Self::Env(..) => vec.extend_from_slice(b"<environment>")?,
         }
@@ -1022,7 +1042,8 @@ impl<A: Allocator> ShimValue<A> {
             Self::Freed => false,
             Self::Unit => false,
             Self::SString(s) => s.len() > 0,
-            Self::SFn(_, _, _) => true,
+            Self::SFn(..) => true,
+            Self::BoundFn(..) => true,
             Self::NativeFn(..) => true,
             Self::Env(..) => true,
         }
@@ -1059,10 +1080,54 @@ impl<A: Allocator> ShimValue<A> {
                     BlockExit::Return(val) => Ok(val),
                 }
             }
+            Self::BoundFn(obj, the_fn) => {
+                let mut args_with_obj = AVec::new(interpreter.allocator);
+                args_with_obj.push(obj.clone())?;
+                for arg in args.iter() {
+                    args_with_obj.push(arg.clone())?;
+                }
+                the_fn.borrow().call(args_with_obj, interpreter)
+            }
             Self::NativeFn(boxed_fn) => {
                 boxed_fn(args, interpreter)
             }
             _ => Err(ShimError::Other(b"value not callable")),
+        }
+    }
+
+    fn get_prop(obj: Gc<Self>, name: &AVec<u8, A>, interpreter: &mut Interpreter<A>) -> Result<Gc<ShimValue<A>>, ShimError> {
+        match (&*obj.borrow(), name.deref()) {
+            (ShimValue::SString(_), b"lower") => {
+                let the_fn = interpreter.new_value(
+                    ShimValue::NativeFn(
+                        Box::new(
+                            |args, interpreter| {
+                                assert!(args.len() == 1);
+                                match &*args[0].borrow() {
+                                    ShimValue::SString(s) => {
+                                        let mut lowered = AVec::new(interpreter.allocator);
+                                        for c in s.iter() {
+                                            lowered.push(c.to_ascii_lowercase())?;
+                                        }
+
+                                        interpreter.new_value(
+                                            ShimValue::SString(lowered)
+                                        )
+                                    },
+                                    _ => Err(ShimError::Other(b"lower only str")),
+                                }
+                            }
+                        )
+                    )
+                )?;
+                interpreter.new_value(
+                    ShimValue::BoundFn(
+                        obj.clone(),
+                        the_fn,
+                    )
+                )
+            },
+            _ => Err(ShimError::Other(b"value no get_prop")),
         }
     }
 }
@@ -1079,6 +1144,7 @@ impl<A: Allocator> Manage for ShimValue<A> {
             Self::SString(_) => {}
             // TODO: trace these
             Self::SFn(..) => {},
+            Self::BoundFn(..) => {},
             // TODO: It seems like we need to be careful not to leak GC's here
             Self::NativeFn(..) => {},
             Self::Env(..) => {},
@@ -1305,6 +1371,11 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
                 }
                 let x = func.borrow().call(args, self)?;
                 x
+            }
+            Expression::Get(gexpr, prop) => {
+                let obj = self.interpret_expression(&gexpr)?;
+
+                ShimValue::get_prop(obj, prop, self)?
             }
         })
     }
