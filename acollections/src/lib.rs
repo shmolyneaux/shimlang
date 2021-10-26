@@ -333,6 +333,16 @@ pub struct AHashEntry<K, V> {
     value: V,
 }
 
+impl<K: std::cmp::PartialEq, V> AHashEntry<K, V> {
+    pub fn key(&self) -> &K {
+        &self.key
+    }
+
+    pub fn value(&self) -> &V {
+        &self.value
+    }
+}
+
 // TODO: Actually make this a hashmap, rather than an associative array
 #[derive(Debug)]
 pub struct AHashMap<K: std::cmp::PartialEq, V, A: Allocator> {
@@ -382,6 +392,10 @@ impl<K: std::cmp::PartialEq, V, A: Allocator> AHashMap<K, V, A> {
         } else {
             None
         }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item=&AHashEntry<K, V>> + '_ {
+        self.vec.iter()
     }
 }
 

@@ -957,6 +957,51 @@ fn parse_expression<'a, A: Allocator>(
     parse_equality(tokens, allocator)
 }
 
+enum InstanceProp<A: Allocator> {
+    Slot(usize),
+    Method(Gc<ShimValue<A>>),
+}
+
+pub struct StructDef<A: Allocator> {
+    props: AHashMap<AVec<u8, A>, InstanceProp<A>, A>
+}
+
+impl<A: Allocator> StructDef<A> {
+    fn create_instance(def: Gc<ShimValue<A>>, interpreter: &mut Interpreter<A>) -> Result<Gc<ShimValue<A>>, ShimError> {
+        match &*def.borrow() {
+            ShimValue::StructDef(cls) => {
+                let mut slots = AVec::new(interpreter.allocator);
+                for entry in cls.props.iter() {
+                    match entry.value() {
+                        // It doesn't really matter what we shove here
+                        InstanceProp::Slot(_) => slots.push(interpreter.new_value(ShimValue::Freed)?)?,
+                        _ => {}
+                    }
+                }
+
+                interpreter.new_value(ShimValue::Struct(def.clone(), slots))
+            }
+            _ => Err(ShimError::Other(b"tried to create instance from non-struct")),
+        }
+    }
+
+    fn instance_prop(&self, name: &AVec<u8, A>) -> Option<&InstanceProp<A>> {
+        self.props.get(name)
+    }
+
+    fn instance_members(&self) -> impl Iterator<Item=&AVec<u8, A>> {
+        self.props.iter().filter_map(
+            |entry| {
+                if matches!(entry.value(), InstanceProp::Slot(_)) {
+                    Some(entry.key())
+                } else {
+                    None
+                }
+            }
+        )
+    }
+}
+
 pub enum ShimValue<A: Allocator> {
     // A variant used to replace a previous-valid value after GC
     Freed,
@@ -969,6 +1014,8 @@ pub enum ShimValue<A: Allocator> {
     BoundFn(Gc<ShimValue<A>>, Gc<ShimValue<A>>),
     NativeFn(Box<dyn Fn(AVec<Gc<ShimValue<A>>, A>, &mut Interpreter<A>) -> Result<Gc<ShimValue<A>>, ShimError>>),
     Env(Environment<A>),
+    StructDef(StructDef<A>),
+    Struct(Gc<ShimValue<A>>, AVec<Gc<ShimValue<A>>, A>),
 }
 
 impl<A: Allocator> Debug for ShimValue<A> {
@@ -984,6 +1031,8 @@ impl<A: Allocator> Debug for ShimValue<A> {
             Self::BoundFn(..) => fmt.write_fmt(format_args!("<bound fn>")),
             Self::NativeFn(..) => fmt.write_fmt(format_args!("<native fn>")),
             Self::Env(..) => fmt.write_fmt(format_args!("<env>")),
+            Self::StructDef(..) => fmt.write_fmt(format_args!("<struct def>")),
+            Self::Struct(..) => fmt.write_fmt(format_args!("<struct>")),
         }
     }
 }
@@ -1029,6 +1078,8 @@ impl<A: Allocator> ShimValue<A> {
             Self::BoundFn(..) => vec.extend_from_slice(b"<bound fn>")?,
             Self::NativeFn(..) => vec.extend_from_slice(b"<native fn>")?,
             Self::Env(..) => vec.extend_from_slice(b"<environment>")?,
+            Self::StructDef(..) => vec.extend_from_slice(b"<struct def>")?,
+            Self::Struct(..) => vec.extend_from_slice(b"<struct>")?,
         }
 
         Ok(vec)
@@ -1046,6 +1097,8 @@ impl<A: Allocator> ShimValue<A> {
             Self::BoundFn(..) => true,
             Self::NativeFn(..) => true,
             Self::Env(..) => true,
+            Self::StructDef(..) => true,
+            Self::Struct(..) => true,
         }
     }
 
@@ -1148,6 +1201,8 @@ impl<A: Allocator> Manage for ShimValue<A> {
             // TODO: It seems like we need to be careful not to leak GC's here
             Self::NativeFn(..) => {},
             Self::Env(..) => {},
+            Self::StructDef(..) => {},
+            Self::Struct(..) => {},
         }
     }
 
