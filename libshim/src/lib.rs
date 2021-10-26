@@ -512,6 +512,7 @@ pub enum Statement<A: Allocator> {
     IfStatement(IfStatement<A>),
     WhileStatement(Expression<A>, Block<A>),
     FnDef(FnDef<A>),
+    StructDef(AVec<u8, A>, AVec<AVec<u8, A>, A>, AVec<FnDef<A>, A>),
     BreakStatement,
     ContinueStatement,
     ReturnStatement(Expression<A>),
@@ -527,6 +528,7 @@ impl<A: Allocator> AClone for Statement<A> {
             Statement::IfStatement(if_stmt) => Statement::IfStatement(if_stmt.aclone()?),
             Statement::WhileStatement(predicate, block) => Statement::WhileStatement(predicate.aclone()?, block.aclone()?),
             Statement::FnDef(def) =>  Statement::FnDef(def.aclone()?),
+            Statement::StructDef(name, members, methods) =>  Statement::StructDef(name.aclone()?, members.aclone()?, methods.aclone()?),
             Statement::BreakStatement =>  Statement::BreakStatement,
             Statement::ContinueStatement => Statement::ContinueStatement,
             Statement::ReturnStatement(expr) => Statement::ReturnStatement(expr.aclone()?),
@@ -1314,6 +1316,22 @@ impl<'a, A: Allocator> NewValue<ShimValue<A>, A> for Interpreter<'a, A> {
     }
 }
 
+impl<'a, A: Allocator> NewValue<FnDef<A>, A> for Interpreter<'a, A> {
+    fn new_value(&mut self, def: FnDef<A>) -> Result<Gc<ShimValue<A>>, ShimError> {
+        let FnDef {args, block, ..} = def;
+
+        Ok(
+            self.new_value(
+                ShimValue::SFn(
+                    args,
+                    block,
+                    self.env.clone(),
+                )
+            )?
+        )
+    }
+}
+
 enum BlockExit<A: Allocator> {
     Break,
     Continue,
@@ -1540,23 +1558,25 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
             }
             Statement::FnDef(def) => {
                 let name = def.name.aclone()?;
-                let args = def.args.aclone()?;
-
                 // TODO: a significant amount of effort would be saved if this
                 // block didn't need to be cloned since it forces a _bunch_ of
                 // other types to need to be cloned as well.
                 // Maybe it should be an Rc block?
-                let block = def.block.aclone()?;
-
-                let fn_obj = self.new_value(
-                    ShimValue::SFn(
-                        args,
-                        block,
-                        self.env.clone(),
-                    )
-                )?;
-
+                let fn_obj = self.new_value(def.aclone()?)?;
                 self.env_map_mut(|env| env.declare(name, fn_obj))?;
+            }
+            Statement::StructDef(name, members, methods) => {
+                let mut props: AHashMap<AVec<u8, A>, InstanceProp<A>, A> = AHashMap::new(self.allocator);
+                for (slot, member) in members.iter().enumerate() {
+                    props.insert(member.aclone()?, InstanceProp::Slot(slot))?;
+                }
+
+                for method in methods.iter() {
+                    props.insert(method.name.aclone()?, InstanceProp::Method(self.new_value(method.aclone()?)?))?;
+                }
+
+                let struct_def = self.new_value(ShimValue::StructDef(StructDef { props }))?;
+                self.env_map_mut(|env| env.declare(name.aclone()?, struct_def))?;
             }
         }
 
