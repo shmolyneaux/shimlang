@@ -1,11 +1,11 @@
 #![feature(allocator_api)]
 
-use acollections::{ABox, AHashMap, AVec, AClone};
+use acollections::{ABox, AClone, AHashMap, AVec};
 use lexical_core::FormattedSize;
 use std::alloc::AllocError;
-use tally_ho::{Collector, Gc, Manage};
 use std::fmt::Debug;
 use std::ops::Deref;
+use tally_ho::{Collector, Gc, Manage};
 
 #[derive(Debug)]
 pub enum ShimError {
@@ -402,12 +402,10 @@ pub struct CallExpr<A: Allocator> {
 
 impl<A: Allocator> AClone for CallExpr<A> {
     fn aclone(&self) -> Result<Self, AllocError> {
-        Ok(
-            CallExpr {
-                func: ABox::aclone(&self.func)?,
-                args: self.args.aclone()?
-            }
-        )
+        Ok(CallExpr {
+            func: ABox::aclone(&self.func)?,
+            args: self.args.aclone()?,
+        })
     }
 }
 
@@ -450,7 +448,7 @@ pub struct Block<A: Allocator> {
 impl<A: Allocator> AClone for Block<A> {
     fn aclone(&self) -> Result<Self, AllocError> {
         Ok(Block {
-            stmts: self.stmts.aclone()?
+            stmts: self.stmts.aclone()?,
         })
     }
 }
@@ -471,7 +469,7 @@ impl<A: Allocator> AClone for IfStatement<A> {
                 Some(block.aclone()?)
             } else {
                 None
-            }
+            },
         })
     }
 }
@@ -484,22 +482,18 @@ pub struct FnDef<A: Allocator> {
 }
 
 impl<A: Allocator> FnDef<A> {
-    fn new(name: AVec<u8, A>,args: AVec<AVec<u8, A>, A>,block: Block<A>) -> Self {
-        Self {
-            name, args, block
-        }
+    fn new(name: AVec<u8, A>, args: AVec<AVec<u8, A>, A>, block: Block<A>) -> Self {
+        Self { name, args, block }
     }
 }
 
 impl<A: Allocator> AClone for FnDef<A> {
     fn aclone(&self) -> Result<Self, AllocError> {
-        Ok(
-            FnDef {
-                name: self.name.aclone()?,
-                args: self.args.aclone()?,
-                block: self.block.aclone()?
-            }
-        )
+        Ok(FnDef {
+            name: self.name.aclone()?,
+            args: self.args.aclone()?,
+            block: self.block.aclone()?,
+        })
     }
 }
 
@@ -522,14 +516,22 @@ impl<A: Allocator> AClone for Statement<A> {
     fn aclone(&self) -> Result<Self, AllocError> {
         let res = match self {
             Statement::Expression(expr) => Statement::Expression(expr.aclone()?),
-            Statement::Declaration(name, expr) => Statement::Declaration(name.aclone()?, expr.aclone()?),
-            Statement::Assignment(name, expr) => Statement::Assignment(name.aclone()?, expr.aclone()?),
-            Statement::Block(block) =>  Statement::Block(block.aclone()?),
+            Statement::Declaration(name, expr) => {
+                Statement::Declaration(name.aclone()?, expr.aclone()?)
+            }
+            Statement::Assignment(name, expr) => {
+                Statement::Assignment(name.aclone()?, expr.aclone()?)
+            }
+            Statement::Block(block) => Statement::Block(block.aclone()?),
             Statement::IfStatement(if_stmt) => Statement::IfStatement(if_stmt.aclone()?),
-            Statement::WhileStatement(predicate, block) => Statement::WhileStatement(predicate.aclone()?, block.aclone()?),
-            Statement::FnDef(def) =>  Statement::FnDef(def.aclone()?),
-            Statement::StructDef(name, members, methods) =>  Statement::StructDef(name.aclone()?, members.aclone()?, methods.aclone()?),
-            Statement::BreakStatement =>  Statement::BreakStatement,
+            Statement::WhileStatement(predicate, block) => {
+                Statement::WhileStatement(predicate.aclone()?, block.aclone()?)
+            }
+            Statement::FnDef(def) => Statement::FnDef(def.aclone()?),
+            Statement::StructDef(name, members, methods) => {
+                Statement::StructDef(name.aclone()?, members.aclone()?, methods.aclone()?)
+            }
+            Statement::BreakStatement => Statement::BreakStatement,
             Statement::ContinueStatement => Statement::ContinueStatement,
             Statement::ReturnStatement(expr) => Statement::ReturnStatement(expr.aclone()?),
         };
@@ -647,14 +649,9 @@ fn parse_call<'a, A: Allocator>(
 
                     tokens.advance();
 
-                    expr = Expression::Get(
-                        ABox::new(expr, allocator)?,
-                        property
-                    );
+                    expr = Expression::Get(ABox::new(expr, allocator)?, property);
                 } else {
-                    return Err(
-                        PureParseError::Generic(b"Expected ident after dot").into(),
-                    );
+                    return Err(PureParseError::Generic(b"Expected ident after dot").into());
                 }
             }
             _ => {
@@ -912,7 +909,9 @@ fn parse_statement<'a, A: Allocator>(
                     let arg_name = AVec::from_slice(&arg_name, allocator)?;
                     arg_names.push(arg_name)?;
                 } else {
-                    return Err(PureParseError::Generic(b"Expected identifier in fn arg list").into());
+                    return Err(
+                        PureParseError::Generic(b"Expected identifier in fn arg list").into(),
+                    );
                 }
 
                 tokens.advance();
@@ -923,7 +922,9 @@ fn parse_statement<'a, A: Allocator>(
                 break;
             }
             if !tokens.matches(Token::RightParen) {
-                return Err(PureParseError::Generic(b"Expected right paren after fn arg list").into());
+                return Err(
+                    PureParseError::Generic(b"Expected right paren after fn arg list").into(),
+                );
             }
 
             let block = parse_block(tokens, allocator)?;
@@ -965,25 +966,32 @@ enum InstanceProp<A: Allocator> {
 }
 
 pub struct StructDef<A: Allocator> {
-    props: AHashMap<AVec<u8, A>, InstanceProp<A>, A>
+    props: AHashMap<AVec<u8, A>, InstanceProp<A>, A>,
 }
 
 impl<A: Allocator> StructDef<A> {
-    fn create_instance(def: Gc<ShimValue<A>>, interpreter: &mut Interpreter<A>) -> Result<Gc<ShimValue<A>>, ShimError> {
+    fn create_instance(
+        def: Gc<ShimValue<A>>,
+        interpreter: &mut Interpreter<A>,
+    ) -> Result<Gc<ShimValue<A>>, ShimError> {
         match &*def.borrow() {
             ShimValue::StructDef(cls) => {
                 let mut slots = AVec::new(interpreter.allocator);
                 for entry in cls.props.iter() {
                     match entry.value() {
                         // It doesn't really matter what we shove here
-                        InstanceProp::Slot(_) => slots.push(interpreter.new_value(ShimValue::Freed)?)?,
+                        InstanceProp::Slot(_) => {
+                            slots.push(interpreter.new_value(ShimValue::Freed)?)?
+                        }
                         _ => {}
                     }
                 }
 
                 interpreter.new_value(ShimValue::Struct(def.clone(), slots))
             }
-            _ => Err(ShimError::Other(b"tried to create instance from non-struct")),
+            _ => Err(ShimError::Other(
+                b"tried to create instance from non-struct",
+            )),
         }
     }
 
@@ -991,16 +999,14 @@ impl<A: Allocator> StructDef<A> {
         self.props.get(name)
     }
 
-    fn instance_members(&self) -> impl Iterator<Item=&AVec<u8, A>> {
-        self.props.iter().filter_map(
-            |entry| {
-                if matches!(entry.value(), InstanceProp::Slot(_)) {
-                    Some(entry.key())
-                } else {
-                    None
-                }
+    fn instance_members(&self) -> impl Iterator<Item = &AVec<u8, A>> {
+        self.props.iter().filter_map(|entry| {
+            if matches!(entry.value(), InstanceProp::Slot(_)) {
+                Some(entry.key())
+            } else {
+                None
             }
-        )
+        })
     }
 }
 
@@ -1014,7 +1020,14 @@ pub enum ShimValue<A: Allocator> {
     SString(AVec<u8, A>),
     SFn(AVec<AVec<u8, A>, A>, Block<A>, Gc<ShimValue<A>>),
     BoundFn(Gc<ShimValue<A>>, Gc<ShimValue<A>>),
-    NativeFn(Box<dyn Fn(AVec<Gc<ShimValue<A>>, A>, &mut Interpreter<A>) -> Result<Gc<ShimValue<A>>, ShimError>>),
+    NativeFn(
+        Box<
+            dyn Fn(
+                AVec<Gc<ShimValue<A>>, A>,
+                &mut Interpreter<A>,
+            ) -> Result<Gc<ShimValue<A>>, ShimError>,
+        >,
+    ),
     Env(Environment<A>),
     StructDef(StructDef<A>),
     Struct(Gc<ShimValue<A>>, AVec<Gc<ShimValue<A>>, A>),
@@ -1104,7 +1117,11 @@ impl<A: Allocator> ShimValue<A> {
         }
     }
 
-    fn call(&self, args: AVec<Gc<ShimValue<A>>, A>, interpreter: &mut Interpreter<A>) -> Result<Gc<ShimValue<A>>, ShimError> {
+    fn call(
+        &self,
+        args: AVec<Gc<ShimValue<A>>, A>,
+        interpreter: &mut Interpreter<A>,
+    ) -> Result<Gc<ShimValue<A>>, ShimError> {
         match self {
             Self::SFn(parameters, block, captured_env) => {
                 if args.len() != parameters.len() {
@@ -1112,7 +1129,8 @@ impl<A: Allocator> ShimValue<A> {
                     return Err(ShimError::Other(b"incorrect arity"));
                 }
 
-                let mut fn_env = Environment::new_with_prev(captured_env.clone(), interpreter.allocator);
+                let mut fn_env =
+                    Environment::new_with_prev(captured_env.clone(), interpreter.allocator);
 
                 for (name, value) in parameters.iter().zip(args.iter()) {
                     let name: AVec<u8, A> = name.aclone()?;
@@ -1143,45 +1161,35 @@ impl<A: Allocator> ShimValue<A> {
                 }
                 the_fn.borrow().call(args_with_obj, interpreter)
             }
-            Self::NativeFn(boxed_fn) => {
-                boxed_fn(args, interpreter)
-            }
+            Self::NativeFn(boxed_fn) => boxed_fn(args, interpreter),
             _ => Err(ShimError::Other(b"value not callable")),
         }
     }
 
-    fn get_prop(obj: Gc<Self>, name: &AVec<u8, A>, interpreter: &mut Interpreter<A>) -> Result<Gc<ShimValue<A>>, ShimError> {
+    fn get_prop(
+        obj: Gc<Self>,
+        name: &AVec<u8, A>,
+        interpreter: &mut Interpreter<A>,
+    ) -> Result<Gc<ShimValue<A>>, ShimError> {
         match (&*obj.borrow(), name.deref()) {
             (ShimValue::SString(_), b"lower") => {
-                let the_fn = interpreter.new_value(
-                    ShimValue::NativeFn(
-                        Box::new(
-                            |args, interpreter| {
-                                assert!(args.len() == 1);
-                                match &*args[0].borrow() {
-                                    ShimValue::SString(s) => {
-                                        let mut lowered = AVec::new(interpreter.allocator);
-                                        for c in s.iter() {
-                                            lowered.push(c.to_ascii_lowercase())?;
-                                        }
-
-                                        interpreter.new_value(
-                                            ShimValue::SString(lowered)
-                                        )
-                                    },
-                                    _ => Err(ShimError::Other(b"lower only str")),
+                let the_fn =
+                    interpreter.new_value(ShimValue::NativeFn(Box::new(|args, interpreter| {
+                        assert!(args.len() == 1);
+                        match &*args[0].borrow() {
+                            ShimValue::SString(s) => {
+                                let mut lowered = AVec::new(interpreter.allocator);
+                                for c in s.iter() {
+                                    lowered.push(c.to_ascii_lowercase())?;
                                 }
+
+                                interpreter.new_value(ShimValue::SString(lowered))
                             }
-                        )
-                    )
-                )?;
-                interpreter.new_value(
-                    ShimValue::BoundFn(
-                        obj.clone(),
-                        the_fn,
-                    )
-                )
-            },
+                            _ => Err(ShimError::Other(b"lower only str")),
+                        }
+                    })))?;
+                interpreter.new_value(ShimValue::BoundFn(obj.clone(), the_fn))
+            }
             _ => Err(ShimError::Other(b"value no get_prop")),
         }
     }
@@ -1198,13 +1206,13 @@ impl<A: Allocator> Manage for ShimValue<A> {
             Self::Unit => {}
             Self::SString(_) => {}
             // TODO: trace these
-            Self::SFn(..) => {},
-            Self::BoundFn(..) => {},
+            Self::SFn(..) => {}
+            Self::BoundFn(..) => {}
             // TODO: It seems like we need to be careful not to leak GC's here
-            Self::NativeFn(..) => {},
-            Self::Env(..) => {},
-            Self::StructDef(..) => {},
-            Self::Struct(..) => {},
+            Self::NativeFn(..) => {}
+            Self::Env(..) => {}
+            Self::StructDef(..) => {}
+            Self::Struct(..) => {}
         }
     }
 
@@ -1318,17 +1326,9 @@ impl<'a, A: Allocator> NewValue<ShimValue<A>, A> for Interpreter<'a, A> {
 
 impl<'a, A: Allocator> NewValue<FnDef<A>, A> for Interpreter<'a, A> {
     fn new_value(&mut self, def: FnDef<A>) -> Result<Gc<ShimValue<A>>, ShimError> {
-        let FnDef {args, block, ..} = def;
+        let FnDef { args, block, .. } = def;
 
-        Ok(
-            self.new_value(
-                ShimValue::SFn(
-                    args,
-                    block,
-                    self.env.clone(),
-                )
-            )?
-        )
+        Ok(self.new_value(ShimValue::SFn(args, block, self.env.clone()))?)
     }
 }
 
@@ -1352,7 +1352,8 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
     }
 
     fn env_map_mut<F, U>(&mut self, f: F) -> U
-        where F: FnOnce(&mut Environment<A>) -> U
+    where
+        F: FnOnce(&mut Environment<A>) -> U,
     {
         if let ShimValue::Env(env) = &mut *self.env.borrow_mut() {
             f(env)
@@ -1362,7 +1363,8 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
     }
 
     fn env_map<F, U>(&self, f: F) -> U
-        where F: FnOnce(&Environment<A>) -> U
+    where
+        F: FnOnce(&Environment<A>) -> U,
     {
         if let ShimValue::Env(env) = &*self.env.borrow() {
             f(env)
@@ -1425,8 +1427,12 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
                         BinaryOp::Lt => ShimValue::Bool(a < b),
                         BinaryOp::Lte => ShimValue::Bool(a <= b),
                     },
-                    (ShimValue::SString(a), ShimValue::SString(b), BinaryOp::Eq) => ShimValue::Bool(a == b),
-                    (ShimValue::SString(a), ShimValue::SString(b), BinaryOp::Neq) => ShimValue::Bool(a != b),
+                    (ShimValue::SString(a), ShimValue::SString(b), BinaryOp::Eq) => {
+                        ShimValue::Bool(a == b)
+                    }
+                    (ShimValue::SString(a), ShimValue::SString(b), BinaryOp::Neq) => {
+                        ShimValue::Bool(a != b)
+                    }
                     _ => {
                         self.print(b"TODO: values can't be bin-opped\n");
                         ShimValue::I128(42)
@@ -1473,7 +1479,9 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
 
     fn interpret_block(&mut self, block: &Block<A>) -> Result<BlockExit<A>, ShimError> {
         fn enter_block<A: Allocator>(interpreter: &mut Interpreter<A>) -> Result<(), AllocError> {
-            let mut new_env = interpreter.collector.manage(ShimValue::Env(Environment::new(interpreter.allocator)));
+            let mut new_env = interpreter
+                .collector
+                .manage(ShimValue::Env(Environment::new(interpreter.allocator)));
 
             // Assign new_env to .env
             std::mem::swap(&mut interpreter.env, &mut new_env);
@@ -1497,7 +1505,10 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
         res
     }
 
-    fn interpret_statement(&mut self, stmt: &Statement<A>) -> Result<Option<BlockExit<A>>, ShimError> {
+    fn interpret_statement(
+        &mut self,
+        stmt: &Statement<A>,
+    ) -> Result<Option<BlockExit<A>>, ShimError> {
         match stmt {
             Statement::Expression(expr) => {
                 self.interpret_expression(expr)?;
@@ -1566,13 +1577,17 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
                 self.env_map_mut(|env| env.declare(name, fn_obj))?;
             }
             Statement::StructDef(name, members, methods) => {
-                let mut props: AHashMap<AVec<u8, A>, InstanceProp<A>, A> = AHashMap::new(self.allocator);
+                let mut props: AHashMap<AVec<u8, A>, InstanceProp<A>, A> =
+                    AHashMap::new(self.allocator);
                 for (slot, member) in members.iter().enumerate() {
                     props.insert(member.aclone()?, InstanceProp::Slot(slot))?;
                 }
 
                 for method in methods.iter() {
-                    props.insert(method.name.aclone()?, InstanceProp::Method(self.new_value(method.aclone()?)?))?;
+                    props.insert(
+                        method.name.aclone()?,
+                        InstanceProp::Method(self.new_value(method.aclone()?)?),
+                    )?;
                 }
 
                 let struct_def = self.new_value(ShimValue::StructDef(StructDef { props }))?;
@@ -1587,25 +1602,21 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
         // TODO: make `new` fallible and put this there
         let mut print_name: AVec<u8, A> = AVec::new(self.allocator);
         print_name.extend_from_slice(b"print")?;
-        let print_fn = self.collector.manage(
-            ShimValue::NativeFn(
-                Box::new(
-                    |args, interpreter| {
-                        let last_idx = args.len() as isize - 1;
-                        for (idx, arg) in args.iter().enumerate() {
-                            let arg_str: AVec<u8, A> = arg.borrow().stringify(interpreter.allocator)?;
-                            interpreter.print(&arg_str);
+        let print_fn = self
+            .collector
+            .manage(ShimValue::NativeFn(Box::new(|args, interpreter| {
+                let last_idx = args.len() as isize - 1;
+                for (idx, arg) in args.iter().enumerate() {
+                    let arg_str: AVec<u8, A> = arg.borrow().stringify(interpreter.allocator)?;
+                    interpreter.print(&arg_str);
 
-                            if idx as isize != last_idx {
-                                interpreter.print(b" ");
-                            }
-                        }
-                        interpreter.print(b"\n");
-                        interpreter.new_value(ShimValue::Unit)
+                    if idx as isize != last_idx {
+                        interpreter.print(b" ");
                     }
-                )
-            )
-        );
+                }
+                interpreter.print(b"\n");
+                interpreter.new_value(ShimValue::Unit)
+            })));
         self.env_map_mut(|env| env.declare(print_name, print_fn))?;
 
         let mut tokens = TokenStream::new(text);

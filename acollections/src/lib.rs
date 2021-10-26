@@ -21,10 +21,12 @@ use std::ptr::NonNull;
 pub struct ABox<T: ?Sized, A: Allocator>(NonNull<T>, A);
 
 pub trait AClone {
-    fn aclone(&self) -> Result<Self, AllocError> where Self: Sized;
+    fn aclone(&self) -> Result<Self, AllocError>
+    where
+        Self: Sized;
 }
 
-impl<T: Clone+Sized> AClone for T {
+impl<T: Clone + Sized> AClone for T {
     fn aclone(&self) -> Result<Self, AllocError> {
         Ok(self.clone())
     }
@@ -394,7 +396,7 @@ impl<K: std::cmp::PartialEq, V, A: Allocator> AHashMap<K, V, A> {
         }
     }
 
-    pub fn iter(&self) -> impl Iterator<Item=&AHashEntry<K, V>> + '_ {
+    pub fn iter(&self) -> impl Iterator<Item = &AHashEntry<K, V>> + '_ {
         self.vec.iter()
     }
 }
