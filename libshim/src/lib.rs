@@ -418,6 +418,7 @@ pub enum Expression<A: Allocator> {
     StringLiteral(AVec<u8, A>),
     Binary(BinaryOp, ABox<Expression<A>, A>, ABox<Expression<A>, A>),
     Call(CallExpr<A>),
+    BlockCall(ABox<Expression<A>, A>, Block<A>),
     Get(ABox<Expression<A>, A>, AVec<u8, A>),
 }
 
@@ -433,6 +434,7 @@ impl<A: Allocator> AClone for Expression<A> {
                 Expression::Binary(*op, ABox::aclone(expr_a)?, ABox::aclone(expr_b)?)
             }
             Expression::Call(cexpr) => Expression::Call(cexpr.aclone()?),
+            Expression::BlockCall(obj, block) => Expression::BlockCall(obj.aclone()?, block.aclone()?),
             Expression::Get(gexpr, prop) => Expression::Get(gexpr.aclone()?, prop.aclone()?),
         };
 
@@ -565,6 +567,7 @@ impl From<AllocError> for ParseError {
 
 fn parse_equality<'a, A: Allocator>(
     tokens: &mut TokenStream,
+    in_predicate: bool,
     allocator: A,
 ) -> Result<Expression<A>, ParseError> {
     parse_binary(
@@ -574,12 +577,14 @@ fn parse_equality<'a, A: Allocator>(
             (Token::BangEqual, BinaryOp::Neq),
         ],
         parse_comparison,
+        in_predicate,
         allocator,
     )
 }
 
 fn parse_comparison<'a, A: Allocator>(
     tokens: &mut TokenStream,
+    in_predicate: bool,
     allocator: A,
 ) -> Result<Expression<A>, ParseError> {
     parse_binary(
@@ -591,42 +596,48 @@ fn parse_comparison<'a, A: Allocator>(
             (Token::Gte, BinaryOp::Gte),
         ],
         parse_term,
+        in_predicate,
         allocator,
     )
 }
 
 fn parse_term<'a, A: Allocator>(
     tokens: &mut TokenStream,
+    in_predicate: bool,
     allocator: A,
 ) -> Result<Expression<A>, ParseError> {
     parse_binary(
         tokens,
         &[(Token::Plus, BinaryOp::Add), (Token::Minus, BinaryOp::Sub)],
         parse_factor,
+        in_predicate,
         allocator,
     )
 }
 
 fn parse_factor<'a, A: Allocator>(
     tokens: &mut TokenStream,
+    in_predicate: bool,
     allocator: A,
 ) -> Result<Expression<A>, ParseError> {
     parse_binary(
         tokens,
         &[(Token::Star, BinaryOp::Mul), (Token::Slash, BinaryOp::Div)],
         parse_call,
+        in_predicate,
         allocator,
     )
 }
 
 fn parse_call<'a, A: Allocator>(
     tokens: &mut TokenStream,
+    in_predicate: bool,
     allocator: A,
 ) -> Result<Expression<A>, ParseError> {
     let mut expr = parse_primary(tokens, allocator)?;
     while tokens.peek() != Token::EOF {
-        match tokens.peek() {
-            Token::LeftParen => {
+        match (tokens.peek(), in_predicate) {
+            (Token::LeftParen, _) => {
                 tokens.advance();
                 let args = parse_args(tokens, allocator)?;
 
@@ -641,7 +652,7 @@ fn parse_call<'a, A: Allocator>(
                     args: args,
                 });
             }
-            Token::Dot => {
+            (Token::Dot, _) => {
                 tokens.advance();
                 if let Token::Identifier(ident) = tokens.peek() {
                     let mut property = AVec::new(allocator);
@@ -653,6 +664,10 @@ fn parse_call<'a, A: Allocator>(
                 } else {
                     return Err(PureParseError::Generic(b"Expected ident after dot").into());
                 }
+            }
+            (Token::LeftCurly, false) => {
+                let block = parse_block(tokens, allocator)?;
+                expr = Expression::BlockCall(ABox::new(expr, allocator)?, block);
             }
             _ => {
                 break;
@@ -736,10 +751,11 @@ fn parse_primary<'a, A: Allocator>(
 fn parse_binary<'a, A: Allocator>(
     tokens: &mut TokenStream,
     op_table: &[(Token, BinaryOp)],
-    next: fn(&mut TokenStream, A) -> Result<Expression<A>, ParseError>,
+    next: fn(&mut TokenStream, bool, A) -> Result<Expression<A>, ParseError>,
+    in_predicate: bool,
     allocator: A,
 ) -> Result<Expression<A>, ParseError> {
-    let mut expr = next(tokens, allocator)?;
+    let mut expr = next(tokens, in_predicate, allocator)?;
     while tokens.peek() != Token::EOF {
         let token = tokens.peek();
         if let Some(op) = op_table
@@ -750,7 +766,7 @@ fn parse_binary<'a, A: Allocator>(
             // Consume the token we peeked
             tokens.advance();
 
-            let right_expr = next(tokens, allocator)?;
+            let right_expr = next(tokens, in_predicate, allocator)?;
             expr = Expression::Binary(
                 *op,
                 ABox::new(expr, allocator)?,
@@ -817,7 +833,7 @@ fn parse_if<'a, A: Allocator>(
     allocator: A,
 ) -> Result<Statement<A>, ParseError> {
     if tokens.matches(Token::IfKeyword) {
-        let predicate = parse_expression(tokens, allocator)?;
+        let predicate = parse_predicate(tokens, allocator)?;
         let if_block = parse_block(tokens, allocator)?;
 
         let else_block = if tokens.matches(Token::ElseKeyword) {
@@ -839,6 +855,55 @@ fn parse_if<'a, A: Allocator>(
         }))
     } else {
         Err(PureParseError::Generic(b"(Internal) expected to match if").into())
+    }
+}
+
+fn parse_fn<A: Allocator>(
+    tokens: &mut TokenStream,
+    allocator: A,
+) -> Result<FnDef<A>, ParseError> {
+    if !tokens.matches(Token::FnKeyword) {
+        return Err(PureParseError::Generic(b"Expected 'fn' when parsing function").into());
+    }
+
+    if let Token::Identifier(name) = tokens.peek() {
+        let mut name_vec = AVec::new(allocator);
+        name_vec.extend_from_slice(&name)?;
+
+        tokens.advance();
+        if !tokens.matches(Token::LeftParen) {
+            return Err(PureParseError::Generic(b"Missing paren after fn identifier").into());
+        }
+
+        let mut arg_names = AVec::new(allocator);
+        while tokens.peek() != Token::RightParen && !tokens.matches(Token::EOF) {
+            if let Token::Identifier(arg_name) = tokens.peek() {
+                let arg_name = AVec::from_slice(&arg_name, allocator)?;
+                arg_names.push(arg_name)?;
+            } else {
+                return Err(
+                    PureParseError::Generic(b"Expected identifier in fn arg list").into(),
+                );
+            }
+
+            tokens.advance();
+
+            if tokens.matches(Token::Comma) {
+                continue;
+            }
+            break;
+        }
+        if !tokens.matches(Token::RightParen) {
+            return Err(
+                PureParseError::Generic(b"Expected right paren after fn arg list").into(),
+            );
+        }
+
+        let block = parse_block(tokens, allocator)?;
+
+        Ok(FnDef::new(name_vec, arg_names, block))
+    } else {
+        Err(PureParseError::Generic(b"Missing identifier after fn").into())
     }
 }
 
@@ -871,10 +936,53 @@ fn parse_statement<'a, A: Allocator>(
         } else {
             return Err(PureParseError::Generic(b"Missing identifier after let").into());
         }
+    } else if tokens.matches(Token::StructKeyword) {
+        if let Token::Identifier(name) = tokens.peek() {
+            let mut name_vec = AVec::new(allocator);
+            name_vec.extend_from_slice(&name)?;
+
+            tokens.advance();
+            if !tokens.matches(Token::LeftCurly) {
+                return Err(PureParseError::Generic(b"Missing '{' in struct declaration").into());
+            }
+
+            let mut members = AVec::new(allocator);
+            while tokens.peek() != Token::EOF && tokens.peek() != Token::RightCurly && tokens.peek() != Token::FnKeyword {
+                if let Token::Identifier(name) = tokens.peek() {
+                    let mut name_vec = AVec::new(allocator);
+                    name_vec.extend_from_slice(&name)?;
+
+                    tokens.advance();
+
+                    members.push(name_vec)?;
+                } else {
+                    return Err(PureParseError::Generic(b"Expected ident in struct def").into());
+                }
+
+                // This should (?) handle trailing commas
+                if !tokens.matches(Token::Comma) {
+                    break;
+                }
+            }
+
+            let mut methods = AVec::new(allocator);
+            while tokens.peek() == Token::FnKeyword {
+                let fn_def = parse_fn(tokens, allocator)?;
+                methods.push(fn_def)?;
+            }
+
+            if !tokens.matches(Token::RightCurly) {
+                return Err(PureParseError::Generic(b"Missing '}' at end of struct def").into());
+            }
+
+            Ok(Statement::StructDef(name_vec, members, methods))
+        } else {
+            return Err(PureParseError::Generic(b"Missing identifier after struct").into());
+        }
     } else if tokens.peek() == Token::IfKeyword {
         Ok(parse_if(tokens, allocator)?)
     } else if tokens.matches(Token::WhileKeyword) {
-        let predicate = parse_expression(tokens, allocator)?;
+        let predicate = parse_predicate(tokens, allocator)?;
         let block = parse_block(tokens, allocator)?;
         Ok(Statement::WhileStatement(predicate, block))
     } else if tokens.matches(Token::BreakKeyword) {
@@ -893,46 +1001,8 @@ fn parse_statement<'a, A: Allocator>(
             return Err(PureParseError::Generic(b"Missing semicolon after return").into());
         }
         Ok(Statement::ReturnStatement(expr))
-    } else if tokens.matches(Token::FnKeyword) {
-        if let Token::Identifier(name) = tokens.peek() {
-            let mut name_vec = AVec::new(allocator);
-            name_vec.extend_from_slice(&name)?;
-
-            tokens.advance();
-            if !tokens.matches(Token::LeftParen) {
-                return Err(PureParseError::Generic(b"Missing paren after fn identifier").into());
-            }
-
-            let mut arg_names = AVec::new(allocator);
-            while tokens.peek() != Token::RightParen && !tokens.matches(Token::EOF) {
-                if let Token::Identifier(arg_name) = tokens.peek() {
-                    let arg_name = AVec::from_slice(&arg_name, allocator)?;
-                    arg_names.push(arg_name)?;
-                } else {
-                    return Err(
-                        PureParseError::Generic(b"Expected identifier in fn arg list").into(),
-                    );
-                }
-
-                tokens.advance();
-
-                if tokens.matches(Token::Comma) {
-                    continue;
-                }
-                break;
-            }
-            if !tokens.matches(Token::RightParen) {
-                return Err(
-                    PureParseError::Generic(b"Expected right paren after fn arg list").into(),
-                );
-            }
-
-            let block = parse_block(tokens, allocator)?;
-
-            Ok(Statement::FnDef(FnDef::new(name_vec, arg_names, block)))
-        } else {
-            Err(PureParseError::Generic(b"Missing identifier after fn").into())
-        }
+    } else if tokens.peek() == Token::FnKeyword {
+        Ok(Statement::FnDef(parse_fn(tokens, allocator)?))
     } else {
         let expr = parse_expression(tokens, allocator)?;
         let stmt = match (expr, tokens.peek()) {
@@ -957,7 +1027,14 @@ fn parse_expression<'a, A: Allocator>(
     tokens: &mut TokenStream,
     allocator: A,
 ) -> Result<Expression<A>, ParseError> {
-    parse_equality(tokens, allocator)
+    parse_equality(tokens, false, allocator)
+}
+
+fn parse_predicate<'a, A: Allocator>(
+    tokens: &mut TokenStream,
+    allocator: A,
+) -> Result<Expression<A>, ParseError> {
+    parse_equality(tokens, true, allocator)
 }
 
 enum InstanceProp<A: Allocator> {
@@ -970,31 +1047,6 @@ pub struct StructDef<A: Allocator> {
 }
 
 impl<A: Allocator> StructDef<A> {
-    fn create_instance(
-        def: Gc<ShimValue<A>>,
-        interpreter: &mut Interpreter<A>,
-    ) -> Result<Gc<ShimValue<A>>, ShimError> {
-        match &*def.borrow() {
-            ShimValue::StructDef(cls) => {
-                let mut slots = AVec::new(interpreter.allocator);
-                for entry in cls.props.iter() {
-                    match entry.value() {
-                        // It doesn't really matter what we shove here
-                        InstanceProp::Slot(_) => {
-                            slots.push(interpreter.new_value(ShimValue::Freed)?)?
-                        }
-                        _ => {}
-                    }
-                }
-
-                interpreter.new_value(ShimValue::Struct(def.clone(), slots))
-            }
-            _ => Err(ShimError::Other(
-                b"tried to create instance from non-struct",
-            )),
-        }
-    }
-
     fn instance_prop(&self, name: &AVec<u8, A>) -> Option<&InstanceProp<A>> {
         self.props.get(name)
     }
@@ -1009,6 +1061,8 @@ impl<A: Allocator> StructDef<A> {
         })
     }
 }
+
+pub struct Struct<A: Allocator>(Gc<ShimValue<A>>, AVec<Gc<ShimValue<A>>, A>);
 
 pub enum ShimValue<A: Allocator> {
     // A variant used to replace a previous-valid value after GC
@@ -1030,7 +1084,7 @@ pub enum ShimValue<A: Allocator> {
     ),
     Env(Environment<A>),
     StructDef(StructDef<A>),
-    Struct(Gc<ShimValue<A>>, AVec<Gc<ShimValue<A>>, A>),
+    Struct(Struct<A>),
 }
 
 impl<A: Allocator> Debug for ShimValue<A> {
@@ -1053,6 +1107,13 @@ impl<A: Allocator> Debug for ShimValue<A> {
 }
 
 impl<A: Allocator> ShimValue<A> {
+    fn as_struct_def(&self) -> Option<&StructDef<A>> {
+        match self {
+            Self::StructDef(def) => Some(def),
+            _ => None,
+        }
+    }
+
     fn stringify(&self, allocator: A) -> Result<AVec<u8, A>, AllocError> {
         let mut vec = AVec::new(allocator);
         match self {
@@ -1147,9 +1208,9 @@ impl<A: Allocator> ShimValue<A> {
                 let exit_result = exit_result?;
 
                 match exit_result {
-                    BlockExit::Finish => interpreter.new_value(ShimValue::Unit),
-                    BlockExit::Break => interpreter.new_value(ShimValue::Unit),
-                    BlockExit::Continue => interpreter.new_value(ShimValue::Unit),
+                    BlockExit::Finish => Ok(interpreter.g.the_unit.clone()),
+                    BlockExit::Break => Ok(interpreter.g.the_unit.clone()),
+                    BlockExit::Continue => Ok(interpreter.g.the_unit.clone()),
                     BlockExit::Return(val) => Ok(val),
                 }
             }
@@ -1164,6 +1225,46 @@ impl<A: Allocator> ShimValue<A> {
             Self::NativeFn(boxed_fn) => boxed_fn(args, interpreter),
             _ => Err(ShimError::Other(b"value not callable")),
         }
+    }
+
+    fn block_call(
+        obj: Gc<Self>,
+        block: &Block<A>,
+        interpreter: &mut Interpreter<A>,
+    ) -> Result<Gc<ShimValue<A>>, ShimError> {
+        let members = match &*obj.borrow() {
+            Self::StructDef(def) => {
+                // TODO: ensure we call exit_block before exiting with `?`
+                interpreter.enter_block()?;
+
+                // Create block-local variables for each member of the struct
+                let mut members = AVec::new(interpreter.allocator);
+                for entry in def.props.iter() {
+                    if let InstanceProp::Slot(_) = entry.value() {
+                        let key = entry.key().aclone()?;
+                        let default = interpreter.g.the_unit.clone();
+                        interpreter.env_declare(key, default)?;
+                        members.push(interpreter.g.the_unit.clone())?;
+                    }
+                }
+                // Return value is ignored, we should probably error here in
+                // the parser (since a return could be ambiguous).
+                interpreter.interpret_block_inner(block)?;
+
+                // Collect the assigned values into the correct slot for the struct
+                for entry in def.props.iter() {
+                    if let InstanceProp::Slot(slot_num) = entry.value() {
+                        // We just declared this above... why would it not be here?
+                        members[*slot_num] = interpreter.env_find(entry.key()).unwrap();
+                    }
+                }
+                interpreter.exit_block();
+
+                members
+            }
+            _ => return Err(ShimError::Other(b"value not block-callable")),
+        };
+        interpreter.new_value(ShimValue::Struct(Struct(obj, members)))
     }
 
     fn get_prop(
@@ -1189,6 +1290,19 @@ impl<A: Allocator> ShimValue<A> {
                         }
                     })))?;
                 interpreter.new_value(ShimValue::BoundFn(obj.clone(), the_fn))
+            }
+            (ShimValue::Struct(Struct(cls, slots)), _) => {
+                let cls = cls.borrow();
+                let prop = cls
+                    .as_struct_def()
+                    .ok_or(ShimError::Other(b"struct def of a struct... isn't..?"))?
+                    .instance_prop(name)
+                    .ok_or(ShimError::Other(b"struct does not have prop"))?;
+
+                Ok(match prop {
+                    InstanceProp::Slot(num) => slots[*num].clone(),
+                    InstanceProp::Method(method) => interpreter.new_value(ShimValue::BoundFn(obj.clone(), method.clone()))?,
+                })
             }
             _ => Err(ShimError::Other(b"value no get_prop")),
         }
@@ -1284,12 +1398,26 @@ impl<A: Allocator> Environment<A> {
     }
 }
 
+struct Singletons<A: Allocator> {
+    the_unit: Gc<ShimValue<A>>,
+}
+
+impl<A: Allocator> Singletons<A> {
+    // TODO: this should be alloc-fallible
+    fn new(collector: &mut Collector<ShimValue<A>>) -> Self {
+        Singletons {
+            the_unit: collector.manage(ShimValue::Unit)
+        }
+    }
+}
+
 pub struct Interpreter<'a, A: Allocator> {
     allocator: A,
     collector: Collector<ShimValue<A>>,
     env: Gc<ShimValue<A>>,
     // TODO: figure out how to make the ABox work like this
     print: Option<&'a mut dyn Printer>,
+    g: Singletons<A>
 }
 
 pub trait Printer {
@@ -1340,14 +1468,17 @@ enum BlockExit<A: Allocator> {
 }
 
 impl<'a, A: Allocator> Interpreter<'a, A> {
+    // TODO: this should be alloc-fallible
     pub fn new(allocator: A) -> Interpreter<'a, A> {
         let mut collector = Collector::new();
         let env = collector.manage(ShimValue::Env(Environment::new(allocator)));
+        let singletons = Singletons::new(&mut collector);
         Interpreter {
             allocator,
             collector: collector,
             env: env,
             print: None,
+            g: singletons,
         }
     }
 
@@ -1355,6 +1486,9 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
     where
         F: FnOnce(&mut Environment<A>) -> U,
     {
+        // We're calling borrow_mut on an environment. We don't expect the
+        // passed `f` to borrow it as well (since it's just assigning, mutating
+        // or declaring variables).
         if let ShimValue::Env(env) = &mut *self.env.borrow_mut() {
             f(env)
         } else {
@@ -1371,6 +1505,18 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
         } else {
             panic!("Interpreter env is not an Environment!")
         }
+    }
+
+    fn env_declare(&mut self, key: AVec<u8, A>, value: Gc<ShimValue<A>>) -> Result<(), ShimError> {
+        self.env_map_mut(|env| env.declare(key, value))
+    }
+
+    fn env_assign(&mut self, key: &AVec<u8, A>, value: Gc<ShimValue<A>>) -> Result<(), ()> {
+        self.env_map_mut(|env| env.assign(key, value))
+    }
+
+    fn env_find(&mut self, key: &AVec<u8, A>) -> Option<Gc<ShimValue<A>>> {
+        self.env_map(|env| env.find(key))
     }
 
     pub fn set_print_fn(&mut self, f: &'a mut dyn Printer) {
@@ -1391,7 +1537,7 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
                 // the get method does deref-magic.
                 let mut vec = AVec::new(self.allocator);
                 vec.extend_from_slice(ident)?;
-                let maybe_id = self.env_map(|env| env.find(&vec));
+                let maybe_id = self.env_find(&vec);
                 if let Some(id) = maybe_id {
                     id.clone()
                 } else {
@@ -1451,6 +1597,11 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
                 let x = func.borrow().call(args, self)?;
                 x
             }
+            Expression::BlockCall(expr, block) => {
+                let obj = self.interpret_expression(expr)?;
+                let x = ShimValue::block_call(obj, block, self)?;
+                x
+            }
             Expression::Get(gexpr, prop) => {
                 let obj = self.interpret_expression(&gexpr)?;
 
@@ -1477,30 +1628,30 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
         Ok(BlockExit::Finish)
     }
 
+    fn enter_block(&mut self) -> Result<(), AllocError> {
+        let mut new_env = self
+            .collector
+            .manage(ShimValue::Env(Environment::new(self.allocator)));
+
+        // Assign new_env to .env
+        std::mem::swap(&mut self.env, &mut new_env);
+
+        // Assign the old env to .prev (since it's now in new_env)
+        self.env_map_mut(|env| env.prev = Some(new_env));
+
+        Ok(())
+    }
+
+    fn exit_block(&mut self) {
+        let mut prev_env = self.env_map(|env| env.prev.as_ref().unwrap().clone());
+
+        std::mem::swap(&mut self.env, &mut prev_env);
+    }
+
     fn interpret_block(&mut self, block: &Block<A>) -> Result<BlockExit<A>, ShimError> {
-        fn enter_block<A: Allocator>(interpreter: &mut Interpreter<A>) -> Result<(), AllocError> {
-            let mut new_env = interpreter
-                .collector
-                .manage(ShimValue::Env(Environment::new(interpreter.allocator)));
-
-            // Assign new_env to .env
-            std::mem::swap(&mut interpreter.env, &mut new_env);
-
-            // Assign the old env to .prev (since it's now in new_env)
-            interpreter.env_map_mut(|env| env.prev = Some(new_env));
-
-            Ok(())
-        }
-
-        fn exit_block<A: Allocator>(interpreter: &mut Interpreter<A>) {
-            let mut prev_env = interpreter.env_map(|env| env.prev.as_ref().unwrap().clone());
-
-            std::mem::swap(&mut interpreter.env, &mut prev_env);
-        }
-
-        enter_block(self)?;
+        Self::enter_block(self)?;
         let res = self.interpret_block_inner(block);
-        exit_block(self);
+        Self::exit_block(self);
 
         res
     }
@@ -1516,13 +1667,13 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
             Statement::Declaration(name, expr) => {
                 let id = self.interpret_expression(expr)?;
                 let name_clone: AVec<u8, A> = name.aclone()?;
-                self.env_map_mut(|env| env.declare(name_clone, id))?;
+                self.env_declare(name_clone, id)?;
             }
             Statement::Assignment(name, expr) => {
                 // TODO: this should write the value to the existing id rather
                 // than writing a new id.
                 let val = self.interpret_expression(expr)?;
-                let assign_result = self.env_map_mut(|env| env.assign(name, val));
+                let assign_result = self.env_assign(name, val);
                 if assign_result.is_err() {
                     self.print(b"Variable ");
                     self.print(&name);
@@ -1574,7 +1725,7 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
                 // other types to need to be cloned as well.
                 // Maybe it should be an Rc block?
                 let fn_obj = self.new_value(def.aclone()?)?;
-                self.env_map_mut(|env| env.declare(name, fn_obj))?;
+                self.env_declare(name, fn_obj)?;
             }
             Statement::StructDef(name, members, methods) => {
                 let mut props: AHashMap<AVec<u8, A>, InstanceProp<A>, A> =
@@ -1591,7 +1742,7 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
                 }
 
                 let struct_def = self.new_value(ShimValue::StructDef(StructDef { props }))?;
-                self.env_map_mut(|env| env.declare(name.aclone()?, struct_def))?;
+                self.env_declare(name.aclone()?, struct_def)?;
             }
         }
 
@@ -1615,9 +1766,9 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
                     }
                 }
                 interpreter.print(b"\n");
-                interpreter.new_value(ShimValue::Unit)
+                Ok(interpreter.g.the_unit.clone())
             })));
-        self.env_map_mut(|env| env.declare(print_name, print_fn))?;
+        self.env_declare(print_name, print_fn)?;
 
         let mut tokens = TokenStream::new(text);
         let script = match parse_script(&mut tokens, self.allocator) {
@@ -1738,7 +1889,6 @@ mod tests {
         tokens.advance();
         assert!(tokens.matches(Token::Semicolon));
 
-        dbg!(tokens.peek());
         assert!(tokens.matches(Token::LetKeyword));
         assert!(tokens.peek() == Token::Identifier(b"b"));
         tokens.advance();
