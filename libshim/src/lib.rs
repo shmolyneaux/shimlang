@@ -434,7 +434,9 @@ impl<A: Allocator> AClone for Expression<A> {
                 Expression::Binary(*op, ABox::aclone(expr_a)?, ABox::aclone(expr_b)?)
             }
             Expression::Call(cexpr) => Expression::Call(cexpr.aclone()?),
-            Expression::BlockCall(obj, block) => Expression::BlockCall(obj.aclone()?, block.aclone()?),
+            Expression::BlockCall(obj, block) => {
+                Expression::BlockCall(obj.aclone()?, block.aclone()?)
+            }
             Expression::Get(gexpr, prop) => Expression::Get(gexpr.aclone()?, prop.aclone()?),
         };
 
@@ -858,10 +860,7 @@ fn parse_if<'a, A: Allocator>(
     }
 }
 
-fn parse_fn<A: Allocator>(
-    tokens: &mut TokenStream,
-    allocator: A,
-) -> Result<FnDef<A>, ParseError> {
+fn parse_fn<A: Allocator>(tokens: &mut TokenStream, allocator: A) -> Result<FnDef<A>, ParseError> {
     if !tokens.matches(Token::FnKeyword) {
         return Err(PureParseError::Generic(b"Expected 'fn' when parsing function").into());
     }
@@ -881,9 +880,7 @@ fn parse_fn<A: Allocator>(
                 let arg_name = AVec::from_slice(&arg_name, allocator)?;
                 arg_names.push(arg_name)?;
             } else {
-                return Err(
-                    PureParseError::Generic(b"Expected identifier in fn arg list").into(),
-                );
+                return Err(PureParseError::Generic(b"Expected identifier in fn arg list").into());
             }
 
             tokens.advance();
@@ -894,9 +891,7 @@ fn parse_fn<A: Allocator>(
             break;
         }
         if !tokens.matches(Token::RightParen) {
-            return Err(
-                PureParseError::Generic(b"Expected right paren after fn arg list").into(),
-            );
+            return Err(PureParseError::Generic(b"Expected right paren after fn arg list").into());
         }
 
         let block = parse_block(tokens, allocator)?;
@@ -947,7 +942,10 @@ fn parse_statement<'a, A: Allocator>(
             }
 
             let mut members = AVec::new(allocator);
-            while tokens.peek() != Token::EOF && tokens.peek() != Token::RightCurly && tokens.peek() != Token::FnKeyword {
+            while tokens.peek() != Token::EOF
+                && tokens.peek() != Token::RightCurly
+                && tokens.peek() != Token::FnKeyword
+            {
                 if let Token::Identifier(name) = tokens.peek() {
                     let mut name_vec = AVec::new(allocator);
                     name_vec.extend_from_slice(&name)?;
@@ -1301,7 +1299,9 @@ impl<A: Allocator> ShimValue<A> {
 
                 Ok(match prop {
                     InstanceProp::Slot(num) => slots[*num].clone(),
-                    InstanceProp::Method(method) => interpreter.new_value(ShimValue::BoundFn(obj.clone(), method.clone()))?,
+                    InstanceProp::Method(method) => {
+                        interpreter.new_value(ShimValue::BoundFn(obj.clone(), method.clone()))?
+                    }
                 })
             }
             _ => Err(ShimError::Other(b"value no get_prop")),
@@ -1406,7 +1406,7 @@ impl<A: Allocator> Singletons<A> {
     // TODO: this should be alloc-fallible
     fn new(collector: &mut Collector<ShimValue<A>>) -> Self {
         Singletons {
-            the_unit: collector.manage(ShimValue::Unit)
+            the_unit: collector.manage(ShimValue::Unit),
         }
     }
 }
@@ -1417,7 +1417,7 @@ pub struct Interpreter<'a, A: Allocator> {
     env: Gc<ShimValue<A>>,
     // TODO: figure out how to make the ABox work like this
     print: Option<&'a mut dyn Printer>,
-    g: Singletons<A>
+    g: Singletons<A>,
 }
 
 pub trait Printer {
