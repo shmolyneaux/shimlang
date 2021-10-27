@@ -1,0 +1,3 @@
+struct Foo {a}
+
+print(Foo{a=3;}.a);
