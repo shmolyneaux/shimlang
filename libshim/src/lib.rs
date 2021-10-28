@@ -420,6 +420,7 @@ pub enum Expression<A: Allocator> {
     Call(CallExpr<A>),
     BlockCall(ABox<Expression<A>, A>, Block<A>),
     Get(ABox<Expression<A>, A>, AVec<u8, A>),
+    NamespaceGet(ABox<Expression<A>, A>, AVec<u8, A>),
 }
 
 impl<A: Allocator> AClone for Expression<A> {
@@ -438,6 +439,9 @@ impl<A: Allocator> AClone for Expression<A> {
                 Expression::BlockCall(obj.aclone()?, block.aclone()?)
             }
             Expression::Get(obj_expr, prop) => Expression::Get(obj_expr.aclone()?, prop.aclone()?),
+            Expression::NamespaceGet(obj_expr, prop) => {
+                Expression::NamespaceGet(obj_expr.aclone()?, prop.aclone()?)
+            }
         };
 
         Ok(res)
@@ -670,6 +674,19 @@ fn parse_call<'a, A: Allocator>(
                     expr = Expression::Get(ABox::new(expr, allocator)?, property);
                 } else {
                     return Err(PureParseError::Generic(b"Expected ident after dot").into());
+                }
+            }
+            (Token::DoubleColon, _) => {
+                tokens.advance();
+                if let Token::Identifier(ident) = tokens.peek() {
+                    let mut property = AVec::new(allocator);
+                    property.extend_from_slice(ident)?;
+
+                    tokens.advance();
+
+                    expr = Expression::NamespaceGet(ABox::new(expr, allocator)?, property);
+                } else {
+                    return Err(PureParseError::Generic(b"Expected ident after '::'").into());
                 }
             }
             (Token::LeftCurly, false) => {
@@ -1069,6 +1086,17 @@ impl<A: Allocator> StructDef<A> {
             }
         })
     }
+
+    fn get_namespace_prop(&self, name: &AVec<u8, A>) -> Result<Gc<ShimValue<A>>, ShimError> {
+        let prop = self
+            .props
+            .get(name)
+            .ok_or(ShimError::Other(b"struct def does not have prop"))?;
+        match prop {
+            InstanceProp::Method(method) => Ok(method.clone()),
+            InstanceProp::Slot(_) => return Err(ShimError::Other(b"not an instance prop")),
+        }
+    }
 }
 
 pub struct Struct<A: Allocator>(Gc<ShimValue<A>>, AVec<Gc<ShimValue<A>>, A>);
@@ -1274,6 +1302,16 @@ impl<A: Allocator> ShimValue<A> {
             _ => return Err(ShimError::Other(b"value not block-callable")),
         };
         interpreter.new_value(ShimValue::Struct(Struct(obj, members)))
+    }
+
+    fn get_namespace_prop(
+        obj: Gc<Self>,
+        name: &AVec<u8, A>,
+    ) -> Result<Gc<ShimValue<A>>, ShimError> {
+        match &*obj.borrow() {
+            ShimValue::StructDef(def) => def.get_namespace_prop(name),
+            _ => Err(ShimError::Other(b"value no namespace")),
+        }
     }
 
     fn get_prop(
@@ -1644,6 +1682,11 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
                 let obj = self.interpret_expression(&obj_expr)?;
 
                 ShimValue::get_prop(obj, prop, self)?
+            }
+            Expression::NamespaceGet(obj_expr, prop) => {
+                let obj = self.interpret_expression(&obj_expr)?;
+
+                ShimValue::get_namespace_prop(obj, prop)?
             }
         })
     }
