@@ -329,6 +329,12 @@ impl<T: std::cmp::PartialEq, A: Allocator> std::cmp::PartialEq for AVec<T, A> {
     }
 }
 
+impl<T, A: Allocator> Borrow<[T]> for AVec<T, A> {
+    fn borrow(&self) -> &[T] {
+        self.deref()
+    }
+}
+
 #[derive(Debug)]
 pub struct AHashEntry<K, V> {
     key: K,
@@ -357,20 +363,36 @@ impl<K: std::cmp::PartialEq, V, A: Allocator> AHashMap<K, V, A> {
         AHashMap { vec }
     }
 
-    pub fn get(&self, key: &K) -> Option<&V> {
+    pub fn get<Q>(&self, key: &Q) -> Option<&V>
+    where
+        K: Borrow<Q>,
+        Q: std::cmp::PartialEq + ?Sized,
+    {
         self.get_entry(key).map(|entry| &entry.value)
     }
 
-    pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
+    pub fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
+    where
+        K: Borrow<Q>,
+        Q: std::cmp::PartialEq + ?Sized,
+    {
         self.get_entry_mut(key).map(|entry| &mut entry.value)
     }
 
-    pub fn get_entry(&self, key: &K) -> Option<&AHashEntry<K, V>> {
-        self.vec.iter().find(|entry| entry.key == *key)
+    pub fn get_entry<Q>(&self, key: &Q) -> Option<&AHashEntry<K, V>>
+    where
+        K: Borrow<Q>,
+        Q: std::cmp::PartialEq + ?Sized,
+    {
+        self.vec.iter().find(|entry| entry.key.borrow() == key)
     }
 
-    pub fn get_entry_mut(&mut self, key: &K) -> Option<&mut AHashEntry<K, V>> {
-        self.vec.iter_mut().find(|entry| entry.key == *key)
+    pub fn get_entry_mut<Q>(&mut self, key: &Q) -> Option<&mut AHashEntry<K, V>>
+    where
+        K: Borrow<Q>,
+        Q: std::cmp::PartialEq + ?Sized,
+    {
+        self.vec.iter_mut().find(|entry| entry.key.borrow() == key)
     }
 
     pub fn insert(&mut self, key: K, value: V) -> Result<Option<V>, AllocError> {
@@ -387,7 +409,7 @@ impl<K: std::cmp::PartialEq, V, A: Allocator> AHashMap<K, V, A> {
             .vec
             .iter()
             .enumerate()
-            .find(|(_, entry)| entry.key == *key)
+            .find(|(_, entry)| entry.key.borrow() == key)
             .map(|(idx, _)| idx)
         {
             Some(self.vec.remove(idx).value)
@@ -478,5 +500,17 @@ mod tests {
         assert_eq!(map.remove(&1), Some("world".to_string()));
         assert_eq!(map.remove(&1), None);
         assert_eq!(map.get(&1), None);
+    }
+
+    #[test]
+    fn hashmap_avec_key() {
+        let allocator = std::alloc::Global;
+        let mut map = AHashMap::new(allocator);
+        let mut one = AVec::new(allocator);
+        one.extend_from_slice(b"one").unwrap();
+        map.insert(one, 1).unwrap();
+
+        let key: &[u8] = b"one";
+        assert_eq!(map.get(key), Some(&1));
     }
 }
