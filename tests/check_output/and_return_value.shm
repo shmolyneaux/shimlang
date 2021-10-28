@@ -1,0 +1,4 @@
+// Returns the first non-truthy value or the last value
+assert([] == [] and true);
+assert(1 == true and 1);
+assert(0 == true and [1] and 0);

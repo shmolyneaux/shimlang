@@ -1,0 +1,34 @@
+struct NodeIterator {
+    node
+
+    fn next(self) {
+        let ret = self.node;
+
+        if ret {
+            self.node = ret.next;
+            return ret;
+        } else {
+            // TODO: how do we signal to stop iteration?
+            return;
+        }
+    }
+}
+
+struct Node {
+    value,
+    next
+
+    fn iter(self) {
+        return NodeIterator {node=node};
+    }
+}
+
+let lst = Node {value="o", next=false};
+let lst = Node {value="l", next=lst};
+let lst = Node {value="l", next=lst};
+let lst = Node {value="e", next=lst};
+let lst = Node {value="h", next=lst};
+
+for node in lst {
+    print(node.value);
+}

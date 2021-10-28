@@ -1,0 +1,1 @@
+assert("test" == if true {"test"} else {"bad"});

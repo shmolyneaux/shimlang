@@ -1,0 +1,19 @@
+if [] {
+    assert(false);
+}
+
+if ![] {
+    assert(true);
+}
+
+if [0] {
+    assert(true);
+} else {
+    assert(false);
+}
+
+if ![0] {
+    assert(true);
+} else {
+    assert(false);
+}

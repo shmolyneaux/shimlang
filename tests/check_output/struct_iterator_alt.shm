@@ -1,0 +1,35 @@
+struct Node {
+    value,
+    next
+
+    fn iter(self) {
+        let node = self;
+
+        // TODO: it seems like struct defs need to capture their environment...
+        struct NodeIterator {
+            fn next(self) {
+                let ret = node;
+
+                if ret {
+                    node = ret.next;
+                    return ret;
+                } else {
+                    // TODO: how do we signal to stop iteration?
+                    return;
+                }
+            }
+        }
+
+        return NodeIterator {};
+    }
+}
+
+let lst = Node {value="o", next=false};
+let lst = Node {value="l", next=lst};
+let lst = Node {value="l", next=lst};
+let lst = Node {value="e", next=lst};
+let lst = Node {value="h", next=lst};
+
+for node in lst {
+    print(node.value);
+}

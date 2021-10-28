@@ -1,0 +1,2 @@
+// Assert doesn't fire since the whole things is true if just the first is true
+true or assert(false);
