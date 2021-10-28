@@ -437,7 +437,7 @@ impl<A: Allocator> AClone for Expression<A> {
             Expression::BlockCall(obj, block) => {
                 Expression::BlockCall(obj.aclone()?, block.aclone()?)
             }
-            Expression::Get(gexpr, prop) => Expression::Get(gexpr.aclone()?, prop.aclone()?),
+            Expression::Get(obj_expr, prop) => Expression::Get(obj_expr.aclone()?, prop.aclone()?),
         };
 
         Ok(res)
@@ -505,7 +505,7 @@ impl<A: Allocator> AClone for FnDef<A> {
 pub enum Statement<A: Allocator> {
     Expression(Expression<A>),
     Declaration(AVec<u8, A>, Expression<A>),
-    Assignment(AVec<u8, A>, Expression<A>),
+    Assignment(Option<Expression<A>>, AVec<u8, A>, Expression<A>),
     Block(Block<A>),
     IfStatement(IfStatement<A>),
     WhileStatement(Expression<A>, Block<A>),
@@ -523,8 +523,13 @@ impl<A: Allocator> AClone for Statement<A> {
             Statement::Declaration(name, expr) => {
                 Statement::Declaration(name.aclone()?, expr.aclone()?)
             }
-            Statement::Assignment(name, expr) => {
-                Statement::Assignment(name.aclone()?, expr.aclone()?)
+            Statement::Assignment(obj, name, expr) => {
+                let obj = if let Some(obj) = obj {
+                    Some(obj.aclone()?)
+                } else {
+                    None
+                };
+                Statement::Assignment(obj, name.aclone()?, expr.aclone()?)
             }
             Statement::Block(block) => Statement::Block(block.aclone()?),
             Statement::IfStatement(if_stmt) => Statement::IfStatement(if_stmt.aclone()?),
@@ -1008,7 +1013,13 @@ fn parse_statement<'a, A: Allocator>(
                 tokens.advance();
                 let expr = parse_expression(tokens, allocator)?;
 
-                Statement::Assignment(ident, expr)
+                Statement::Assignment(None, ident, expr)
+            }
+            (Expression::Get(obj_expr, prop), Token::Equal) => {
+                tokens.advance();
+
+                let expr = parse_expression(tokens, allocator)?;
+                Statement::Assignment(Some(obj_expr.into_inner()), prop, expr)
             }
             (expr, _) => Statement::Expression(expr),
         };
@@ -1307,6 +1318,33 @@ impl<A: Allocator> ShimValue<A> {
             _ => Err(ShimError::Other(b"value no get_prop")),
         }
     }
+
+    fn set_prop(
+        mut obj: Gc<Self>,
+        name: &AVec<u8, A>,
+        value: Gc<Self>,
+        _interpreter: &mut Interpreter<A>,
+    ) -> Result<(), ShimError> {
+        match (&mut *obj.borrow_mut(), name.deref()) {
+            (ShimValue::Struct(Struct(cls, slots)), _) => {
+                let cls = cls.borrow();
+                let prop = cls
+                    .as_struct_def()
+                    .ok_or(ShimError::Other(b"struct def of a struct... isn't..?"))?
+                    .instance_prop(name)
+                    .ok_or(ShimError::Other(b"struct does not have prop"))?;
+
+                match prop {
+                    InstanceProp::Slot(num) => slots[*num] = value,
+                    InstanceProp::Method(..) => {
+                        return Err(ShimError::Other(b"can't set_prop on method"));
+                    }
+                }
+                Ok(())
+            }
+            _ => Err(ShimError::Other(b"value no set_prop")),
+        }
+    }
 }
 
 impl<A: Allocator> Manage for ShimValue<A> {
@@ -1602,8 +1640,8 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
                 let x = ShimValue::block_call(obj, block, self)?;
                 x
             }
-            Expression::Get(gexpr, prop) => {
-                let obj = self.interpret_expression(&gexpr)?;
+            Expression::Get(obj_expr, prop) => {
+                let obj = self.interpret_expression(&obj_expr)?;
 
                 ShimValue::get_prop(obj, prop, self)?
             }
@@ -1669,16 +1707,19 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
                 let name_clone: AVec<u8, A> = name.aclone()?;
                 self.env_declare(name_clone, id)?;
             }
-            Statement::Assignment(name, expr) => {
-                // TODO: this should write the value to the existing id rather
-                // than writing a new id.
+            Statement::Assignment(obj_expr, name, expr) => {
                 let val = self.interpret_expression(expr)?;
-                let assign_result = self.env_assign(name, val);
-                if assign_result.is_err() {
-                    self.print(b"Variable ");
-                    self.print(&name);
-                    self.print(b" has not been declared\n");
-                    return Err(ShimError::Other(b"ident not found"));
+                if let Some(obj_expr) = obj_expr {
+                    let obj = self.interpret_expression(obj_expr)?;
+                    ShimValue::set_prop(obj, name, val, self)?
+                } else {
+                    let assign_result = self.env_assign(name, val);
+                    if assign_result.is_err() {
+                        self.print(b"Variable ");
+                        self.print(&name);
+                        self.print(b" has not been declared\n");
+                        return Err(ShimError::Other(b"ident not found"));
+                    }
                 }
             }
             Statement::Block(block) => {
