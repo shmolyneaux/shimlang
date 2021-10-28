@@ -1810,6 +1810,20 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
                 Ok(interpreter.g.the_unit.clone())
             })));
         self.env_declare(print_name, print_fn)?;
+        let mut assert_name: AVec<u8, A> = AVec::new(self.allocator);
+        assert_name.extend_from_slice(b"assert")?;
+        let assert_fn =
+            self.collector
+                .manage(ShimValue::NativeFn(Box::new(|args, interpreter| {
+                    if args.len() != 1 {
+                        return Err(ShimError::Other(b"assert takes 1 arg"));
+                    }
+                    if !args[0].borrow().is_truthy() {
+                        return Err(ShimError::Other(b"assertion failed"));
+                    }
+                    Ok(interpreter.g.the_unit.clone())
+                })));
+        self.env_declare(assert_name, assert_fn)?;
 
         let mut tokens = TokenStream::new(text);
         let script = match parse_script(&mut tokens, self.allocator) {

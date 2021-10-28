@@ -1,0 +1,23 @@
+struct Foo {
+    a,
+    b,
+    c,
+
+    fn print(self) {
+        print("a =", self.a);
+        print("b =", self.b);
+        print("c =", self.c);
+    }
+}
+
+let x = Foo {
+    c=0;
+    b=0;
+    a=0;
+};
+
+x.a = 42;
+x.b = 41;
+x.c = 40;
+
+x.print();
