@@ -3,6 +3,7 @@
 use acollections::{ABox, AClone, AHashMap, AVec};
 use lexical_core::FormattedSize;
 use std::alloc::AllocError;
+use std::cell::RefCell;
 use std::fmt::Debug;
 use std::ops::Deref;
 use tally_ho::{Collector, Gc, Manage};
@@ -45,6 +46,39 @@ pub enum BinaryOp {
     Gte,
     Lt,
     Lte,
+}
+
+impl BinaryOp {
+    fn from_str(s: &[u8]) -> Option<Self> {
+        match s {
+            b"add" => Some(Self::Add),
+            b"sub" => Some(Self::Sub),
+            b"mul" => Some(Self::Mul),
+            b"div" => Some(Self::Div),
+            b"eq" => Some(Self::Eq),
+            b"neq" => Some(Self::Neq),
+            b"gt" => Some(Self::Gt),
+            b"gte" => Some(Self::Gte),
+            b"lt" => Some(Self::Lt),
+            b"lte" => Some(Self::Lte),
+            _ => None,
+        }
+    }
+
+    fn to_str(&self) -> &'static [u8] {
+        match self {
+            Self::Add => b"add",
+            Self::Sub => b"sub",
+            Self::Mul => b"mul",
+            Self::Div => b"div",
+            Self::Eq => b"eq",
+            Self::Neq => b"neq",
+            Self::Gt => b"gt",
+            Self::Gte => b"gte",
+            Self::Lt => b"lt",
+            Self::Lte => b"lte",
+        }
+    }
 }
 
 #[derive(PartialEq, Debug, Copy, Clone)]
@@ -1073,18 +1107,8 @@ pub struct StructDef<A: Allocator> {
 }
 
 impl<A: Allocator> StructDef<A> {
-    fn instance_prop(&self, name: &AVec<u8, A>) -> Option<&InstanceProp<A>> {
+    fn instance_prop(&self, name: &[u8]) -> Option<&InstanceProp<A>> {
         self.props.get(name)
-    }
-
-    fn instance_members(&self) -> impl Iterator<Item = &AVec<u8, A>> {
-        self.props.iter().filter_map(|entry| {
-            if matches!(entry.value(), InstanceProp::Slot(_)) {
-                Some(entry.key())
-            } else {
-                None
-            }
-        })
     }
 
     fn get_namespace_prop(&self, name: &AVec<u8, A>) -> Result<Gc<ShimValue<A>>, ShimError> {
@@ -1099,7 +1123,35 @@ impl<A: Allocator> StructDef<A> {
     }
 }
 
-pub struct Struct<A: Allocator>(Gc<ShimValue<A>>, AVec<Gc<ShimValue<A>>, A>);
+pub struct Struct<A: Allocator>(Gc<ShimValue<A>>, RefCell<AVec<Gc<ShimValue<A>>, A>>);
+
+impl<A: 'static + Allocator> Struct<A> {
+    fn get_prop(
+        obj: &Gc<ShimValue<A>>,
+        name: &[u8],
+        interpreter: &mut Interpreter<A>,
+    ) -> Result<Gc<ShimValue<A>>, ShimError> {
+        if let ShimValue::Struct(s) = &*obj.borrow() {
+            let cls = s.0.borrow();
+            let prop = cls
+                .as_struct_def()
+                .ok_or(ShimError::Other(b"struct def of a struct... isn't..?"))?
+                .instance_prop(name)
+                .ok_or(ShimError::Other(b"struct does not have prop"))?;
+
+            Ok(match prop {
+                InstanceProp::Slot(num) => s.1.borrow()[*num].clone(),
+                InstanceProp::Method(method) => {
+                    interpreter.new_value(ShimValue::BoundFn(obj.clone(), method.clone()))?
+                }
+            })
+        } else {
+            Err(ShimError::Other(
+                b"INTERNAL called Struct::get_prop on non-struct",
+            ))
+        }
+    }
+}
 
 pub enum ShimValue<A: Allocator> {
     // A variant used to replace a previous-valid value after GC
@@ -1114,7 +1166,7 @@ pub enum ShimValue<A: Allocator> {
     NativeFn(
         Box<
             dyn Fn(
-                AVec<Gc<ShimValue<A>>, A>,
+                &AVec<Gc<ShimValue<A>>, A>,
                 &mut Interpreter<A>,
             ) -> Result<Gc<ShimValue<A>>, ShimError>,
         >,
@@ -1143,7 +1195,7 @@ impl<A: Allocator> Debug for ShimValue<A> {
     }
 }
 
-impl<A: Allocator> ShimValue<A> {
+impl<A: 'static + Allocator> ShimValue<A> {
     fn as_struct_def(&self) -> Option<&StructDef<A>> {
         match self {
             Self::StructDef(def) => Some(def),
@@ -1217,7 +1269,7 @@ impl<A: Allocator> ShimValue<A> {
 
     fn call(
         &self,
-        args: AVec<Gc<ShimValue<A>>, A>,
+        args: &AVec<Gc<ShimValue<A>>, A>,
         interpreter: &mut Interpreter<A>,
     ) -> Result<Gc<ShimValue<A>>, ShimError> {
         match self {
@@ -1257,7 +1309,7 @@ impl<A: Allocator> ShimValue<A> {
                 for arg in args.iter() {
                     args_with_obj.push(arg.clone())?;
                 }
-                the_fn.borrow().call(args_with_obj, interpreter)
+                the_fn.borrow().call(&args_with_obj, interpreter)
             }
             Self::NativeFn(boxed_fn) => boxed_fn(args, interpreter),
             _ => Err(ShimError::Other(b"value not callable")),
@@ -1301,7 +1353,7 @@ impl<A: Allocator> ShimValue<A> {
             }
             _ => return Err(ShimError::Other(b"value not block-callable")),
         };
-        interpreter.new_value(ShimValue::Struct(Struct(obj, members)))
+        interpreter.new_value(ShimValue::Struct(Struct(obj, RefCell::new(members))))
     }
 
     fn get_namespace_prop(
@@ -1315,55 +1367,34 @@ impl<A: Allocator> ShimValue<A> {
     }
 
     fn get_prop(
-        obj: Gc<Self>,
-        name: &AVec<u8, A>,
+        obj: &Gc<Self>,
+        name: &[u8],
         interpreter: &mut Interpreter<A>,
     ) -> Result<Gc<ShimValue<A>>, ShimError> {
-        match (&*obj.borrow(), name.deref()) {
-            (ShimValue::SString(_), b"lower") => {
-                let the_fn =
-                    interpreter.new_value(ShimValue::NativeFn(Box::new(|args, interpreter| {
-                        assert!(args.len() == 1);
-                        match &*args[0].borrow() {
-                            ShimValue::SString(s) => {
-                                let mut lowered = AVec::new(interpreter.allocator);
-                                for c in s.iter() {
-                                    lowered.push(c.to_ascii_lowercase())?;
-                                }
-
-                                interpreter.new_value(ShimValue::SString(lowered))
-                            }
-                            _ => Err(ShimError::Other(b"lower only str")),
-                        }
-                    })))?;
-                interpreter.new_value(ShimValue::BoundFn(obj.clone(), the_fn))
+        // TODO: it seems like the binary_op's could be global...?
+        if let Some(op) = BinaryOp::from_str(name) {
+            let the_fn = binary_op(op, interpreter)?;
+            interpreter.new_value(ShimValue::BoundFn(obj.clone(), the_fn))
+        } else {
+            match (&*obj.borrow(), name) {
+                (ShimValue::Struct(_), _) => Struct::get_prop(obj, name, interpreter),
+                (ShimValue::SString(_), b"lower") => {
+                    // Seems like we should make builtins like this global?
+                    let the_fn = interpreter.new_value(ShimValue::NativeFn(Box::new(str_lower)))?;
+                    interpreter.new_value(ShimValue::BoundFn(obj.clone(), the_fn))
+                }
+                _ => return Err(ShimError::Other(b"value no get_prop")),
             }
-            (ShimValue::Struct(Struct(cls, slots)), _) => {
-                let cls = cls.borrow();
-                let prop = cls
-                    .as_struct_def()
-                    .ok_or(ShimError::Other(b"struct def of a struct... isn't..?"))?
-                    .instance_prop(name)
-                    .ok_or(ShimError::Other(b"struct does not have prop"))?;
-
-                Ok(match prop {
-                    InstanceProp::Slot(num) => slots[*num].clone(),
-                    InstanceProp::Method(method) => {
-                        interpreter.new_value(ShimValue::BoundFn(obj.clone(), method.clone()))?
-                    }
-                })
-            }
-            _ => Err(ShimError::Other(b"value no get_prop")),
         }
     }
 
     fn set_prop(
-        mut obj: Gc<Self>,
+        obj: &Gc<Self>,
         name: &AVec<u8, A>,
         value: Gc<Self>,
         _interpreter: &mut Interpreter<A>,
     ) -> Result<(), ShimError> {
-        match (&mut *obj.borrow_mut(), name.deref()) {
+        match (&*obj.borrow(), name.deref()) {
             (ShimValue::Struct(Struct(cls, slots)), _) => {
                 let cls = cls.borrow();
                 let prop = cls
@@ -1373,7 +1404,8 @@ impl<A: Allocator> ShimValue<A> {
                     .ok_or(ShimError::Other(b"struct does not have prop"))?;
 
                 match prop {
-                    InstanceProp::Slot(num) => slots[*num] = value,
+                    // Slots is only ever borrowed for a brief time in get_prop
+                    InstanceProp::Slot(num) => slots.borrow_mut()[*num] = value,
                     InstanceProp::Method(..) => {
                         return Err(ShimError::Other(b"can't set_prop on method"));
                     }
@@ -1382,6 +1414,82 @@ impl<A: Allocator> ShimValue<A> {
             }
             _ => Err(ShimError::Other(b"value no set_prop")),
         }
+    }
+}
+
+fn binary_op<A: 'static + Allocator>(
+    op: BinaryOp,
+    interpreter: &mut Interpreter<A>,
+) -> Result<Gc<ShimValue<A>>, ShimError> {
+    interpreter.new_value(ShimValue::NativeFn(Box::new(move |args, interpreter| {
+        if args.len() != 2 {
+            return Err(ShimError::Other(b"expected 2 arguments"));
+        }
+
+        let result = match (&*args[0].borrow(), &*args[1].borrow(), op) {
+            (ShimValue::I128(a), ShimValue::I128(b), op) => match op {
+                BinaryOp::Add => ShimValue::I128(a + b),
+                BinaryOp::Sub => ShimValue::I128(a - b),
+                BinaryOp::Mul => ShimValue::I128(a * b),
+                BinaryOp::Div => ShimValue::I128(a / b),
+                BinaryOp::Eq => ShimValue::Bool(a == b),
+                BinaryOp::Neq => ShimValue::Bool(a != b),
+                BinaryOp::Gt => ShimValue::Bool(a > b),
+                BinaryOp::Gte => ShimValue::Bool(a >= b),
+                BinaryOp::Lt => ShimValue::Bool(a < b),
+                BinaryOp::Lte => ShimValue::Bool(a <= b),
+            },
+            (ShimValue::F64(a), ShimValue::F64(b), op) => match op {
+                BinaryOp::Add => ShimValue::F64(a + b),
+                BinaryOp::Sub => ShimValue::F64(a - b),
+                BinaryOp::Mul => ShimValue::F64(a * b),
+                BinaryOp::Div => ShimValue::F64(a / b),
+                BinaryOp::Eq => ShimValue::Bool(a == b),
+                BinaryOp::Neq => ShimValue::Bool(a != b),
+                BinaryOp::Gt => ShimValue::Bool(a > b),
+                BinaryOp::Gte => ShimValue::Bool(a >= b),
+                BinaryOp::Lt => ShimValue::Bool(a < b),
+                BinaryOp::Lte => ShimValue::Bool(a <= b),
+            },
+            (ShimValue::SString(a), ShimValue::SString(b), BinaryOp::Add) => {
+                let mut out = AVec::new(interpreter.allocator);
+                out.extend_from_slice(&a)?;
+                out.extend_from_slice(&b)?;
+
+                ShimValue::SString(out)
+            }
+            (ShimValue::SString(a), ShimValue::SString(b), BinaryOp::Eq) => ShimValue::Bool(a == b),
+            (ShimValue::SString(a), ShimValue::SString(b), BinaryOp::Neq) => {
+                ShimValue::Bool(a != b)
+            }
+            (ShimValue::Struct(_), _, op) => {
+                let bound_fn = Struct::get_prop(&args[0], op.to_str(), interpreter)?;
+                let mut method_args: AVec<Gc<_>, _> = AVec::new(interpreter.allocator);
+                method_args.push(args[1].clone())?;
+                return ShimValue::call(&bound_fn.borrow(), &method_args, interpreter);
+            }
+            _ => return Err(ShimError::Other(b"not operable")),
+        };
+
+        interpreter.new_value(result)
+    })))
+}
+
+fn str_lower<A: 'static + Allocator>(
+    args: &AVec<Gc<ShimValue<A>>, A>,
+    interpreter: &mut Interpreter<A>,
+) -> Result<Gc<ShimValue<A>>, ShimError> {
+    if args.len() != 1 {
+        Err(ShimError::Other(b"expected 1 argument"))
+    } else if let ShimValue::SString(s) = &*args[0].borrow() {
+        let mut lowered = AVec::new(interpreter.allocator);
+        for c in s.iter() {
+            lowered.push(c.to_ascii_lowercase())?;
+        }
+
+        interpreter.new_value(ShimValue::SString(lowered))
+    } else {
+        Err(ShimError::Other(b"not a str"))
     }
 }
 
@@ -1543,7 +1651,7 @@ enum BlockExit<A: Allocator> {
     Return(Gc<ShimValue<A>>),
 }
 
-impl<'a, A: Allocator> Interpreter<'a, A> {
+impl<'a, A: 'static + Allocator> Interpreter<'a, A> {
     // TODO: this should be alloc-fallible
     pub fn new(allocator: A) -> Interpreter<'a, A> {
         let mut collector = Collector::new();
@@ -1636,32 +1744,16 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
                 let left = self.interpret_expression(&*left)?;
                 let right = self.interpret_expression(&*right)?;
 
-                let result = match (&*left.borrow(), &*right.borrow(), op) {
-                    (ShimValue::I128(a), ShimValue::I128(b), _) => match op {
-                        BinaryOp::Add => ShimValue::I128(a + b),
-                        BinaryOp::Sub => ShimValue::I128(a - b),
-                        BinaryOp::Mul => ShimValue::I128(a * b),
-                        BinaryOp::Div => ShimValue::I128(a / b),
-                        BinaryOp::Eq => ShimValue::Bool(a == b),
-                        BinaryOp::Neq => ShimValue::Bool(a != b),
-                        BinaryOp::Gt => ShimValue::Bool(a > b),
-                        BinaryOp::Gte => ShimValue::Bool(a >= b),
-                        BinaryOp::Lt => ShimValue::Bool(a < b),
-                        BinaryOp::Lte => ShimValue::Bool(a <= b),
-                    },
-                    (ShimValue::SString(a), ShimValue::SString(b), BinaryOp::Eq) => {
-                        ShimValue::Bool(a == b)
-                    }
-                    (ShimValue::SString(a), ShimValue::SString(b), BinaryOp::Neq) => {
-                        ShimValue::Bool(a != b)
-                    }
-                    _ => {
-                        self.print(b"TODO: values can't be bin-opped\n");
-                        ShimValue::I128(42)
-                    }
-                };
+                // We need the binary operators to exist as methods, though
+                // the indirection for adding simple numerics is kind of painful.
+                // TODO: we probably want to have a fast-path for numbers
+                let bound_fn = ShimValue::get_prop(&left, op.to_str(), self)?;
 
-                self.new_value(result)?
+                let mut args = AVec::new(self.allocator);
+                args.push(right)?;
+
+                let x = ShimValue::call(&bound_fn.borrow(), &args, self)?;
+                x
             }
             Expression::Call(cexpr) => {
                 let func = self.interpret_expression(&cexpr.func)?;
@@ -1670,7 +1762,7 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
                 for expr in cexpr.args.iter() {
                     args.push(self.interpret_expression(expr)?)?;
                 }
-                let x = func.borrow().call(args, self)?;
+                let x = func.borrow().call(&args, self)?;
                 x
             }
             Expression::BlockCall(expr, block) => {
@@ -1681,7 +1773,7 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
             Expression::Get(obj_expr, prop) => {
                 let obj = self.interpret_expression(&obj_expr)?;
 
-                ShimValue::get_prop(obj, prop, self)?
+                ShimValue::get_prop(&obj, prop, self)?
             }
             Expression::NamespaceGet(obj_expr, prop) => {
                 let obj = self.interpret_expression(&obj_expr)?;
@@ -1753,8 +1845,8 @@ impl<'a, A: Allocator> Interpreter<'a, A> {
             Statement::Assignment(obj_expr, name, expr) => {
                 let val = self.interpret_expression(expr)?;
                 if let Some(obj_expr) = obj_expr {
-                    let obj = self.interpret_expression(obj_expr)?;
-                    ShimValue::set_prop(obj, name, val, self)?
+                    let mut obj = self.interpret_expression(obj_expr)?;
+                    ShimValue::set_prop(&mut obj, name, val, self)?
                 } else {
                     let assign_result = self.env_assign(name, val);
                     if assign_result.is_err() {
