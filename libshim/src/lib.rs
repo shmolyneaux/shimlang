@@ -455,6 +455,7 @@ pub enum Expression<A: Allocator> {
     BlockCall(ABox<Expression<A>, A>, Block<A>),
     Get(ABox<Expression<A>, A>, AVec<u8, A>),
     NamespaceGet(ABox<Expression<A>, A>, AVec<u8, A>),
+    // TODO: block expression
 }
 
 impl<A: Allocator> AClone for Expression<A> {
@@ -549,8 +550,9 @@ pub enum Statement<A: Allocator> {
     WhileStatement(Expression<A>, Block<A>),
     FnDef(FnDef<A>),
     StructDef(AVec<u8, A>, AVec<AVec<u8, A>, A>, AVec<FnDef<A>, A>),
-    BreakStatement,
+    BreakStatement(Option<Expression<A>>),
     ContinueStatement,
+    TailStatement(Expression<A>),
     ReturnStatement(Expression<A>),
 }
 
@@ -578,8 +580,12 @@ impl<A: Allocator> AClone for Statement<A> {
             Statement::StructDef(name, members, methods) => {
                 Statement::StructDef(name.aclone()?, members.aclone()?, methods.aclone()?)
             }
-            Statement::BreakStatement => Statement::BreakStatement,
+            Statement::BreakStatement(expr) => Statement::BreakStatement(match expr {
+                Some(expr) => Some(expr.aclone()?),
+                None => None,
+            }),
             Statement::ContinueStatement => Statement::ContinueStatement,
+            Statement::TailStatement(expr) => Statement::TailStatement(expr.aclone()?),
             Statement::ReturnStatement(expr) => Statement::ReturnStatement(expr.aclone()?),
         };
 
@@ -1043,13 +1049,15 @@ fn parse_statement<'a, A: Allocator>(
         if !tokens.matches(Token::Semicolon) {
             return Err(PureParseError::Generic(b"Missing semicolon after break").into());
         }
-        Ok(Statement::BreakStatement)
+        // TODO: parse break value
+        Ok(Statement::BreakStatement(None))
     } else if tokens.matches(Token::ContinueKeyword) {
         if !tokens.matches(Token::Semicolon) {
             return Err(PureParseError::Generic(b"Missing semicolon after continue").into());
         }
         Ok(Statement::ContinueStatement)
     } else if tokens.matches(Token::ReturnKeyword) {
+        // TODO: what about optional returns?
         let expr = parse_expression(tokens, allocator)?;
         if !tokens.matches(Token::Semicolon) {
             return Err(PureParseError::Generic(b"Missing semicolon after return").into());
@@ -1075,11 +1083,17 @@ fn parse_statement<'a, A: Allocator>(
             (expr, _) => Statement::Expression(expr),
         };
 
-        if !tokens.matches(Token::Semicolon) {
-            return Err(PureParseError::Generic(b"Missing semicolon after expression").into());
+        match (stmt, tokens.peek()) {
+            (Statement::Expression(expr), Token::RightCurly) => {
+                // This must be a tail expression since a '}' comes immediately after it.
+                Ok(Statement::TailStatement(expr))
+            }
+            (stmt, Token::Semicolon) => {
+                tokens.advance();
+                Ok(stmt)
+            }
+            _ => Err(PureParseError::Generic(b"Missing semicolon after expression").into()),
         }
-
-        Ok(stmt)
     }
 }
 
@@ -1297,10 +1311,13 @@ impl<A: 'static + Allocator> ShimValue<A> {
                 let exit_result = exit_result?;
 
                 match exit_result {
-                    BlockExit::Finish => Ok(interpreter.g.the_unit.clone()),
-                    BlockExit::Break => Ok(interpreter.g.the_unit.clone()),
-                    BlockExit::Continue => Ok(interpreter.g.the_unit.clone()),
+                    BlockExit::Finish(val) => Ok(val),
                     BlockExit::Return(val) => Ok(val),
+
+                    // TODO: The parser should prevent these from being used
+                    // outside of a loop... but we'll ignore that for now.
+                    BlockExit::Break(val) => Ok(val),
+                    BlockExit::Continue => Ok(interpreter.g.the_unit.clone()),
                 }
             }
             Self::BoundFn(obj, the_fn) => {
@@ -1645,9 +1662,9 @@ impl<'a, A: Allocator> NewValue<FnDef<A>, A> for Interpreter<'a, A> {
 }
 
 enum BlockExit<A: Allocator> {
-    Break,
+    Break(Gc<ShimValue<A>>),
     Continue,
-    Finish,
+    Finish(Gc<ShimValue<A>>),
     Return(Gc<ShimValue<A>>),
 }
 
@@ -1784,21 +1801,21 @@ impl<'a, A: 'static + Allocator> Interpreter<'a, A> {
     }
 
     fn interpret_block_inner(&mut self, block: &Block<A>) -> Result<BlockExit<A>, ShimError> {
+        let mut last_val = self.g.the_unit.clone();
         for stmt in block.stmts.iter() {
             match self.interpret_statement(stmt)? {
-                Some(BlockExit::Finish) => {}
-                None => {}
+                Some(BlockExit::Finish(val)) => last_val = val,
+                // None means that this wasn't a control flow statement
+                None => last_val = self.g.the_unit.clone(),
 
                 // Special exit cases
-                Some(BlockExit::Break) => return Ok(BlockExit::Break),
+                Some(BlockExit::Break(val)) => return Ok(BlockExit::Break(val)),
                 Some(BlockExit::Continue) => return Ok(BlockExit::Continue),
                 Some(BlockExit::Return(val)) => return Ok(BlockExit::Return(val)),
             }
         }
 
-        // TODO: return a ShimValue if the last expression didn't end with a
-        // semicolon (like Rust)
-        Ok(BlockExit::Finish)
+        Ok(BlockExit::Finish(last_val))
     }
 
     fn enter_block(&mut self) -> Result<(), AllocError> {
@@ -1867,29 +1884,54 @@ impl<'a, A: 'static + Allocator> Interpreter<'a, A> {
                 } else if let Some(else_block) = &if_stmt.else_block {
                     self.interpret_block(else_block)?
                 } else {
-                    BlockExit::Finish
+                    BlockExit::Finish(self.g.the_unit.clone())
                 };
 
                 match exit_result {
-                    BlockExit::Break => return Ok(Some(BlockExit::Break)),
+                    // Normal exit for block
+                    BlockExit::Finish(val) => return Ok(Some(BlockExit::Finish(val))),
+
+                    // These need to propagate to the loop/function this if
+                    // statement is inside
+                    BlockExit::Break(val) => return Ok(Some(BlockExit::Break(val))),
                     BlockExit::Continue => return Ok(Some(BlockExit::Continue)),
-                    BlockExit::Finish => {}
-                    BlockExit::Return(expr) => return Ok(Some(BlockExit::Return(expr))),
+                    BlockExit::Return(val) => return Ok(Some(BlockExit::Return(val))),
                 }
             }
-            Statement::WhileStatement(predicate, block) => loop {
-                let predicate = self.interpret_expression(&predicate)?;
-                if !predicate.borrow().is_truthy() {
-                    break;
+            Statement::WhileStatement(predicate, block) => {
+                let mut last_value = self.g.the_unit.clone();
+                loop {
+                    let predicate = self.interpret_expression(&predicate)?;
+                    if !predicate.borrow().is_truthy() {
+                        break;
+                    }
+                    match self.interpret_block(&block)? {
+                        // The loop will evaluate to the last statement that
+                        // was executed. These might be the last statements that
+                        // run if the predicate is now false.
+                        BlockExit::Finish(val) => last_value = val,
+                        BlockExit::Continue => last_value = self.g.the_unit.clone(),
+
+                        // Finish evaluating the loop since we have an exit value
+                        BlockExit::Break(val) => return Ok(Some(BlockExit::Finish(val))),
+
+                        // This needs to propagate up to the function call
+                        BlockExit::Return(val) => return Ok(Some(BlockExit::Return(val))),
+                    }
                 }
-                match self.interpret_block(&block)? {
-                    BlockExit::Break => return Ok(Some(BlockExit::Finish)),
-                    BlockExit::Continue | BlockExit::Finish => continue,
-                    BlockExit::Return(expr) => return Ok(Some(BlockExit::Return(expr))),
-                }
-            },
-            Statement::BreakStatement => return Ok(Some(BlockExit::Break)),
+            }
+            Statement::BreakStatement(None) => {
+                return Ok(Some(BlockExit::Break(self.g.the_unit.clone())));
+            }
+            Statement::BreakStatement(Some(expr)) => {
+                let break_value = self.interpret_expression(&expr)?;
+                return Ok(Some(BlockExit::Break(break_value)));
+            }
             Statement::ContinueStatement => return Ok(Some(BlockExit::Continue)),
+            Statement::TailStatement(expr) => {
+                let val = self.interpret_expression(expr)?;
+                return Ok(Some(BlockExit::Finish(val)));
+            }
             Statement::ReturnStatement(expr) => {
                 let val = self.interpret_expression(expr)?;
                 return Ok(Some(BlockExit::Return(val)));
