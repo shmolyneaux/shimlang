@@ -1919,6 +1919,7 @@ impl<'a, A: 'static + Allocator> Interpreter<'a, A> {
                         BlockExit::Return(val) => return Ok(Some(BlockExit::Return(val))),
                     }
                 }
+                return Ok(Some(BlockExit::Finish(last_value)));
             }
             Statement::BreakStatement(None) => {
                 return Ok(Some(BlockExit::Break(self.g.the_unit.clone())));
