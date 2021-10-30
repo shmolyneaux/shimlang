@@ -1,0 +1,6 @@
+struct Foo {
+    fn foo() {
+        return 42;
+    }
+}
+assert(Foo::foo() == 42);

@@ -30,7 +30,9 @@ tests/check_output/print_str_with_slash.shm
 tests/check_output/print_with_comments.shm
 tests/check_output/simple_assignment.shm
 tests/check_output/str_concat.shm
+tests/check_output/struct_comparison.shm
 tests/check_output/struct_construction.shm
+tests/check_output/struct_custom_add.out
 tests/check_output/struct_empty.shm
 tests/check_output/struct_get_attr.shm
 tests/check_output/struct_method_call.shm

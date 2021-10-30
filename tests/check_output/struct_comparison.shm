@@ -1,0 +1,22 @@
+struct Foo {
+    a
+}
+
+struct Bar {
+    a
+
+    fn eq(self, other) {
+        self.a == other.a
+    }
+}
+
+// Using the default eq
+assert(Foo {a=1;} == Foo {a=1;});
+assert(Foo {a=1;} != Foo {a=2;});
+
+// This uses the default eq, but it's a bit weird that the left side gets
+// precedence over the right side for deciding which eq to use.
+assert(Foo {a=1;} != Bar {a=1;});
+
+// Using custom eq
+assert(Bar {a=1;} == Foo {a=1;});
