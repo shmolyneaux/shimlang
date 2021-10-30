@@ -125,6 +125,7 @@ pub enum Token<'a> {
     EnumKeyword,
     FnKeyword,
     ForKeyword,
+    InKeyword,
     IfKeyword,
     OrKeyword,
     ReturnKeyword,
@@ -378,6 +379,7 @@ impl<'a> TokenStream<'a> {
                             b"enum" => (Token::EnumKeyword, inc),
                             b"fn" => (Token::FnKeyword, inc),
                             b"for" => (Token::ForKeyword, inc),
+                            b"in" => (Token::InKeyword, inc),
                             b"if" => (Token::IfKeyword, inc),
                             b"or" => (Token::OrKeyword, inc),
                             b"return" => (Token::ReturnKeyword, inc),
@@ -808,6 +810,15 @@ fn parse_primary<'a, A: Allocator>(
             let body = parse_block(tokens, allocator)?;
             Ok(Expression::BlockExpr(body))
         }
+        Token::LeftParen => {
+            tokens.advance();
+            let expr = parse_expression(tokens, allocator)?;
+            if tokens.matches(Token::RightParen) {
+                Ok(expr)
+            } else {
+                Err(PureParseError::Generic(b"Expected closing paren").into())
+            }
+        }
         token => {
             if cfg!(debug_assertions) {
                 println!("Token: {:?}", token);
@@ -1051,6 +1062,68 @@ fn parse_statement<'a, A: Allocator>(
         let predicate = parse_predicate(tokens, allocator)?;
         let block = parse_block(tokens, allocator)?;
         Ok(Statement::WhileStatement(predicate, block))
+    } else if tokens.matches(Token::ForKeyword) {
+        let name_vec = if let Token::Identifier(name) = tokens.peek() {
+            AVec::from_slice(&name, allocator)?
+        } else {
+            return Err(PureParseError::Generic(b"Missing ident for declaration").into());
+        };
+
+        tokens.advance();
+        if !tokens.matches(Token::InKeyword) {
+            return Err(PureParseError::Generic(b"Missing 'in' in for declaration").into());
+        }
+        let expr_to_iter = parse_predicate(tokens, allocator)?;
+        let block = parse_block(tokens, allocator)?;
+
+        // Based on the for loop syntax, generate this:
+        //
+        //     {
+        //         let iter = expr_to_iter.iter();
+        //         let name_vec = ();
+        //         while ({name_vec = iter.next(); name_vec != StopIteration}) {
+        //             <body>
+        //         }
+        //     }
+
+        Ok(Statement::Block(Block {
+            stmts: {
+                let mut outer_block_statements = AVec::new(allocator);
+                let iter_name = AVec::from_slice(b"__iter__", allocator)?;
+
+                outer_block_statements.push(Statement::Declaration(
+                    iter_name,
+                    Expression::Call(CallExpr {
+                        func: ABox::new(
+                            Expression::Get(
+                                ABox::new(expr_to_iter, allocator)?,
+                                AVec::from_slice(b"iter", allocator)?,
+                            ),
+                            allocator,
+                        )?,
+                        args: AVec::new(allocator),
+                    }),
+                ))?;
+                outer_block_statements.push(
+                    // TODO: replace with unit when we get syntax for that
+                    Statement::Declaration(name_vec.aclone()?, Expression::BoolLiteral(false)),
+                )?;
+                outer_block_statements.push(Statement::WhileStatement(
+                    codegen_expression(
+                        &[
+                            b"{",
+                            name_vec.deref(),
+                            b" = __iter__.next(); ",
+                            name_vec.deref(),
+                            b" != StopIteration}",
+                        ],
+                        allocator,
+                    )?,
+                    block,
+                ))?;
+                outer_block_statements
+            },
+        }))
     } else if tokens.matches(Token::BreakKeyword) {
         if !tokens.matches(Token::Semicolon) {
             return Err(PureParseError::Generic(b"Missing semicolon after break").into());
@@ -1115,6 +1188,45 @@ fn parse_predicate<'a, A: Allocator>(
     allocator: A,
 ) -> Result<Expression<A>, ParseError> {
     parse_equality(tokens, true, allocator)
+}
+
+pub fn codegen_expression<'a, A: Allocator>(
+    code: &[&[u8]],
+    allocator: A,
+) -> Result<Expression<A>, ParseError> {
+    let mut codegen = AVec::new(allocator);
+    for fragment in code {
+        codegen.extend_from_slice(fragment)?;
+    }
+
+    let mut tokens = TokenStream::new(&codegen);
+    parse_expression(&mut tokens, allocator)
+}
+
+pub fn codegen_statement<'a, A: Allocator>(
+    code: &[&[u8]],
+    allocator: A,
+) -> Result<Statement<A>, ParseError> {
+    let mut codegen = AVec::new(allocator);
+    for fragment in code {
+        codegen.extend_from_slice(fragment)?;
+    }
+
+    let mut tokens = TokenStream::new(&codegen);
+    parse_statement(&mut tokens, allocator)
+}
+
+pub fn codegen_statements<'a, A: Allocator>(
+    code: &[&[u8]],
+    allocator: A,
+) -> Result<AVec<Statement<A>, A>, ParseError> {
+    let mut codegen = AVec::new(allocator);
+    for fragment in code {
+        codegen.extend_from_slice(fragment)?;
+    }
+
+    let mut tokens = TokenStream::new(&codegen);
+    Ok(parse_block_open(&mut tokens, allocator)?.stmts)
 }
 
 enum InstanceProp<A: Allocator> {
@@ -1532,6 +1644,12 @@ fn binary_op<A: 'static + Allocator>(
                 } else {
                     return Err(ShimError::Other(b"struct not operable"));
                 }
+            }
+            (ShimValue::StructDef(_), ShimValue::StructDef(_), BinaryOp::Eq) => {
+                ShimValue::Bool(Gc::ptr_eq(&args[0], &args[1]))
+            }
+            (ShimValue::StructDef(_), ShimValue::StructDef(_), BinaryOp::Neq) => {
+                ShimValue::Bool(!Gc::ptr_eq(&args[0], &args[1]))
             }
             // TODO: function equality etc.
             (_, _, BinaryOp::Eq) => ShimValue::Bool(false),
