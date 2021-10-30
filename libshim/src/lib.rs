@@ -452,6 +452,7 @@ pub enum Expression<A: Allocator> {
     StringLiteral(AVec<u8, A>),
     Binary(BinaryOp, ABox<Expression<A>, A>, ABox<Expression<A>, A>),
     Call(CallExpr<A>),
+    BlockExpr(Block<A>),
     BlockCall(ABox<Expression<A>, A>, Block<A>),
     Get(ABox<Expression<A>, A>, AVec<u8, A>),
     NamespaceGet(ABox<Expression<A>, A>, AVec<u8, A>),
@@ -470,6 +471,7 @@ impl<A: Allocator> AClone for Expression<A> {
                 Expression::Binary(*op, ABox::aclone(expr_a)?, ABox::aclone(expr_b)?)
             }
             Expression::Call(cexpr) => Expression::Call(cexpr.aclone()?),
+            Expression::BlockExpr(block) => Expression::BlockExpr(block.aclone()?),
             Expression::BlockCall(obj, block) => {
                 Expression::BlockCall(obj.aclone()?, block.aclone()?)
             }
@@ -801,6 +803,10 @@ fn parse_primary<'a, A: Allocator>(
 
             tokens.advance();
             Ok(Expression::Identifier(vec))
+        }
+        Token::LeftCurly => {
+            let body = parse_block(tokens, allocator)?;
+            Ok(Expression::BlockExpr(body))
         }
         token => {
             if cfg!(debug_assertions) {
@@ -1503,7 +1509,7 @@ fn binary_op<A: 'static + Allocator>(
                                 let mut result = true;
                                 for (a, b) in slots_a.borrow().iter().zip(slots_b.borrow().iter()) {
                                     let mut args = AVec::new(interpreter.allocator);
-                                    args.push(b.clone());
+                                    args.push(b.clone())?;
                                     if !ShimValue::get_prop(a, b"eq", interpreter)?
                                         .borrow()
                                         .call(&args, interpreter)?
@@ -1646,13 +1652,17 @@ impl<A: Allocator> Environment<A> {
 
 struct Singletons<A: Allocator> {
     the_unit: Gc<ShimValue<A>>,
+    stop_iteration: Gc<ShimValue<A>>,
 }
 
 impl<A: Allocator> Singletons<A> {
     // TODO: this should be alloc-fallible
-    fn new(collector: &mut Collector<ShimValue<A>>) -> Self {
+    fn new(allocator: A, collector: &mut Collector<ShimValue<A>>) -> Self {
         Singletons {
             the_unit: collector.manage(ShimValue::Unit),
+            stop_iteration: collector.manage(ShimValue::StructDef(StructDef {
+                props: AHashMap::new(allocator),
+            })),
         }
     }
 }
@@ -1718,7 +1728,7 @@ impl<'a, A: 'static + Allocator> Interpreter<'a, A> {
     pub fn new(allocator: A) -> Interpreter<'a, A> {
         let mut collector = Collector::new();
         let env = collector.manage(ShimValue::Env(Environment::new(allocator)));
-        let singletons = Singletons::new(&mut collector);
+        let singletons = Singletons::new(allocator, &mut collector);
         Interpreter {
             allocator,
             collector: collector,
@@ -1826,6 +1836,16 @@ impl<'a, A: 'static + Allocator> Interpreter<'a, A> {
                 }
                 let x = func.borrow().call(&args, self)?;
                 x
+            }
+            Expression::BlockExpr(block) => {
+                match self.interpret_block(&block)? {
+                    BlockExit::Finish(val) => val,
+
+                    // TODO: does interpret_expression need to return BlockExit...?
+                    BlockExit::Break(_) => panic!("break not supported in blockexpr"),
+                    BlockExit::Continue => panic!("continue not supported in blockexpr"),
+                    BlockExit::Return(_) => panic!("return not supported in blockexpr"),
+                }
             }
             Expression::BlockCall(expr, block) => {
                 let obj = self.interpret_expression(expr)?;
@@ -2033,6 +2053,7 @@ impl<'a, A: 'static + Allocator> Interpreter<'a, A> {
                 Ok(interpreter.g.the_unit.clone())
             })));
         self.env_declare(print_name, print_fn)?;
+
         let mut assert_name: AVec<u8, A> = AVec::new(self.allocator);
         assert_name.extend_from_slice(b"assert")?;
         let assert_fn =
@@ -2047,6 +2068,10 @@ impl<'a, A: 'static + Allocator> Interpreter<'a, A> {
                     Ok(interpreter.g.the_unit.clone())
                 })));
         self.env_declare(assert_name, assert_fn)?;
+
+        let mut stopiteration_name: AVec<u8, A> = AVec::new(self.allocator);
+        stopiteration_name.extend_from_slice(b"StopIteration")?;
+        self.env_declare(stopiteration_name, self.g.stop_iteration.clone())?;
 
         let mut tokens = TokenStream::new(text);
         let script = match parse_script(&mut tokens, self.allocator) {
