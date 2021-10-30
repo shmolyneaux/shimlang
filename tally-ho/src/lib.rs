@@ -25,6 +25,10 @@ impl<T> Gc<T> {
         }
     }
 
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        Rc::as_ptr(&self.value) == Rc::as_ptr(&other.value)
+    }
+
     fn from_weak(weak: &Weak<(Cell<usize>, RefCell<T>)>) -> Option<Self> {
         if let Some(value) = weak.upgrade() {
             Some(Self { value })

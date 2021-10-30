@@ -34,7 +34,7 @@ impl From<AllocError> for ShimError {
 // case of having sized allocators. It's perfect for zero-sized ones though!
 pub trait Allocator: std::alloc::Allocator + Copy + std::fmt::Debug {}
 
-#[derive(Debug, Copy, Clone)]
+#[derive(PartialEq, Debug, Copy, Clone)]
 pub enum BinaryOp {
     Add,
     Sub,
@@ -1144,20 +1144,20 @@ impl<A: 'static + Allocator> Struct<A> {
         obj: &Gc<ShimValue<A>>,
         name: &[u8],
         interpreter: &mut Interpreter<A>,
-    ) -> Result<Gc<ShimValue<A>>, ShimError> {
+    ) -> Result<Option<Gc<ShimValue<A>>>, ShimError> {
         if let ShimValue::Struct(s) = &*obj.borrow() {
             let cls = s.0.borrow();
             let prop = cls
                 .as_struct_def()
                 .ok_or(ShimError::Other(b"struct def of a struct... isn't..?"))?
-                .instance_prop(name)
-                .ok_or(ShimError::Other(b"struct does not have prop"))?;
+                .instance_prop(name);
 
             Ok(match prop {
-                InstanceProp::Slot(num) => s.1.borrow()[*num].clone(),
-                InstanceProp::Method(method) => {
-                    interpreter.new_value(ShimValue::BoundFn(obj.clone(), method.clone()))?
+                Some(InstanceProp::Slot(num)) => Some(s.1.borrow()[*num].clone()),
+                Some(InstanceProp::Method(method)) => {
+                    Some(interpreter.new_value(ShimValue::BoundFn(obj.clone(), method.clone()))?)
                 }
+                None => None,
             })
         } else {
             Err(ShimError::Other(
@@ -1394,7 +1394,8 @@ impl<A: 'static + Allocator> ShimValue<A> {
             interpreter.new_value(ShimValue::BoundFn(obj.clone(), the_fn))
         } else {
             match (&*obj.borrow(), name) {
-                (ShimValue::Struct(_), _) => Struct::get_prop(obj, name, interpreter),
+                (ShimValue::Struct(_), _) => Struct::get_prop(obj, name, interpreter)?
+                    .ok_or(ShimError::Other(b"struct does not have prop")),
                 (ShimValue::SString(_), b"lower") => {
                     // Seems like we should make builtins like this global?
                     let the_fn = interpreter.new_value(ShimValue::NativeFn(Box::new(str_lower)))?;
@@ -1443,7 +1444,9 @@ fn binary_op<A: 'static + Allocator>(
             return Err(ShimError::Other(b"expected 2 arguments"));
         }
 
-        let result = match (&*args[0].borrow(), &*args[1].borrow(), op) {
+        let left = &*args[0].borrow();
+        let right = &*args[1].borrow();
+        let result = match (left, right, op) {
             (ShimValue::I128(a), ShimValue::I128(b), op) => match op {
                 BinaryOp::Add => ShimValue::I128(a + b),
                 BinaryOp::Sub => ShimValue::I128(a - b),
@@ -1479,12 +1482,54 @@ fn binary_op<A: 'static + Allocator>(
             (ShimValue::SString(a), ShimValue::SString(b), BinaryOp::Neq) => {
                 ShimValue::Bool(a != b)
             }
+            (ShimValue::Bool(a), ShimValue::Bool(b), BinaryOp::Eq) => ShimValue::Bool(a == b),
+            (ShimValue::Bool(a), ShimValue::Bool(b), BinaryOp::Neq) => ShimValue::Bool(a != b),
             (ShimValue::Struct(_), _, op) => {
-                let bound_fn = Struct::get_prop(&args[0], op.to_str(), interpreter)?;
-                let mut method_args: AVec<Gc<_>, _> = AVec::new(interpreter.allocator);
-                method_args.push(args[1].clone())?;
-                return ShimValue::call(&bound_fn.borrow(), &method_args, interpreter);
+                if let Some(bound_fn) = Struct::get_prop(&args[0], op.to_str(), interpreter)? {
+                    let mut method_args: AVec<Gc<_>, _> = AVec::new(interpreter.allocator);
+                    method_args.push(args[1].clone())?;
+                    return ShimValue::call(&bound_fn.borrow(), &method_args, interpreter);
+                } else if op == BinaryOp::Eq || op == BinaryOp::Neq {
+                    let eq = match (left, right) {
+                        (
+                            ShimValue::Struct(Struct(cls_a, slots_a)),
+                            ShimValue::Struct(Struct(cls_b, slots_b)),
+                        ) => {
+                            // If the structs use the same class (which is just
+                            // simple pointer equality), they must have the same
+                            // slots in the same order. We can just `eq` the
+                            // slot values from there.
+                            if Gc::ptr_eq(cls_a, cls_b) {
+                                let mut result = true;
+                                for (a, b) in slots_a.borrow().iter().zip(slots_b.borrow().iter()) {
+                                    let mut args = AVec::new(interpreter.allocator);
+                                    args.push(b.clone());
+                                    if !ShimValue::get_prop(a, b"eq", interpreter)?
+                                        .borrow()
+                                        .call(&args, interpreter)?
+                                        .borrow()
+                                        .is_truthy()
+                                    {
+                                        result = false;
+                                        break;
+                                    }
+                                }
+                                result
+                            } else {
+                                false
+                            }
+                        }
+                        _ => false,
+                    };
+
+                    ShimValue::Bool(eq ^ (op == BinaryOp::Neq))
+                } else {
+                    return Err(ShimError::Other(b"struct not operable"));
+                }
             }
+            // TODO: function equality etc.
+            (_, _, BinaryOp::Eq) => ShimValue::Bool(false),
+            (_, _, BinaryOp::Neq) => ShimValue::Bool(true),
             _ => return Err(ShimError::Other(b"not operable")),
         };
 
