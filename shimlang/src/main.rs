@@ -1,19 +1,17 @@
 #![feature(allocator_api)]
-#![no_main]
-
-use std::alloc::Allocator;
-use std::alloc::Layout;
-use std::ptr::NonNull;
+#![cfg_attr(target_os = "linux", no_main)]
 
 use std::fs::File;
-use std::io::SeekFrom;
-use std::io::{Read, Seek, Write};
-use std::os::unix::io::FromRawFd;
-
-use libc;
+use std::io::Read;
+#[cfg(target_os = "linux")]
+use {
+    libc, std::alloc::Allocator, std::alloc::Layout, std::io::Seek, std::io::SeekFrom,
+    std::io::Write, std::os::unix::io::FromRawFd, std::ptr::NonNull,
+};
 
 use libshim;
 
+#[cfg(target_os = "linux")]
 #[link(name = "c")]
 extern "C" {
     pub fn malloc(size: usize) -> *mut u8;
@@ -23,8 +21,10 @@ extern "C" {
 #[derive(Debug, Copy, Clone)]
 struct StephenAllocator {}
 
+#[cfg(target_os = "linux")]
 impl libshim::Allocator for StephenAllocator {}
 
+#[cfg(target_os = "linux")]
 unsafe impl Allocator for StephenAllocator {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, std::alloc::AllocError> {
         // It's not entirely clear what to do about the alignment. I assume we
@@ -45,21 +45,33 @@ unsafe impl Allocator for StephenAllocator {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn stdout() -> File {
     unsafe { File::from_raw_fd(1) }
 }
 
+#[cfg(target_os = "linux")]
 struct FilePrinter {
     f: File,
 }
 
+#[cfg(target_os = "linux")]
 impl libshim::Printer for FilePrinter {
     fn print(&mut self, text: &[u8]) {
         self.f.write(text).unwrap();
     }
 }
 
+struct NormalPrinter {}
+
+impl libshim::Printer for NormalPrinter {
+    fn print(&mut self, text: &[u8]) {
+        print!("{}", String::from_utf8_lossy(text));
+    }
+}
+
 #[no_mangle]
+#[cfg(target_os = "linux")]
 pub fn main(argc: i32, _argv: *const *const i8) -> Result<(), std::alloc::AllocError> {
     let mut stdout = stdout();
 
@@ -102,6 +114,33 @@ pub fn main(argc: i32, _argv: *const *const i8) -> Result<(), std::alloc::AllocE
     interpreter.interpret(unsafe { &(*buf.as_ptr()) }).unwrap();
 
     unsafe { allocator.deallocate(buf.cast(), buf_layout) };
+
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn main() -> Result<(), ()> {
+    use std::env;
+
+    let mut args = env::args();
+    if args.len() != 2 {
+        println!("Expected a single script as an argument\n");
+        return Err(());
+    }
+
+    let _exe = args.next();
+    let script_name = args.next().unwrap();
+    println!("Loading script {}", script_name);
+    let mut file = File::open(script_name).unwrap();
+    let mut buf = Vec::new();
+    file.read_to_end(&mut buf).unwrap();
+
+    let allocator = std::alloc::Global;
+    let mut interpreter = libshim::Interpreter::new(allocator);
+
+    let mut printer = NormalPrinter {};
+    interpreter.set_print_fn(&mut printer);
+    interpreter.interpret(&buf).unwrap();
 
     Ok(())
 }

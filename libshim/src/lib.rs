@@ -34,6 +34,8 @@ impl From<AllocError> for ShimError {
 // case of having sized allocators. It's perfect for zero-sized ones though!
 pub trait Allocator: std::alloc::Allocator + Copy + std::fmt::Debug {}
 
+impl Allocator for std::alloc::Global {}
+
 #[derive(PartialEq, Debug, Copy, Clone)]
 pub enum BinaryOp {
     Add,
