@@ -1287,6 +1287,8 @@ impl<A: 'static + Allocator> Struct<A> {
     }
 }
 
+pub trait Userdata {}
+
 pub enum ShimValue<A: Allocator> {
     // A variant used to replace a previous-valid value after GC
     Freed,
@@ -1308,6 +1310,7 @@ pub enum ShimValue<A: Allocator> {
     Env(Environment<A>),
     StructDef(StructDef<A>),
     Struct(Struct<A>),
+    Userdata(ABox<dyn Userdata, A>),
 }
 
 impl<A: Allocator> Debug for ShimValue<A> {
@@ -1325,6 +1328,7 @@ impl<A: Allocator> Debug for ShimValue<A> {
             Self::Env(..) => fmt.write_fmt(format_args!("<env>")),
             Self::StructDef(..) => fmt.write_fmt(format_args!("<struct def>")),
             Self::Struct(..) => fmt.write_fmt(format_args!("<struct>")),
+            Self::Userdata(..) => fmt.write_fmt(format_args!("<userdata>")),
         }
     }
 }
@@ -1379,6 +1383,7 @@ impl<A: 'static + Allocator> ShimValue<A> {
             Self::Env(..) => vec.extend_from_slice(b"<environment>")?,
             Self::StructDef(..) => vec.extend_from_slice(b"<struct def>")?,
             Self::Struct(..) => vec.extend_from_slice(b"<struct>")?,
+            Self::Userdata(..) => vec.extend_from_slice(b"<userdata>")?,
         }
 
         Ok(vec)
@@ -1398,6 +1403,7 @@ impl<A: 'static + Allocator> ShimValue<A> {
             Self::Env(..) => true,
             Self::StructDef(..) => true,
             Self::Struct(..) => true,
+            Self::Userdata(..) => true,
         }
     }
 
@@ -1699,6 +1705,7 @@ impl<A: Allocator> Manage for ShimValue<A> {
             Self::Env(..) => {}
             Self::StructDef(..) => {}
             Self::Struct(..) => {}
+            Self::Userdata(..) => {}
         }
     }
 
