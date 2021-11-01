@@ -19,7 +19,7 @@ static mut BUMP_ALLOC_NEXT: usize = 0;
 static mut BUMP_ALLOC_TOTAL: usize = 0;
 const BYTES_PER_PAGE: usize = 65536;
 
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
 struct BumpAllocator {}
 impl libshim::Allocator for BumpAllocator {}
 
@@ -94,7 +94,7 @@ impl libshim::Printer for WasmPrinter {
         // won't get freed until the next script is run.
         let print_ptr: *mut u8 = self.allocator.allocate(layout).unwrap().as_ptr().cast();
 
-        let mut print_str: &mut [u8] = unsafe {
+        let print_str: &mut [u8] = unsafe {
             &mut *std::ptr::slice_from_raw_parts_mut(print_ptr, len)
         };
 
@@ -170,8 +170,6 @@ fn run_file_inner() -> Result<(), std::alloc::AllocError> {
     let file_contents = unsafe {
         std::ptr::slice_from_raw_parts_mut(FILE_START, FILE_SIZE)
     };
-
-    unsafe {printer.print(&*file_contents)};
 
     interpreter.set_print_fn(&mut printer);
     match interpreter.interpret(unsafe { &*file_contents }) {
