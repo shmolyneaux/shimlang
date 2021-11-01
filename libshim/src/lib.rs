@@ -1407,7 +1407,7 @@ impl<A: 'static + Allocator> ShimValue<A> {
         }
     }
 
-    fn call(
+    pub fn call(
         &self,
         args: &AVec<Gc<ShimValue<A>>, A>,
         interpreter: &mut Interpreter<A>,
@@ -1777,8 +1777,8 @@ impl<A: Allocator> Environment<A> {
     }
 }
 
-struct Singletons<A: Allocator> {
-    the_unit: Gc<ShimValue<A>>,
+pub struct Singletons<A: Allocator> {
+    pub the_unit: Gc<ShimValue<A>>,
     stop_iteration: Gc<ShimValue<A>>,
 }
 
@@ -1800,7 +1800,7 @@ pub struct Interpreter<'a, A: Allocator> {
     env: Gc<ShimValue<A>>,
     // TODO: figure out how to make the ABox work like this
     print: Option<&'a mut dyn Printer>,
-    g: Singletons<A>,
+    pub g: Singletons<A>,
 }
 
 pub trait Printer {
@@ -1900,6 +1900,11 @@ impl<'a, A: 'static + Allocator> Interpreter<'a, A> {
 
     fn env_find(&mut self, key: &AVec<u8, A>) -> Option<Gc<ShimValue<A>>> {
         self.env_map(|env| env.find(key))
+    }
+
+    pub fn add_global(&mut self, name: &[u8], val: ShimValue<A>) -> Result<(), ShimError> {
+        let obj = self.new_value(val)?;
+        self.env_declare(AVec::from_slice(name, self.allocator)?, obj)
     }
 
     pub fn set_print_fn(&mut self, f: &'a mut dyn Printer) {
@@ -2160,7 +2165,7 @@ impl<'a, A: 'static + Allocator> Interpreter<'a, A> {
         Ok(None)
     }
 
-    pub fn interpret(&mut self, text: &'a [u8]) -> Result<(), ShimError> {
+    pub fn interpret(&mut self, text: &'a [u8]) -> Result<Gc<ShimValue<A>>, ShimError> {
         // TODO: make `new` fallible and put this there
         let mut print_name: AVec<u8, A> = AVec::new(self.allocator);
         print_name.extend_from_slice(b"print")?;
@@ -2215,21 +2220,12 @@ impl<'a, A: 'static + Allocator> Interpreter<'a, A> {
         };
 
         match self.interpret_block(&script) {
-            Ok(_) => {}
-            Err(ShimError::Other(msg)) => {
-                self.print(b"ERROR: ");
-                self.print(msg);
-                self.print(b"\n");
-            }
-            Err(_) => {
-                self.print(b"ERROR: Misc error\n");
-            }
+            Ok(BlockExit::Finish(val)) => Ok(val),
+            Ok(BlockExit::Break(val)) => Ok(val),
+            Ok(BlockExit::Return(val)) => Ok(val),
+            Ok(BlockExit::Continue) => Ok(self.g.the_unit.clone()),
+            Err(e) => Err(e),
         }
-
-        // TODO: figure out where to put this...
-        self.collector.collect_cycles();
-
-        Ok(())
     }
 }
 
