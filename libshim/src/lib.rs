@@ -3,6 +3,7 @@
 use acollections::{ABox, AClone, AHashMap, AVec};
 use lexical_core::FormattedSize;
 use std::alloc::AllocError;
+use std::any::Any;
 use std::cell::RefCell;
 use std::fmt::Debug;
 use std::ops::Deref;
@@ -1287,7 +1288,7 @@ impl<A: 'static + Allocator> Struct<A> {
     }
 }
 
-pub trait Userdata {}
+pub trait Userdata: Any {}
 
 pub enum ShimValue<A: Allocator> {
     // A variant used to replace a previous-valid value after GC
@@ -1310,7 +1311,7 @@ pub enum ShimValue<A: Allocator> {
     Env(Environment<A>),
     StructDef(StructDef<A>),
     Struct(Struct<A>),
-    Userdata(ABox<dyn Userdata, A>),
+    Userdata(Box<dyn Userdata>),
 }
 
 impl<A: Allocator> Debug for ShimValue<A> {
@@ -1341,7 +1342,7 @@ impl<A: 'static + Allocator> ShimValue<A> {
         }
     }
 
-    fn stringify(&self, allocator: A) -> Result<AVec<u8, A>, AllocError> {
+    pub fn stringify(&self, allocator: A) -> Result<AVec<u8, A>, AllocError> {
         let mut vec = AVec::new(allocator);
         match self {
             Self::I128(val) => {
@@ -1807,7 +1808,7 @@ pub trait Printer {
     fn print(&mut self, text: &[u8]);
 }
 
-trait NewValue<T, A: Allocator> {
+pub trait NewValue<T, A: Allocator> {
     fn new_value(&mut self, val: T) -> Result<Gc<ShimValue<A>>, ShimError>;
 }
 
