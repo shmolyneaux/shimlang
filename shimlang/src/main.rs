@@ -111,7 +111,18 @@ pub fn main(argc: i32, _argv: *const *const i8) -> Result<(), std::alloc::AllocE
 
     let mut stdout_printer = FilePrinter { f: stdout };
     interpreter.set_print_fn(&mut stdout_printer);
-    interpreter.interpret(unsafe { &(*buf.as_ptr()) }).unwrap();
+
+    match interpreter.interpret(unsafe { &(*buf.as_ptr()) }) {
+        Ok(_) => {}
+        Err(libshim::ShimError::Other(text)) => {
+            interpreter.print(b"ERROR: ");
+            interpreter.print(text);
+            interpreter.print(b"\n");
+        }
+        other => {
+            other.unwrap();
+        }
+    }
 
     unsafe { allocator.deallocate(buf.cast(), buf_layout) };
 
@@ -140,7 +151,17 @@ pub fn main() -> Result<(), ()> {
 
     let mut printer = NormalPrinter {};
     interpreter.set_print_fn(&mut printer);
-    interpreter.interpret(&buf).unwrap();
+    match interpreter.interpret(&buf).unwrap() {
+        Ok(_) => {}
+        Err(libshim::ShimError::Other(text)) => {
+            interpreter.print(b"ERROR: ");
+            interpreter.print(text);
+            interpreter.print(b"\n");
+        }
+        other => {
+            other.unwrap();
+        }
+    }
 
     Ok(())
 }
