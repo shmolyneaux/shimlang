@@ -85,6 +85,18 @@ impl BinaryOp {
 }
 
 #[derive(PartialEq, Debug, Copy, Clone)]
+pub enum LogicalOp {
+    And,
+    Or,
+}
+
+#[derive(PartialEq, Debug, Copy, Clone)]
+pub enum Op {
+    Logical(LogicalOp),
+    Binary(BinaryOp),
+}
+
+#[derive(PartialEq, Debug, Copy, Clone)]
 pub enum Token<'a> {
     Unknown(&'a [u8]),
     StringLiteral(&'a [u8]),
@@ -455,7 +467,7 @@ pub enum Expression<A: Allocator> {
     IntLiteral(i128),
     FloatLiteral(f64),
     StringLiteral(AVec<u8, A>),
-    Binary(BinaryOp, ABox<Expression<A>, A>, ABox<Expression<A>, A>),
+    Op(Op, ABox<Expression<A>, A>, ABox<Expression<A>, A>),
     Call(CallExpr<A>),
     BlockExpr(Block<A>),
     BlockCall(ABox<Expression<A>, A>, Block<A>),
@@ -472,8 +484,8 @@ impl<A: Allocator> AClone for Expression<A> {
             Expression::IntLiteral(i) => Expression::IntLiteral(*i),
             Expression::FloatLiteral(f) => Expression::FloatLiteral(*f),
             Expression::StringLiteral(vec) => Expression::StringLiteral(vec.aclone()?),
-            Expression::Binary(op, expr_a, expr_b) => {
-                Expression::Binary(*op, ABox::aclone(expr_a)?, ABox::aclone(expr_b)?)
+            Expression::Op(op, expr_a, expr_b) => {
+                Expression::Op(*op, ABox::aclone(expr_a)?, ABox::aclone(expr_b)?)
             }
             Expression::Call(cexpr) => Expression::Call(cexpr.aclone()?),
             Expression::BlockExpr(block) => Expression::BlockExpr(block.aclone()?),
@@ -623,6 +635,38 @@ impl From<AllocError> for ParseError {
     }
 }
 
+fn parse_logical_or<'a, A: Allocator>(
+    tokens: &mut TokenStream,
+    in_predicate: bool,
+    allocator: A,
+) -> Result<Expression<A>, ParseError> {
+    parse_binary(
+        tokens,
+        &[
+            (Token::OrKeyword, Op::Logical(LogicalOp::Or)),
+        ],
+        parse_logical_and,
+        in_predicate,
+        allocator,
+    )
+}
+
+fn parse_logical_and<'a, A: Allocator>(
+    tokens: &mut TokenStream,
+    in_predicate: bool,
+    allocator: A,
+) -> Result<Expression<A>, ParseError> {
+    parse_binary(
+        tokens,
+        &[
+            (Token::AndKeyword, Op::Logical(LogicalOp::And)),
+        ],
+        parse_equality,
+        in_predicate,
+        allocator,
+    )
+}
+
 fn parse_equality<'a, A: Allocator>(
     tokens: &mut TokenStream,
     in_predicate: bool,
@@ -631,8 +675,8 @@ fn parse_equality<'a, A: Allocator>(
     parse_binary(
         tokens,
         &[
-            (Token::DoubleEqual, BinaryOp::Eq),
-            (Token::BangEqual, BinaryOp::Neq),
+            (Token::DoubleEqual, Op::Binary(BinaryOp::Eq)),
+            (Token::BangEqual, Op::Binary(BinaryOp::Neq)),
         ],
         parse_comparison,
         in_predicate,
@@ -648,10 +692,10 @@ fn parse_comparison<'a, A: Allocator>(
     parse_binary(
         tokens,
         &[
-            (Token::LeftAngle, BinaryOp::Lt),
-            (Token::Lte, BinaryOp::Lte),
-            (Token::RightAngle, BinaryOp::Gt),
-            (Token::Gte, BinaryOp::Gte),
+            (Token::LeftAngle, Op::Binary(BinaryOp::Lt)),
+            (Token::Lte, Op::Binary(BinaryOp::Lte)),
+            (Token::RightAngle, Op::Binary(BinaryOp::Gt)),
+            (Token::Gte, Op::Binary(BinaryOp::Gte)),
         ],
         parse_term,
         in_predicate,
@@ -666,7 +710,7 @@ fn parse_term<'a, A: Allocator>(
 ) -> Result<Expression<A>, ParseError> {
     parse_binary(
         tokens,
-        &[(Token::Plus, BinaryOp::Add), (Token::Minus, BinaryOp::Sub)],
+        &[(Token::Plus, Op::Binary(BinaryOp::Add)), (Token::Minus, Op::Binary(BinaryOp::Sub))],
         parse_factor,
         in_predicate,
         allocator,
@@ -680,7 +724,7 @@ fn parse_factor<'a, A: Allocator>(
 ) -> Result<Expression<A>, ParseError> {
     parse_binary(
         tokens,
-        &[(Token::Star, BinaryOp::Mul), (Token::Slash, BinaryOp::Div)],
+        &[(Token::Star, Op::Binary(BinaryOp::Mul)), (Token::Slash, Op::Binary(BinaryOp::Div))],
         parse_call,
         in_predicate,
         allocator,
@@ -834,7 +878,7 @@ fn parse_primary<'a, A: Allocator>(
 
 fn parse_binary<'a, A: Allocator>(
     tokens: &mut TokenStream,
-    op_table: &[(Token, BinaryOp)],
+    op_table: &[(Token, Op)],
     next: fn(&mut TokenStream, bool, A) -> Result<Expression<A>, ParseError>,
     in_predicate: bool,
     allocator: A,
@@ -851,7 +895,7 @@ fn parse_binary<'a, A: Allocator>(
             tokens.advance();
 
             let right_expr = next(tokens, in_predicate, allocator)?;
-            expr = Expression::Binary(
+            expr = Expression::Op(
                 *op,
                 ABox::new(expr, allocator)?,
                 ABox::new(right_expr, allocator)?,
@@ -1183,14 +1227,14 @@ fn parse_expression<'a, A: Allocator>(
     tokens: &mut TokenStream,
     allocator: A,
 ) -> Result<Expression<A>, ParseError> {
-    parse_equality(tokens, false, allocator)
+    parse_logical_or(tokens, false, allocator)
 }
 
 fn parse_predicate<'a, A: Allocator>(
     tokens: &mut TokenStream,
     allocator: A,
 ) -> Result<Expression<A>, ParseError> {
-    parse_equality(tokens, true, allocator)
+    parse_logical_or(tokens, true, allocator)
 }
 
 pub fn codegen_expression<'a, A: Allocator>(
@@ -1945,7 +1989,19 @@ impl<'a, A: 'static + Allocator> Interpreter<'a, A> {
                 new_str.extend_from_slice(s)?;
                 self.new_value(ShimValue::SString(new_str))?
             }
-            Expression::Binary(op, left, right) => {
+            Expression::Op(Op::Logical(op), left, right) => {
+                let left = self.interpret_expression(&*left)?;
+                let is_truthy = left.borrow().is_truthy();
+                match (op, is_truthy) {
+                    // Or case short-circuit
+                    (LogicalOp::Or, true) => left,
+                    (LogicalOp::Or, false) => self.interpret_expression(&*right)?,
+                    (LogicalOp::And, true) => self.interpret_expression(&*right)?,
+                    // And case short-circuit
+                    (LogicalOp::And, false) => left,
+                }
+            }
+            Expression::Op(Op::Binary(op), left, right) => {
                 let left = self.interpret_expression(&*left)?;
                 let right = self.interpret_expression(&*right)?;
 
