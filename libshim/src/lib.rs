@@ -97,6 +97,12 @@ pub enum Op {
 }
 
 #[derive(PartialEq, Debug, Copy, Clone)]
+pub enum UnaryOp {
+    Not,
+    Minus,
+}
+
+#[derive(PartialEq, Debug, Copy, Clone)]
 pub enum Token<'a> {
     Unknown(&'a [u8]),
     StringLiteral(&'a [u8]),
@@ -142,6 +148,7 @@ pub enum Token<'a> {
     ForKeyword,
     InKeyword,
     IfKeyword,
+    NotKeyword,
     OrKeyword,
     ReturnKeyword,
     StructKeyword,
@@ -396,6 +403,7 @@ impl<'a> TokenStream<'a> {
                             b"for" => (Token::ForKeyword, inc),
                             b"in" => (Token::InKeyword, inc),
                             b"if" => (Token::IfKeyword, inc),
+                            b"not" => (Token::NotKeyword, inc),
                             b"or" => (Token::OrKeyword, inc),
                             b"return" => (Token::ReturnKeyword, inc),
                             b"struct" => (Token::StructKeyword, inc),
@@ -467,6 +475,7 @@ pub enum Expression<A: Allocator> {
     IntLiteral(i128),
     FloatLiteral(f64),
     StringLiteral(AVec<u8, A>),
+    Unary(UnaryOp, ABox<Expression<A>, A>),
     Op(Op, ABox<Expression<A>, A>, ABox<Expression<A>, A>),
     Call(CallExpr<A>),
     BlockExpr(Block<A>),
@@ -487,6 +496,7 @@ impl<A: Allocator> AClone for Expression<A> {
             Expression::Op(op, expr_a, expr_b) => {
                 Expression::Op(*op, ABox::aclone(expr_a)?, ABox::aclone(expr_b)?)
             }
+            Expression::Unary(op, expr) => Expression::Unary(*op, ABox::aclone(expr)?),
             Expression::Call(cexpr) => Expression::Call(cexpr.aclone()?),
             Expression::BlockExpr(block) => Expression::BlockExpr(block.aclone()?),
             Expression::BlockCall(obj, block) => {
@@ -642,9 +652,7 @@ fn parse_logical_or<'a, A: Allocator>(
 ) -> Result<Expression<A>, ParseError> {
     parse_binary(
         tokens,
-        &[
-            (Token::OrKeyword, Op::Logical(LogicalOp::Or)),
-        ],
+        &[(Token::OrKeyword, Op::Logical(LogicalOp::Or))],
         parse_logical_and,
         in_predicate,
         allocator,
@@ -658,9 +666,7 @@ fn parse_logical_and<'a, A: Allocator>(
 ) -> Result<Expression<A>, ParseError> {
     parse_binary(
         tokens,
-        &[
-            (Token::AndKeyword, Op::Logical(LogicalOp::And)),
-        ],
+        &[(Token::AndKeyword, Op::Logical(LogicalOp::And))],
         parse_equality,
         in_predicate,
         allocator,
@@ -710,7 +716,10 @@ fn parse_term<'a, A: Allocator>(
 ) -> Result<Expression<A>, ParseError> {
     parse_binary(
         tokens,
-        &[(Token::Plus, Op::Binary(BinaryOp::Add)), (Token::Minus, Op::Binary(BinaryOp::Sub))],
+        &[
+            (Token::Plus, Op::Binary(BinaryOp::Add)),
+            (Token::Minus, Op::Binary(BinaryOp::Sub)),
+        ],
         parse_factor,
         in_predicate,
         allocator,
@@ -724,11 +733,29 @@ fn parse_factor<'a, A: Allocator>(
 ) -> Result<Expression<A>, ParseError> {
     parse_binary(
         tokens,
-        &[(Token::Star, Op::Binary(BinaryOp::Mul)), (Token::Slash, Op::Binary(BinaryOp::Div))],
-        parse_call,
+        &[
+            (Token::Star, Op::Binary(BinaryOp::Mul)),
+            (Token::Slash, Op::Binary(BinaryOp::Div)),
+        ],
+        parse_unary,
         in_predicate,
         allocator,
     )
+}
+
+fn parse_unary<'a, A: Allocator>(
+    tokens: &mut TokenStream,
+    in_predicate: bool,
+    allocator: A,
+) -> Result<Expression<A>, ParseError> {
+    if tokens.peek() == Token::Bang || tokens.peek() == Token::NotKeyword {
+        tokens.advance();
+        Ok(Expression::Unary(UnaryOp::Not, ABox::new(parse_unary(tokens, in_predicate, allocator)?, allocator)?))
+    } else if tokens.matches(Token::Minus) {
+        Ok(Expression::Unary(UnaryOp::Minus, ABox::new(parse_unary(tokens, in_predicate, allocator)?, allocator)?))
+    } else {
+        parse_call(tokens, in_predicate, allocator)
+    }
 }
 
 fn parse_call<'a, A: Allocator>(
@@ -1988,6 +2015,25 @@ impl<'a, A: 'static + Allocator> Interpreter<'a, A> {
                 let mut new_str = AVec::new(self.allocator);
                 new_str.extend_from_slice(s)?;
                 self.new_value(ShimValue::SString(new_str))?
+            }
+            Expression::Unary(op, expr) => {
+                let val = self.interpret_expression(&*expr)?;
+                match op {
+                    UnaryOp::Not => {
+                        if val.borrow().is_truthy() {
+                            self.new_value(false)?
+                        } else {
+                            self.new_value(true)?
+                        }
+                    }
+                    UnaryOp::Minus => {
+                        match &*val.borrow() {
+                            ShimValue::I128(i) => self.new_value(-i)?,
+                            ShimValue::F64(f) => self.new_value(-f)?,
+                            _ => return Err(ShimError::Other(b"unary minus not implemented on that")),
+                        }
+                    }
+                }
             }
             Expression::Op(Op::Logical(op), left, right) => {
                 let left = self.interpret_expression(&*left)?;
