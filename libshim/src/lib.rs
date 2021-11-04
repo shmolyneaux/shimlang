@@ -1,3 +1,4 @@
+#![feature(trait_upcasting)]
 #![feature(allocator_api)]
 
 use acollections::{ABox, AClone, AHashMap, AVec};
@@ -1383,6 +1384,68 @@ pub enum ShimValue<A: Allocator> {
     StructDef(StructDef<A>),
     Struct(Struct<A>),
     Userdata(Box<dyn Userdata>),
+}
+
+pub trait ShimInto<T> {
+    fn shim_into(self) -> Result<T, ShimError>;
+}
+
+impl<A: Allocator> ShimInto<f32> for &Gc<ShimValue<A>> {
+    fn shim_into(self) -> Result<f32, ShimError> {
+        (&*self.borrow()).shim_into()
+    }
+}
+
+impl<A: Allocator> ShimInto<f32> for &ShimValue<A> {
+    fn shim_into(self) -> Result<f32, ShimError> {
+        if let ShimValue::F64(f) = self {
+            Ok(*f as f32)
+        } else {
+            Err(ShimError::Other(b"not a float"))
+        }
+    }
+}
+
+impl<A: Allocator> ShimInto<f64> for &Gc<ShimValue<A>> {
+    fn shim_into(self) -> Result<f64, ShimError> {
+        (&*self.borrow()).shim_into()
+    }
+}
+
+impl<A: Allocator> ShimInto<f64> for &ShimValue<A> {
+    fn shim_into(self) -> Result<f64, ShimError> {
+        if let ShimValue::F64(f) = self {
+            Ok(*f as f64)
+        } else {
+            Err(ShimError::Other(b"not a float"))
+        }
+    }
+}
+
+impl<'a, A: Allocator> ShimInto<&'a [u8]> for &'a ShimValue<A> {
+    fn shim_into(self) -> Result<&'a [u8], ShimError> {
+        if let ShimValue::SString(s) = self {
+            Ok(s)
+        } else {
+            Err(ShimError::Other(b"not text"))
+        }
+    }
+}
+
+impl<'a, M: 'static + Userdata, A: Allocator> ShimInto<&'a M> for &'a ShimValue<A> {
+    fn shim_into(self) -> Result<&'a M, ShimError> {
+        if let ShimValue::Userdata(u) = self {
+            let data = u.deref() as &dyn Any;
+
+            if let Some(obj) = data.downcast_ref::<M>() {
+                Ok(obj)
+            } else {
+                Err(ShimError::Other(b"not the right kind of userdata"))
+            }
+        } else {
+            Err(ShimError::Other(b"not text"))
+        }
+    }
 }
 
 impl<A: Allocator> Debug for ShimValue<A> {

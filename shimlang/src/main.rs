@@ -151,7 +151,7 @@ pub fn main() -> Result<(), ()> {
 
     let mut printer = NormalPrinter {};
     interpreter.set_print_fn(&mut printer);
-    match interpreter.interpret(&buf).unwrap() {
+    match interpreter.interpret(&buf) {
         Ok(_) => {}
         Err(libshim::ShimError::Other(text)) => {
             interpreter.print(b"ERROR: ");
