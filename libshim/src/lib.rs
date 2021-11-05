@@ -1432,6 +1432,16 @@ impl<'a, A: Allocator> ShimInto<&'a [u8]> for &'a ShimValue<A> {
     }
 }
 
+impl<'a, A: Allocator> ShimInto<&'a str> for &'a ShimValue<A> {
+    fn shim_into(self) -> Result<&'a str, ShimError> {
+        if let ShimValue::SString(s) = self {
+            Ok(std::str::from_utf8(s).unwrap())
+        } else {
+            Err(ShimError::Other(b"not text"))
+        }
+    }
+}
+
 impl<'a, M: 'static + Userdata, A: Allocator> ShimInto<&'a M> for &'a ShimValue<A> {
     fn shim_into(self) -> Result<&'a M, ShimError> {
         if let ShimValue::Userdata(u) = self {
