@@ -1,42 +1,78 @@
 <!DOCTYPE html>
-<script type="module">
-    async function init() {
-        let importObject = {
-            imports: {
-            },
-            env: {
-                js_print: (offset, count) => {
-                    let s = "";
-                    for (let i=0; i<count; i++) {
-                        s += String.fromCharCode(instance.exports.get_memory_byte(offset+i));
+<meta charset="UTF-8">
+<html>
+    <head>
+        <script>
+            async function init() {
+                document.getElementById("result").textContent = "";
+                let importObject = {
+                    imports: {
+                    },
+                    env: {
+                        js_print: (offset, count) => {
+                            let s = "";
+                            for (let i=0; i<count; i++) {
+                                s += String.fromCharCode(instance.exports.get_memory_byte(offset+i));
+                            }
+
+                            document.getElementById("result").textContent += s;
+                        },
                     }
+                };
+                const { instance } = await WebAssembly.instantiateStreaming(
+                    fetch("./target/wasm32-unknown-unknown/release/shimlang_wasm.wasm"),
+                    importObject
+                );
 
-                    console.log(s);
-                },
+                let script = editor.getValue();
+                let bytes = [];
+                for (let i=0; i<script.length; i++) {
+                    bytes.push(script.charCodeAt(i));
+                }
+                let file_start = instance.exports.clear_memory_and_allocate_file(
+                    bytes.length
+                );
+
+                for (let i=0; i<bytes.length; i++) {
+                    instance.exports.set_file_byte(i, bytes[i]);
+                }
+
+                instance.exports.run_file();
             }
-        };
-        const { instance } = await WebAssembly.instantiateStreaming(
-            fetch("./target/wasm32-unknown-unknown/release/shimlang_wasm.wasm"),
-            importObject
-        );
-        console.log(instance);
+        </script>
+        <style type="text/css" media="screen">
+body {
+    margin: 0;
+}
 
-        let script = "3+4+5+6+5*6";
-        let bytes = [];
-        for (let i=0; i<script.length; i++) {
-            bytes.push(script.charCodeAt(i));
-        }
-        let file_start = instance.exports.clear_memory_and_allocate_file(
-            bytes.length
-        );
-
-        for (let i=0; i<bytes.length; i++) {
-            instance.exports.set_file_byte(i, bytes[i]);
-        }
-        console.log(instance.exports.memory);
-
-        instance.exports.run_file();
+#editor {
+    width: 100%;
+    height: 600px;
+    border-bottom: 1px solid #888;
+}
+        </style>
+    </head>
+    <body>
+        <div id="editor">struct Foo{
+    a,
+    fn print(self) {
+        print("Foo { a =", self.a, "}");
     }
+}
 
-    init();
-</script>
+let foo = Foo {
+    a = 42;
+};
+foo.print();</div>
+
+        <script src="https://pagecdn.io/lib/ace/1.4.12/ace.min.js" type="text/javascript" charset="utf-8"></script>
+        <script>
+            editor = ace.edit("editor");
+            // editor.setTheme("ace/theme/monokai");
+            // editor.session.setMode("ace/mode/rust");
+        </script>
+
+        <button onclick="init()">Run</button>
+        <pre id="result"></pre>
+    </body>
+</html>
