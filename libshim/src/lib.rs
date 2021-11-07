@@ -1,5 +1,5 @@
-#![feature(trait_upcasting)]
 #![feature(allocator_api)]
+#![feature(trait_upcasting)]
 
 use acollections::{ABox, AClone, AHashMap, AVec};
 use lexical_core::FormattedSize;
@@ -476,8 +476,10 @@ pub enum Expression<A: Allocator> {
     IntLiteral(i128),
     FloatLiteral(f64),
     StringLiteral(AVec<u8, A>),
+    ListLiteral(AVec<Expression<A>, A>),
     Unary(UnaryOp, ABox<Expression<A>, A>),
     Op(Op, ABox<Expression<A>, A>, ABox<Expression<A>, A>),
+    Index(ABox<Expression<A>, A>, ABox<Expression<A>, A>),
     Call(CallExpr<A>),
     BlockExpr(Block<A>),
     BlockCall(ABox<Expression<A>, A>, Block<A>),
@@ -494,10 +496,12 @@ impl<A: Allocator> AClone for Expression<A> {
             Expression::IntLiteral(i) => Expression::IntLiteral(*i),
             Expression::FloatLiteral(f) => Expression::FloatLiteral(*f),
             Expression::StringLiteral(vec) => Expression::StringLiteral(vec.aclone()?),
+            Expression::ListLiteral(vec) => Expression::ListLiteral(vec.aclone()?),
             Expression::Op(op, expr_a, expr_b) => {
                 Expression::Op(*op, ABox::aclone(expr_a)?, ABox::aclone(expr_b)?)
             }
             Expression::Unary(op, expr) => Expression::Unary(*op, ABox::aclone(expr)?),
+            Expression::Index(indexable, idx) => Expression::Index(indexable.aclone()?, idx.aclone()?),
             Expression::Call(cexpr) => Expression::Call(cexpr.aclone()?),
             Expression::BlockExpr(block) => Expression::BlockExpr(block.aclone()?),
             Expression::BlockCall(obj, block) => {
@@ -782,6 +786,21 @@ fn parse_call<'a, A: Allocator>(
                     args: args,
                 });
             }
+            (Token::LeftSquare, _) => {
+                tokens.advance();
+                let index_expr = parse_expression(tokens, allocator)?;
+
+                if !tokens.matches(Token::RightSquare) {
+                    return Err(
+                        PureParseError::Generic(b"Right square bracket did not follow index expr").into(),
+                    );
+                }
+
+                expr = Expression::Index(
+                    ABox::new(expr, allocator)?,
+                    ABox::new(index_expr, allocator)?,
+                );
+            }
             (Token::Dot, _) => {
                 tokens.advance();
                 if let Token::Identifier(ident) = tokens.peek() {
@@ -826,7 +845,7 @@ fn parse_args<'a, A: Allocator>(
     allocator: A,
 ) -> Result<AVec<Expression<A>, A>, ParseError> {
     let mut args = AVec::new(allocator);
-    while tokens.peek() != Token::EOF && tokens.peek() != Token::RightParen {
+    while tokens.peek() != Token::EOF && tokens.peek() != Token::RightParen && tokens.peek() != Token::RightSquare {
         args.push(parse_expression(tokens, allocator)?)?;
         if tokens.matches(Token::Comma) {
             continue;
@@ -890,6 +909,15 @@ fn parse_primary<'a, A: Allocator>(
             let expr = parse_expression(tokens, allocator)?;
             if tokens.matches(Token::RightParen) {
                 Ok(expr)
+            } else {
+                Err(PureParseError::Generic(b"Expected closing paren").into())
+            }
+        }
+        Token::LeftSquare => {
+            tokens.advance();
+            let args = parse_args(tokens, allocator)?;
+            if tokens.matches(Token::RightSquare) {
+                Ok(Expression::ListLiteral(args))
             } else {
                 Err(PureParseError::Generic(b"Expected closing paren").into())
             }
@@ -1370,6 +1398,7 @@ pub enum ShimValue<A: Allocator> {
     I128(i128),
     F64(f64),
     SString(AVec<u8, A>),
+    List(AVec<Gc<ShimValue<A>>, A>),
     SFn(AVec<AVec<u8, A>, A>, Block<A>, Gc<ShimValue<A>>),
     BoundFn(Gc<ShimValue<A>>, Gc<ShimValue<A>>),
     NativeFn(
@@ -1467,6 +1496,7 @@ impl<A: Allocator> Debug for ShimValue<A> {
             Self::Freed => fmt.write_fmt(format_args!("<freed>")),
             Self::Unit => fmt.write_fmt(format_args!("()")),
             Self::SString(s) => fmt.write_fmt(format_args!("{}", std::str::from_utf8(s).unwrap())),
+            Self::List(..) => fmt.write_fmt(format_args!("<list>")),
             Self::SFn(..) => fmt.write_fmt(format_args!("<fn>")),
             Self::BoundFn(..) => fmt.write_fmt(format_args!("<bound fn>")),
             Self::NativeFn(..) => fmt.write_fmt(format_args!("<native fn>")),
@@ -1522,6 +1552,7 @@ impl<A: 'static + Allocator> ShimValue<A> {
             Self::Freed => vec.extend_from_slice(b"*freed*")?,
             Self::Unit => vec.extend_from_slice(b"()")?,
             Self::SString(s) => vec.extend_from_slice(s)?,
+            Self::List(_) => vec.extend_from_slice(b"<list>")?,
             Self::SFn(..) => vec.extend_from_slice(b"<fn>")?,
             Self::BoundFn(..) => vec.extend_from_slice(b"<bound fn>")?,
             Self::NativeFn(..) => vec.extend_from_slice(b"<native fn>")?,
@@ -1542,6 +1573,7 @@ impl<A: 'static + Allocator> ShimValue<A> {
             Self::Freed => false,
             Self::Unit => false,
             Self::SString(s) => s.len() > 0,
+            Self::List(v) => v.len() > 0,
             Self::SFn(..) => true,
             Self::BoundFn(..) => true,
             Self::NativeFn(..) => true,
@@ -1549,6 +1581,42 @@ impl<A: 'static + Allocator> ShimValue<A> {
             Self::StructDef(..) => true,
             Self::Struct(..) => true,
             Self::Userdata(..) => true,
+        }
+    }
+
+    pub fn index(
+        &self,
+        index: &Gc<ShimValue<A>>,
+        interpreter: &mut Interpreter<A>,
+    ) -> Result<Gc<ShimValue<A>>, ShimError> {
+        match &*index.borrow() {
+            Self::I128(i) => {
+                if *i >= 0 {
+                    let i: usize = *i as usize;
+                    match self {
+                        Self::SString(s) => {
+                            if i < s.len() {
+                                let c = s[i];
+                                let new_str = AVec::from_slice(&[c], interpreter.allocator)?;
+                                interpreter.new_value(new_str)
+                            } else {
+                                Err(ShimError::Other(b"string index out of bounds"))
+                            }
+                        }
+                        Self::List(vec) => {
+                            if i < vec.len() {
+                                Ok(vec[i].clone())
+                            } else {
+                                Err(ShimError::Other(b"list index out of bounds"))
+                            }
+                        }
+                        _ => Err(ShimError::Other(b"value not indexable"))
+                    }
+                } else {
+                    Err(ShimError::Other(b"negative index not supported"))
+                }
+            }
+            _ => Err(ShimError::Other(b"index is not an int")),
         }
     }
 
@@ -1843,6 +1911,7 @@ impl<A: Allocator> Manage for ShimValue<A> {
             Self::Unit => {}
             Self::SString(_) => {}
             // TODO: trace these
+            Self::List(_) => {}
             Self::SFn(..) => {}
             Self::BoundFn(..) => {}
             // TODO: It seems like we need to be careful not to leak GC's here
@@ -1974,6 +2043,19 @@ impl<'a, A: Allocator> NewValue<f64, A> for Interpreter<'a, A> {
     }
 }
 
+impl<'a, A: Allocator> NewValue<&[u8], A> for Interpreter<'a, A> {
+    fn new_value(&mut self, val: &[u8]) -> Result<Gc<ShimValue<A>>, ShimError> {
+        let new_str = AVec::from_slice(val, self.allocator)?;
+        Ok(self.collector.manage(ShimValue::SString(new_str)))
+    }
+}
+
+impl<'a, A: Allocator> NewValue<AVec<u8, A>, A> for Interpreter<'a, A> {
+    fn new_value(&mut self, val: AVec<u8, A>) -> Result<Gc<ShimValue<A>>, ShimError> {
+        Ok(self.collector.manage(ShimValue::SString(val)))
+    }
+}
+
 impl<'a, A: Allocator> NewValue<ShimValue<A>, A> for Interpreter<'a, A> {
     fn new_value(&mut self, val: ShimValue<A>) -> Result<Gc<ShimValue<A>>, ShimError> {
         Ok(self.collector.manage(val))
@@ -2089,6 +2171,14 @@ impl<'a, A: 'static + Allocator> Interpreter<'a, A> {
                 new_str.extend_from_slice(s)?;
                 self.new_value(ShimValue::SString(new_str))?
             }
+            Expression::ListLiteral(exprs) => {
+                let mut val_vec = AVec::new(self.allocator);
+                for expr in exprs.iter() {
+                    let val = self.interpret_expression(expr)?;
+                    val_vec.push(val)?;
+                }
+                self.new_value(ShimValue::List(val_vec))?
+            }
             Expression::Unary(op, expr) => {
                 let val = self.interpret_expression(&*expr)?;
                 match op {
@@ -2133,6 +2223,13 @@ impl<'a, A: 'static + Allocator> Interpreter<'a, A> {
                 args.push(right)?;
 
                 let x = ShimValue::call(&bound_fn.borrow(), &args, self)?;
+                x
+            }
+            Expression::Index(indexable, index) => {
+                let indexable = self.interpret_expression(&indexable)?;
+                let index = self.interpret_expression(&index)?;
+
+                let x = indexable.borrow().index(&index, self)?;
                 x
             }
             Expression::Call(cexpr) => {
