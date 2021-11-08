@@ -1431,6 +1431,16 @@ impl<'a, A: Allocator> ShimInto<&'a ShimValue<A>> for &'a ShimValue<A> {
     }
 }
 
+impl<A: Allocator> ShimInto<bool> for &ShimValue<A> {
+    fn shim_into(self) -> Result<bool, ShimError> {
+        if let ShimValue::Bool(b) = self {
+            Ok(*b as bool)
+        } else {
+            Err(ShimError::Other(b"not a float"))
+        }
+    }
+}
+
 impl<A: Allocator> ShimInto<f32> for &Gc<ShimValue<A>> {
     fn shim_into(self) -> Result<f32, ShimError> {
         (&*self.borrow()).shim_into()
@@ -1457,6 +1467,16 @@ impl<A: Allocator> ShimInto<f64> for &ShimValue<A> {
     fn shim_into(self) -> Result<f64, ShimError> {
         if let ShimValue::F64(f) = self {
             Ok(*f as f64)
+        } else {
+            Err(ShimError::Other(b"not a float"))
+        }
+    }
+}
+
+impl<A: Allocator> ShimInto<u32> for &ShimValue<A> {
+    fn shim_into(self) -> Result<u32, ShimError> {
+        if let ShimValue::I128(i) = self {
+            Ok(*i as u32)
         } else {
             Err(ShimError::Other(b"not a float"))
         }
@@ -2172,6 +2192,12 @@ impl<'a, A: Allocator> NewValue<usize, A> for Interpreter<'a, A> {
 impl<'a, A: Allocator> NewValue<i128, A> for Interpreter<'a, A> {
     fn new_value(&mut self, val: i128) -> Result<Gc<ShimValue<A>>, ShimError> {
         Ok(self.collector.manage(ShimValue::I128(val)))
+    }
+}
+
+impl<'a, A: Allocator> NewValue<f32, A> for Interpreter<'a, A> {
+    fn new_value(&mut self, val: f32) -> Result<Gc<ShimValue<A>>, ShimError> {
+        Ok(self.collector.manage(ShimValue::F64(val as f64)))
     }
 }
 
