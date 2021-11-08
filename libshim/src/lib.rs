@@ -1419,12 +1419,6 @@ pub trait ShimInto<T> {
     fn shim_into(self) -> Result<T, ShimError>;
 }
 
-impl<A: Allocator> ShimInto<Gc<ShimValue<A>>> for &Gc<ShimValue<A>> {
-    fn shim_into(self) -> Result<Gc<ShimValue<A>>, ShimError> {
-        Ok(self.clone())
-    }
-}
-
 impl<'a, A: Allocator> ShimInto<&'a ShimValue<A>> for &'a ShimValue<A> {
     fn shim_into(self) -> Result<&'a ShimValue<A>, ShimError> {
         Ok(self)
@@ -1436,52 +1430,37 @@ impl<A: Allocator> ShimInto<bool> for &ShimValue<A> {
         if let ShimValue::Bool(b) = self {
             Ok(*b as bool)
         } else {
-            Err(ShimError::Other(b"not a float"))
+            Err(ShimError::Other(b"not a bool"))
         }
     }
 }
 
-impl<A: Allocator> ShimInto<f32> for &Gc<ShimValue<A>> {
-    fn shim_into(self) -> Result<f32, ShimError> {
-        (&*self.borrow()).shim_into()
-    }
-}
-
-impl<A: Allocator> ShimInto<f32> for &ShimValue<A> {
-    fn shim_into(self) -> Result<f32, ShimError> {
-        if let ShimValue::F64(f) = self {
-            Ok(*f as f32)
-        } else {
-            Err(ShimError::Other(b"not a float"))
+macro_rules! numeric_shim_into {
+    ($T:ty) => {
+        impl<A: Allocator> ShimInto<$T> for &ShimValue<A> {
+            fn shim_into(self) -> Result<$T, ShimError> {
+                match self {
+                    ShimValue::F64(f) => Ok(*f as $T),
+                    ShimValue::I128(i) => Ok(*i as $T),
+                    _ => Err(ShimError::Other(b"not the right thing"))
+                }
+            }
         }
     }
 }
 
-impl<A: Allocator> ShimInto<f64> for &Gc<ShimValue<A>> {
-    fn shim_into(self) -> Result<f64, ShimError> {
-        (&*self.borrow()).shim_into()
-    }
-}
-
-impl<A: Allocator> ShimInto<f64> for &ShimValue<A> {
-    fn shim_into(self) -> Result<f64, ShimError> {
-        if let ShimValue::F64(f) = self {
-            Ok(*f as f64)
-        } else {
-            Err(ShimError::Other(b"not a float"))
-        }
-    }
-}
-
-impl<A: Allocator> ShimInto<u32> for &ShimValue<A> {
-    fn shim_into(self) -> Result<u32, ShimError> {
-        if let ShimValue::I128(i) = self {
-            Ok(*i as u32)
-        } else {
-            Err(ShimError::Other(b"not a float"))
-        }
-    }
-}
+numeric_shim_into!(u8);
+numeric_shim_into!(u16);
+numeric_shim_into!(u32);
+numeric_shim_into!(u64);
+numeric_shim_into!(u128);
+numeric_shim_into!(i8);
+numeric_shim_into!(i16);
+numeric_shim_into!(i32);
+numeric_shim_into!(i64);
+numeric_shim_into!(i128);
+numeric_shim_into!(f32);
+numeric_shim_into!(f64);
 
 impl<'a, A: Allocator> ShimInto<&'a [u8]> for &'a ShimValue<A> {
     fn shim_into(self) -> Result<&'a [u8], ShimError> {
@@ -1524,7 +1503,7 @@ impl<'a, M: 'static + Userdata, A: Allocator> ShimInto<&'a M> for &'a ShimValue<
                 Err(ShimError::Other(b"not the right kind of userdata"))
             }
         } else {
-            Err(ShimError::Other(b"not text"))
+            Err(ShimError::Other(b"not userdata"))
         }
     }
 }
@@ -1777,6 +1756,12 @@ impl<A: 'static + Allocator> ShimValue<A> {
             let the_fn = match (&*obj.borrow(), name) {
                 (ShimValue::Struct(_), _) => {
                     return Struct::get_prop(obj, name, interpreter)?.ok_or(ShimError::Other(b"struct does not have prop"));
+                }
+                (ShimValue::I128(_), b"f64") => {
+                    int_f64
+                }
+                (ShimValue::F64(_), b"int") => {
+                    f64_int
                 }
                 (ShimValue::SString(_), b"lower") => {
                     str_lower
@@ -2043,6 +2028,18 @@ shim_fn!{
 shim_fn!{
     fn list_len(interpreter, vec: &RefCell<AVec<Gc<ShimValue<A>>, A>>) {
         let x = interpreter.new_value(vec.borrow().len()); x
+    }
+}
+
+shim_fn!{
+    fn int_f64(interpreter, f: f64) {
+        interpreter.new_value(f)
+    }
+}
+
+shim_fn!{
+    fn f64_int(interpreter, i: i128) {
+        interpreter.new_value(i)
     }
 }
 
