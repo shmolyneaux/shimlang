@@ -1398,7 +1398,7 @@ pub enum ShimValue<A: Allocator> {
     I128(i128),
     F64(f64),
     SString(AVec<u8, A>),
-    List(AVec<Gc<ShimValue<A>>, A>),
+    List(RefCell<AVec<Gc<ShimValue<A>>, A>>),
     SFn(AVec<AVec<u8, A>, A>, Block<A>, Gc<ShimValue<A>>),
     BoundFn(Gc<ShimValue<A>>, Gc<ShimValue<A>>),
     NativeFn(
@@ -1417,6 +1417,18 @@ pub enum ShimValue<A: Allocator> {
 
 pub trait ShimInto<T> {
     fn shim_into(self) -> Result<T, ShimError>;
+}
+
+impl<A: Allocator> ShimInto<Gc<ShimValue<A>>> for &Gc<ShimValue<A>> {
+    fn shim_into(self) -> Result<Gc<ShimValue<A>>, ShimError> {
+        Ok(self.clone())
+    }
+}
+
+impl<'a, A: Allocator> ShimInto<&'a ShimValue<A>> for &'a ShimValue<A> {
+    fn shim_into(self) -> Result<&'a ShimValue<A>, ShimError> {
+        Ok(self)
+    }
 }
 
 impl<A: Allocator> ShimInto<f32> for &Gc<ShimValue<A>> {
@@ -1455,6 +1467,16 @@ impl<'a, A: Allocator> ShimInto<&'a [u8]> for &'a ShimValue<A> {
     fn shim_into(self) -> Result<&'a [u8], ShimError> {
         if let ShimValue::SString(s) = self {
             Ok(s)
+        } else {
+            Err(ShimError::Other(b"not text"))
+        }
+    }
+}
+
+impl<'a, A: Allocator> ShimInto<&'a RefCell<AVec<Gc<ShimValue<A>>, A>>> for &'a ShimValue<A> {
+    fn shim_into(self) -> Result<&'a RefCell<AVec<Gc<ShimValue<A>>, A>>, ShimError> {
+        if let ShimValue::List(lst) = self {
+            Ok(lst)
         } else {
             Err(ShimError::Other(b"not text"))
         }
@@ -1573,7 +1595,7 @@ impl<A: 'static + Allocator> ShimValue<A> {
             Self::Freed => false,
             Self::Unit => false,
             Self::SString(s) => s.len() > 0,
-            Self::List(v) => v.len() > 0,
+            Self::List(v) => v.borrow().len() > 0,
             Self::SFn(..) => true,
             Self::BoundFn(..) => true,
             Self::NativeFn(..) => true,
@@ -1604,8 +1626,8 @@ impl<A: 'static + Allocator> ShimValue<A> {
                             }
                         }
                         Self::List(vec) => {
-                            if i < vec.len() {
-                                Ok(vec[i].clone())
+                            if i < vec.borrow().len() {
+                                Ok(vec.borrow()[i].clone())
                             } else {
                                 Err(ShimError::Other(b"list index out of bounds"))
                             }
@@ -1732,16 +1754,26 @@ impl<A: 'static + Allocator> ShimValue<A> {
             let the_fn = binary_op(op, interpreter)?;
             interpreter.new_value(ShimValue::BoundFn(obj.clone(), the_fn))
         } else {
-            match (&*obj.borrow(), name) {
-                (ShimValue::Struct(_), _) => Struct::get_prop(obj, name, interpreter)?
-                    .ok_or(ShimError::Other(b"struct does not have prop")),
+            let the_fn = match (&*obj.borrow(), name) {
+                (ShimValue::Struct(_), _) => {
+                    return Struct::get_prop(obj, name, interpreter)?.ok_or(ShimError::Other(b"struct does not have prop"));
+                }
                 (ShimValue::SString(_), b"lower") => {
-                    // Seems like we should make builtins like this global?
-                    let the_fn = interpreter.new_value(ShimValue::NativeFn(Box::new(str_lower)))?;
-                    interpreter.new_value(ShimValue::BoundFn(obj.clone(), the_fn))
+                    str_lower
+                }
+                (ShimValue::SString(_), b"upper") => {
+                    str_upper
+                }
+                (ShimValue::List(_), b"push") => {
+                    list_push
+                }
+                (ShimValue::List(_), b"len") => {
+                    list_len
                 }
                 _ => return Err(ShimError::Other(b"value no get_prop")),
-            }
+            };
+            let the_fn = interpreter.new_value(ShimValue::NativeFn(Box::new(the_fn)))?;
+            interpreter.new_value(ShimValue::BoundFn(obj.clone(), the_fn))
         }
     }
 
@@ -1882,21 +1914,115 @@ fn binary_op<A: 'static + Allocator>(
     })))
 }
 
-fn str_lower<A: 'static + Allocator>(
-    args: &AVec<Gc<ShimValue<A>>, A>,
-    interpreter: &mut Interpreter<A>,
-) -> Result<Gc<ShimValue<A>>, ShimError> {
-    if args.len() != 1 {
-        Err(ShimError::Other(b"expected 1 argument"))
-    } else if let ShimValue::SString(s) = &*args[0].borrow() {
+macro_rules! unpack_args {
+    ($args:ident, $count:expr,) => {};
+    ($args:ident, $count:expr, $arg_v:ident: Gc<ShimValue<A>>) => {
+        let $arg_v: Gc<ShimValue<A>> = $args[$count].clone();
+    };
+    ($args:ident, $count:expr, $arg_v:ident:$arg_t:ty) => {
+        let arg0 = &*$args[$count].borrow();
+        let $arg_v: $arg_t = arg0.shim_into()?;
+    };
+    ($args:ident, $count:expr, $arg_v:ident:$arg_t:ty, $arg_v2:ident: Gc<ShimValue<A>>) => {
+        unpack_args!(
+            $args,
+            $count,
+            $arg_v: $arg_t
+        );
+        unpack_args!(
+            $args,
+            $count + 1,
+            $arg_v2: Gc<ShimValue<A>>
+        );
+    };
+    ($args:ident, $count:expr, $arg_v:ident:$arg_t:ty, $($xs_arg_v:ident:$xs_arg_t:ty),*) => {
+        unpack_args!(
+            $args,
+            $count,
+            $arg_v: $arg_t
+        );
+        unpack_args!(
+            $args,
+            $count + 1,
+            $($xs_arg_v:$xs_arg_t),*
+        );
+    };
+}
+
+macro_rules! count {
+    () => {0};
+    ($arg_v:ident:$arg_t:ty) => {
+        1
+    };
+    ($arg_v:ident:$arg_t:ty, $($xs_arg_v:ident:$xs_arg_t:ty),*) => {
+        1 + count!($($xs_arg_v:$xs_arg_t),*)
+    }
+}
+
+macro_rules! shim_fn {
+    (fn $name:ident ($interpreter:ident, $arg_v:ident: $arg_t:ty, $arg_v2:ident: Gc<ShimValue<A>>) $code:tt) => {
+        fn $name<A: 'static + Allocator>(
+            args: &AVec<Gc<ShimValue<A>>, A>,
+            $interpreter: &mut Interpreter<A>,
+        ) -> Result<Gc<ShimValue<A>>, ShimError> {
+            if args.len() != 2 {
+                return Err(ShimError::Other(b"wrong arity"));
+            }
+
+            unpack_args!(args, 0, $arg_v: $arg_t);
+            unpack_args!(args, 1, $arg_v2: Gc<ShimValue<A>>);
+
+            $code
+        }
+    };
+    (fn $name:ident ($interpreter:ident, $($arg_v:ident:$arg_t:ty),*) $code:tt) => {
+        fn $name<A: 'static + Allocator>(
+            args: &AVec<Gc<ShimValue<A>>, A>,
+            $interpreter: &mut Interpreter<A>,
+        ) -> Result<Gc<ShimValue<A>>, ShimError> {
+            if args.len() != count!($($arg_v:$arg_t),*) {
+                return Err(ShimError::Other(b"wrong arity"));
+            }
+
+            unpack_args!(args, 0, $($arg_v:$arg_t),*);
+
+            $code
+        }
+    };
+}
+
+shim_fn!{
+    fn str_upper(interpreter, text: &[u8]) {
+        let mut uppered = AVec::new(interpreter.allocator);
+        for c in text.iter() {
+            uppered.push(c.to_ascii_uppercase())?;
+        }
+
+        interpreter.new_value(ShimValue::SString(uppered))
+    }
+}
+
+shim_fn!{
+    fn str_lower(interpreter, text: &[u8]) {
         let mut lowered = AVec::new(interpreter.allocator);
-        for c in s.iter() {
+        for c in text.iter() {
             lowered.push(c.to_ascii_lowercase())?;
         }
 
         interpreter.new_value(ShimValue::SString(lowered))
-    } else {
-        Err(ShimError::Other(b"not a str"))
+    }
+}
+
+shim_fn!{
+    fn list_push(interpreter, vec: &RefCell<AVec<Gc<ShimValue<A>>, A>>, val: Gc<ShimValue<A>>) {
+        vec.borrow_mut().push(val)?;
+        interpreter.new_value(())
+    }
+}
+
+shim_fn!{
+    fn list_len(interpreter, vec: &RefCell<AVec<Gc<ShimValue<A>>, A>>) {
+        let x = interpreter.new_value(vec.borrow().len()); x
     }
 }
 
@@ -2025,9 +2151,21 @@ pub trait NewValue<T, A: Allocator> {
     fn new_value(&mut self, val: T) -> Result<Gc<ShimValue<A>>, ShimError>;
 }
 
+impl<'a, A: Allocator> NewValue<(), A> for Interpreter<'a, A> {
+    fn new_value(&mut self, _val: ()) -> Result<Gc<ShimValue<A>>, ShimError> {
+        Ok(self.g.the_unit.clone())
+    }
+}
+
 impl<'a, A: Allocator> NewValue<bool, A> for Interpreter<'a, A> {
     fn new_value(&mut self, val: bool) -> Result<Gc<ShimValue<A>>, ShimError> {
         Ok(self.collector.manage(ShimValue::Bool(val)))
+    }
+}
+
+impl<'a, A: Allocator> NewValue<usize, A> for Interpreter<'a, A> {
+    fn new_value(&mut self, val: usize) -> Result<Gc<ShimValue<A>>, ShimError> {
+        Ok(self.collector.manage(ShimValue::I128(val as i128)))
     }
 }
 
@@ -2177,7 +2315,7 @@ impl<'a, A: 'static + Allocator> Interpreter<'a, A> {
                     let val = self.interpret_expression(expr)?;
                     val_vec.push(val)?;
                 }
-                self.new_value(ShimValue::List(val_vec))?
+                self.new_value(ShimValue::List(RefCell::new(val_vec)))?
             }
             Expression::Unary(op, expr) => {
                 let val = self.interpret_expression(&*expr)?;
