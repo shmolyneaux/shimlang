@@ -141,7 +141,7 @@ pub fn main() -> Result<(), ()> {
 
     let _exe = args.next();
     let script_name = args.next().unwrap();
-    println!("Loading script {}", script_name);
+
     let mut file = File::open(script_name).unwrap();
     let mut buf = Vec::new();
     file.read_to_end(&mut buf).unwrap();
