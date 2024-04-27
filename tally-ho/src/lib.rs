@@ -190,7 +190,7 @@ mod tests {
             let mut value = collector.manage(Value::List(Vec::new()));
             // Create a cycle. Have the first element of the list reference the list
             let self_reference = value.clone();
-            value.inner_mut().push(self_reference);
+            value.borrow_mut().push(self_reference);
 
             assert_eq!(collector.live_count(), 1);
         }
