@@ -5,16 +5,27 @@ import subprocess
 import sys
 import textwrap
 
+try:
+    import rich
+    def print_result(*args):
+        text = " ".join(str(arg) for arg in args)
+        text = text.replace("PASS", "[green]PASS[/green]")
+        text = text.replace("FAIL", "[red]FAIL[/red]")
+        text = text.replace("ERROR", "[red]ERROR[/red]")
+        rich.print(text)
+except ImportError:
+    print_result = print
+
 # I promise that I can write cleaner Python than this :)
 # I just need something in place for CI
 
 input_test_names = [Path(path).resolve() for path in sys.argv[1:]]
 
-zig = Path(__file__).parent.joinpath("target/debug/shimlang").as_posix()
+interpreter = Path(__file__).parent.joinpath("zig-out/bin/shimlang.exe").as_posix()
 
 test_dir = Path(__file__).parent / "tests"
 
-check_script_output = list(test_dir.glob("check_output/*.shm"))
+check_script_output = sorted(test_dir.glob("check_output/**/*.shm"))
 if input_test_names:
     check_script_output = [
         path for path in check_script_output if path.resolve() in input_test_names
@@ -28,12 +39,12 @@ for script in check_script_output:
     expected_output_file = script.with_suffix(".out")
     if not expected_output_file.exists():
         failed = True
-        print("FAIL -", script, "(no output file)")
+        print_result("FAIL  -", script, "(no output file)")
         continue
 
     expected = expected_output_file.read_text()
     result = subprocess.run(
-        [zig, script.as_posix()],
+        [interpreter, script.as_posix()],
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -41,7 +52,7 @@ for script in check_script_output:
 
     if result.returncode:
         failed = True
-        print("FAIL -", script, f"(non-zero exit code {result.returncode})")
+        print_result("ERROR -", script, f"(non-zero exit code {result.returncode})")
 
         # Only give more detail when a test is explicitly asked for
         if input_test_names:
@@ -49,11 +60,11 @@ for script in check_script_output:
             print(textwrap.indent(result.stdout, "        "))
 
     elif result.stdout == expected:
-        print("PASS -", script)
+        print_result("PASS  -", script)
 
     else:
         failed = True
-        print("FAIL -", script, "(output does not match expected)")
+        print_result("FAIL  -", script, "(output does not match expected)")
         print("    Expected:")
         print(textwrap.indent(repr(expected), "        "))
         print("    Got:")
