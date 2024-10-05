@@ -3,16 +3,11 @@ name: default
 
 steps:
 - name: test
-  image: shmolyneaux/shimlang-builder:latest
+  image: shmolyneaux/ziglang:0.13.0
   commands:
-    - cp -r * /src/shimlang
-    - cd /src/shimlang
-    - . $HOME/.cargo/env
-    - cargo +nightly build -p shimlang --release -Z build-std=std,panic_abort -Z build-std-features=panic_immediate_abort --target x86_64-unknown-linux-musl
-    - objcopy --only-keep-debug target/x86_64-unknown-linux-musl/release/shimlang symbols.dbg
-    - cp target/x86_64-unknown-linux-musl/release/shimlang stripped
-    - strip stripped
-    - bloaty stripped -d symbols -n 100 -s file --domain=file --debug-file symbols.dbg
+    - zig build
+    - apk add python3
+    - cat test_list | xargs ./run_tests
 
 trigger:
   event:
