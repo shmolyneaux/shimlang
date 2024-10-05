@@ -15,7 +15,7 @@ pub const Ast = struct {
     pub fn print(self: Ast, allocator: std.mem.Allocator) void {
         const empty_buf: []u8 = "";
 
-        var buf = allocator.alloc(u8, 1024) catch empty_buf;
+        var buf = allocator.alloc(u8, 1 << 16) catch empty_buf;
         defer allocator.free(buf);
 
         const count = self.fmt(buf) catch {
@@ -85,11 +85,15 @@ pub const DeclarationTag = enum {
     statement_declaration,
 };
 
-pub const Declaration = union(DeclarationTag) {
-    struct_declaration: StructDeclaration,
-    function_declaration: FunctionDeclaration,
-    variable_declaration: VariableDeclaration,
-    statement_declaration: Statement,
+pub const Declaration = struct {
+    decl: union(DeclarationTag) {
+        struct_declaration: StructDeclaration,
+        function_declaration: FunctionDeclaration,
+        variable_declaration: VariableDeclaration,
+        statement_declaration: Statement,
+    },
+    startIdx: usize,
+    endIdx: usize,
 };
 
 pub const StructDeclaration = struct {
@@ -192,6 +196,11 @@ pub const IndexInfo = struct {
     index: *Expression,
 };
 
+pub const PropInfo = struct {
+    obj: *Expression,
+    name: []const u8,
+};
+
 fn bufPushText(buf: *[]u8, text: []const u8) !void {
     if (text.len > buf.*.len) {
         return error.NoSpaceLeft;
@@ -225,10 +234,11 @@ pub const ExpressionTag = enum {
     negation,
     call,
     index,
+    getProp,
     primary,
 };
 
-pub const Expression = union(ExpressionTag) {
+pub const ExpressionInner = union(ExpressionTag) {
     logicalOr: BinaryOp,
     logicalAnd: BinaryOp,
     equal: BinaryOp,
@@ -245,7 +255,14 @@ pub const Expression = union(ExpressionTag) {
     negation: UnaryOp,
     call: CallInfo,
     index: IndexInfo,
+    getProp: PropInfo,
     primary: Primary,
+};
+
+pub const Expression = struct {
+    expr: ExpressionInner,
+    startIdx: usize,
+    endIdx: usize,
 
     fn pushFmt(self: Expression, buf: *[]u8) std.fmt.BufPrintError!void {
         const len = try self.fmt(buf.*);
@@ -255,7 +272,7 @@ pub const Expression = union(ExpressionTag) {
     fn fmt(self: Expression, bufIn: []u8) !usize {
         var buf = bufIn;
         const startingSize = buf.len;
-        switch (self) {
+        switch (self.expr) {
             ExpressionTag.logicalOr => {
                 try bufPushText(&buf, "(");
                 try self.logicalOr.a.pushFmt(&buf);
@@ -321,6 +338,8 @@ fn bufPushArgList(buf: *[]u8, exprs: []const Expression) std.fmt.BufPrintError!v
 pub const TokenTag = enum {
     forKeyword,
     ifKeyword,
+    orKeyword,
+    andKeyword,
     letKeyword,
     fnKeyword,
     whileKeyword,
@@ -360,6 +379,8 @@ pub const TokenTag = enum {
 pub const Token = union(TokenTag) {
     forKeyword: void,
     ifKeyword: void,
+    orKeyword: void,
+    andKeyword: void,
     letKeyword: void,
     fnKeyword: void,
     whileKeyword: void,
@@ -418,12 +439,19 @@ pub const TokenizationError = error{
     UnknownCharacter,
 };
 
-pub fn tokenize(allocator: std.mem.Allocator, programText: []const u8) ![]const Token {
-    var tokens = std.ArrayList(Token).init(allocator);
+const TokenLoc = struct {
+    token: Token,
+    start: usize,
+    end: usize,
+};
+
+pub fn tokenize(allocator: std.mem.Allocator, programText: []const u8) ![]const TokenLoc {
+    var tokens = std.ArrayList(TokenLoc).init(allocator);
 
     var idx: usize = 0;
 
     outer: while (idx < programText.len) {
+        const tokenStartIdx = idx;
         const token: Token = switch (programText[idx]) {
             '+' => Token{ .plus = {} },
             '-' => Token{ .minus = {} },
@@ -495,7 +523,7 @@ pub fn tokenize(allocator: std.mem.Allocator, programText: []const u8) ![]const 
             '"' => blk: {
                 // Start at the first character, not the quote
                 const start_idx = idx + 1;
-                idx = idx + 2;
+                idx = start_idx;
                 while (idx < programText.len) {
                     if (programText[idx] == '"') {
                         break :blk Token{ .stringLiteral = programText[start_idx..idx] };
@@ -504,6 +532,8 @@ pub fn tokenize(allocator: std.mem.Allocator, programText: []const u8) ![]const 
                     }
                 }
 
+                std.debug.print("Got text: {s}", .{programText[start_idx..]});
+                std.debug.print("Text remaining: {s}", .{programText[idx..]});
                 return error.UnclosedQuote;
             },
             'A'...'Z', 'a'...'z', '_' => blk: {
@@ -527,16 +557,26 @@ pub fn tokenize(allocator: std.mem.Allocator, programText: []const u8) ![]const 
                             break :inner_blk Token{ .ifKeyword = {} };
                         } else if (std.mem.eql(u8, programText[start_idx..idx], "fn")) {
                             break :inner_blk Token{ .fnKeyword = {} };
+                        } else if (std.mem.eql(u8, programText[start_idx..idx], "or")) {
+                            break :inner_blk Token{ .orKeyword = {} };
                         }
                     } else if (idx - start_idx == 3) {
                         if (std.mem.eql(u8, programText[start_idx..idx], "let")) {
                             break :inner_blk Token{ .letKeyword = {} };
                         } else if (std.mem.eql(u8, programText[start_idx..idx], "for")) {
                             break :inner_blk Token{ .forKeyword = {} };
+                        } else if (std.mem.eql(u8, programText[start_idx..idx], "and")) {
+                            break :inner_blk Token{ .andKeyword = {} };
+                        }
+                    } else if (idx - start_idx == 4) {
+                        if (std.mem.eql(u8, programText[start_idx..idx], "true")) {
+                            break :inner_blk Token{ .boolLiteral = true };
                         }
                     } else if (idx - start_idx == 5) {
                         if (std.mem.eql(u8, programText[start_idx..idx], "while")) {
                             break :inner_blk Token{ .whileKeyword = {} };
+                        } else if (std.mem.eql(u8, programText[start_idx..idx], "false")) {
+                            break :inner_blk Token{ .boolLiteral = false };
                         }
                     } else if (idx - start_idx == 6) {
                         if (std.mem.eql(u8, programText[start_idx..idx], "struct")) {
@@ -553,16 +593,34 @@ pub fn tokenize(allocator: std.mem.Allocator, programText: []const u8) ![]const 
                 break :blk tk;
             },
             '0'...'9' => blk: {
-                // TODO: parse float
-                var num: i64 = programText[idx] - '0';
-                idx = idx + 1;
-                while (idx < programText.len and '0' <= programText[idx] and programText[idx] <= '9') {
-                    num = num * 10 + programText[idx] - '0';
+                const startIdx = idx;
+                var foundDecimal = false;
+                while (idx < programText.len) {
+                    if (programText[idx] == '.') {
+                        if (foundDecimal) {
+                            // This is a second dot in a number, so we'll ignore it
+                            // and probably barf at the parsing stage
+                            break;
+                        }
+                        foundDecimal = true;
+                    } else if (programText[idx] < '0' or programText[idx] > '9') {
+                        break;
+                    }
                     idx += 1;
                 }
+
+                var token: Token = undefined;
+                if (foundDecimal) {
+                    const num = try std.fmt.parseFloat(f64, programText[startIdx..idx]);
+                    token = Token{ .floatLiteral = num };
+                } else {
+                    const num = try std.fmt.parseInt(i64, programText[startIdx..idx], 10);
+                    token = Token{ .intLiteral = num };
+                }
+
                 // Make up for the `idx += 1` below
                 idx -= 1;
-                break :blk Token{ .intLiteral = num };
+                break :blk token;
             },
             else => {
                 std.debug.print("Unknown character {any}", .{programText[idx]});
@@ -571,80 +629,13 @@ pub fn tokenize(allocator: std.mem.Allocator, programText: []const u8) ![]const 
                 //return TokenizationError.UnknownCharacter;
             },
         };
-        try tokens.append(token);
+        try tokens.append(.{ .token = token, .start = tokenStartIdx, .end = idx });
         idx += 1;
     }
 
-    try tokens.append(Token{ .EOF = {} });
+    try tokens.append(.{ .token = Token{ .EOF = {} }, .start = idx, .end = idx });
 
     return tokens.items;
-}
-
-const tokenEq = Token{ .equal = {} };
-const tokenLet = Token{ .letKeyword = {} };
-const tokenFn = Token{ .fnKeyword = {} };
-const tokenComma = Token{ .comma = {} };
-const tokenPlus = Token{ .plus = {} };
-const tokenSemicolon = Token{ .semicolon = {} };
-const tokenRSquare = Token{ .rSquare = {} };
-const tokenLSquare = Token{ .lSquare = {} };
-const tokenRParen = Token{ .rParen = {} };
-const tokenLParen = Token{ .lParen = {} };
-const tokenRCurly = Token{ .rCurly = {} };
-const tokenLCurly = Token{ .lCurly = {} };
-
-pub fn parseProgramText(allocator: std.mem.Allocator, programText: []const u8) !Ast {
-    const tokens = try tokenize(allocator, programText);
-    return parseTokens(allocator, tokens);
-}
-
-pub fn parseTokens(allocator: std.mem.Allocator, inputTokens: []const Token) ParseError!Ast {
-    var declarations = std.ArrayList(Declaration).init(allocator);
-    var tokens = TokenStream.new(inputTokens);
-
-    while (!tokens.match(Token.EOF)) {
-        const result = parseDeclaration(allocator, &tokens);
-        if (result) |declaration| {
-            try declarations.append(declaration);
-        } else |err| {
-            std.debug.print("Tokens remaining  {any}\n{any}\n", .{ tokens.tokens, err });
-            return err;
-        }
-    }
-
-    return Ast{ .allocator = allocator, .declarations = declarations.items };
-}
-
-pub fn parseDeclaration(allocator: std.mem.Allocator, tokens: *TokenStream) !Declaration {
-    if (tokens.match(TokenTag.EOF)) {
-        return error.TokensExhausted;
-    }
-
-    if (tokens.match(TokenTag.letKeyword)) {
-        return parseVariableDeclaration(allocator, tokens);
-    }
-
-    if (tokens.match(TokenTag.structKeyword)) {
-        return parseStructDeclaration(allocator, tokens);
-    }
-
-    if (tokens.match(TokenTag.fnKeyword)) {
-        return parseFnDeclaration(allocator, tokens);
-    }
-
-    return parseStatementDeclaration(allocator, tokens);
-}
-
-pub fn parseStructDeclaration(_: std.mem.Allocator, _: *TokenStream) !Declaration {
-    // NOTE: `struct` already consumed
-
-    return error.NotImplemented;
-}
-
-pub fn parseFnDeclaration(_: std.mem.Allocator, _: *TokenStream) !Declaration {
-    // NOTE: `fn` already consumed
-
-    return error.NotImplemented;
 }
 
 // statement      → exprStmt
@@ -666,6 +657,7 @@ pub fn parseFnDeclaration(_: std.mem.Allocator, _: *TokenStream) !Declaration {
 
 pub const StatementTag = enum {
     expression_statement,
+    assignment_statement,
     for_statement,
     if_statement,
     return_statement,
@@ -673,8 +665,15 @@ pub const StatementTag = enum {
     block_statement,
 };
 
+pub const AssignmentStatement = struct {
+    obj: ?Expression,
+    ident: []const u8,
+    expr: Expression,
+};
+
 pub const Statement = union(StatementTag) {
     expression_statement: *Expression,
+    assignment_statement: AssignmentStatement,
     for_statement: ForStatement,
     if_statement: IfStatement,
     return_statement: ReturnStatement,
@@ -732,57 +731,442 @@ const ParseError = error{
     TODO,
 };
 
-pub fn parseStatementDeclaration(allocator: std.mem.Allocator, tokens: *TokenStream) !Declaration {
-    if (tokens.match(TokenTag.forKeyword)) {
-        return error.NotImplemented;
+pub const ParseErrorInfo = struct { idx: usize };
+
+pub const Parser = struct {
+    allocator: std.mem.Allocator,
+
+    // The start index of the most-recently-consumed token
+    prevIdxStart: usize,
+    // The end index of the most-recently-consumed token
+    prevIdx: usize,
+
+    tokens: TokenStream,
+    programText: []const u8,
+    errInfo: ?ParseErrorInfo,
+
+    pub fn new(allocator: std.mem.Allocator, programText: []const u8) !Parser {
+        const inputTokens = try tokenize(allocator, programText);
+        const tokens = TokenStream.new(inputTokens);
+        return .{ .allocator = allocator, .prevIdxStart = 0, .prevIdx = 0, .tokens = tokens, .programText = programText, .errInfo = null };
     }
 
-    if (tokens.match(TokenTag.ifKeyword)) {
-        return error.NotImplemented;
+    fn captureMatch(self: *Parser, tag: TokenTag) ?Token {
+        const res = self.tokens.captureMatch(tag);
+        if (res) |token| {
+            self.prevIdxStart = token.start;
+            self.prevIdx = token.end;
+            return token.token;
+        } else {
+            return null;
+        }
     }
 
-    if (tokens.match(TokenTag.whileKeyword)) {
-        return error.NotImplemented;
+    fn match(self: *Parser, tag: TokenTag) bool {
+        const res = self.tokens.captureMatch(tag);
+        if (res) |token| {
+            self.prevIdxStart = token.start;
+            self.prevIdx = token.end;
+            return true;
+        } else {
+            return false;
+        }
     }
 
-    if (tokens.match(TokenTag.returnKeyword)) {
-        if (tokens.match(tokenSemicolon)) {
-            return Declaration{ .statement_declaration = Statement{ .return_statement = .{ .expr = null } } };
+    fn consume(self: *Parser, tag: TokenTag) !Token {
+        const token = try self.tokens.consume(tag);
+        self.prevIdxStart = token.start;
+        self.prevIdx = token.end;
+        return token.token;
+    }
+
+    pub fn parseProgramText(self: *Parser) !Ast {
+        return self.parseTokens() catch |err| {
+            if (self.errInfo) |info| {
+                std.debug.print("Error at idx {}: {}\n", .{ info, err });
+
+                var printColumn: ?usize = null;
+                var column: usize = 0;
+                for (self.programText, 0..) |c, idx| {
+                    std.debug.print("{c}", .{c});
+                    if (idx == info.idx) {
+                        printColumn = column;
+                    }
+                    if (c == '\n') {
+                        if (printColumn) |spaceCount| {
+                            for (0..spaceCount) |_| {
+                                std.debug.print(" ", .{});
+                            }
+                            std.debug.print("^\n", .{});
+                        }
+                        column = 0;
+                    } else {
+                        column += 1;
+                    }
+                }
+                std.debug.print("\n", .{});
+            } else {
+                std.debug.print("Unexpected parser error {}\n", .{err});
+            }
+            return err;
+        };
+    }
+
+    pub fn parseTokens(self: *Parser) ParseError!Ast {
+        var declarations = std.ArrayList(Declaration).init(self.allocator);
+
+        while (!self.match(Token.EOF)) {
+            const result = self.parseDeclaration();
+            if (result) |declaration| {
+                try declarations.append(declaration);
+            } else |err| {
+                if (self.tokens.tokens.len != 0) {
+                    self.errInfo = ParseErrorInfo{
+                        .idx = self.tokens.tokens[0].start,
+                    };
+                }
+                return err;
+            }
         }
 
-        const expr = try parseExpression(allocator, tokens);
-        _ = try tokens.consume(tokenSemicolon);
-
-        return Declaration{ .statement_declaration = Statement{ .return_statement = .{ .expr = expr } } };
+        return Ast{ .allocator = self.allocator, .declarations = declarations.items };
     }
 
-    const expr = try parseExpression(allocator, tokens);
-    _ = try tokens.consume(tokenSemicolon);
-    return Declaration{ .statement_declaration = Statement{ .expression_statement = expr } };
-}
+    pub fn parseDeclaration(self: *Parser) !Declaration {
+        if (self.match(TokenTag.EOF)) {
+            return error.TokensExhausted;
+        }
 
-pub fn parseVariableDeclaration(allocator: std.mem.Allocator, tokens: *TokenStream) !Declaration {
-    // NOTE: `let` already consumed
+        if (self.match(TokenTag.letKeyword)) {
+            return self.parseVariableDeclaration();
+        }
 
-    const identToken = try tokens.consume(TokenTag.identifier);
+        if (self.match(TokenTag.structKeyword)) {
+            return self.parseStructDeclaration();
+        }
 
-    var expression: ?Expression = null;
-    if (tokens.match(TokenTag.equal)) {
-        expression = (try parseExpression(allocator, tokens)).*;
+        if (self.match(TokenTag.fnKeyword)) {
+            return self.parseFnDeclaration();
+        }
+
+        return self.parseStatementDeclaration();
     }
 
-    _ = try tokens.consume(tokenSemicolon);
+    pub fn parseStructDeclaration(_: *Parser) !Declaration {
+        // NOTE: `struct` already consumed
 
-    return .{ .variable_declaration = .{ .name = identToken.identifier, .expr = expression } };
-}
+        std.debug.print("line: {}  struct parsing not implemented\n", .{@src().line});
+        return error.NotImplemented;
+    }
 
-pub fn parseExpressionVal(allocator: std.mem.Allocator, tokens: *TokenStream) ParseError!Expression {
-    return (try parseLogicOr(allocator, tokens)).*;
-}
+    pub fn parseFnDeclaration(_: *Parser) !Declaration {
+        // NOTE: `fn` already consumed
 
-pub fn parseExpression(allocator: std.mem.Allocator, tokens: *TokenStream) ParseError!*Expression {
-    return parseLogicOr(allocator, tokens);
-}
+        std.debug.print("line: {}  function parsing not implemented\n", .{@src().line});
+        return error.NotImplemented;
+    }
+
+    fn newDecl(self: *Parser, startIdx: usize, info: anytype) Declaration {
+        if (@TypeOf(info) == Statement) {
+            return Declaration{ .startIdx = startIdx, .endIdx = self.prevIdx, .decl = .{
+                .statement_declaration = info,
+            } };
+        } else {
+            @compileError("Can only use Statement for now");
+        }
+    }
+
+    fn newExpr(self: *Parser, startIdx: usize, expr: anytype) Expression {
+        return Expression{ .startIdx = startIdx, .endIdx = self.prevIdx, .expr = expr };
+    }
+
+    // The start idx of the next token
+    fn nextIdx(self: *Parser) usize {
+        if (self.tokens.tokens.len != 0) {
+            return self.tokens.tokens[0].start;
+        } else {
+            return self.programText.len;
+        }
+    }
+
+    pub fn parseStatementDeclaration(self: *Parser) ParseError!Declaration {
+        const idx = self.nextIdx();
+        if (self.match(TokenTag.forKeyword)) {
+            std.debug.print("line: {}  for loop parsing not implemented\n", .{@src().line});
+            return error.NotImplemented;
+        }
+
+        if (self.match(TokenTag.ifKeyword)) {
+            const expr = try self.parseExpressionVal();
+
+            _ = try self.consume(TokenTag.lCurly);
+
+            var declList = std.ArrayList(Declaration).init(self.allocator);
+            while (!self.match(TokenTag.rCurly)) {
+                const decl = try self.parseDeclaration();
+                try declList.append(decl);
+            }
+
+            // TODO: implement else
+
+            return self.newDecl(idx, Statement{
+                .if_statement = .{
+                    .expr = expr,
+                    .block = .{ .decl = declList.items },
+                },
+            });
+        }
+
+        if (self.match(TokenTag.whileKeyword)) {
+            const expr = try self.parseExpressionVal();
+            var declList = std.ArrayList(Declaration).init(self.allocator);
+
+            _ = try self.consume(TokenTag.lCurly);
+
+            while (!self.match(TokenTag.rCurly)) {
+                const decl = try self.parseDeclaration();
+                try declList.append(decl);
+            }
+
+            return Declaration{ .startIdx = idx, .endIdx = self.prevIdx, .decl = .{
+                .statement_declaration = Statement{
+                    .while_statement = .{
+                        .expr = expr,
+                        .block = .{ .decl = declList.items },
+                    },
+                },
+            } };
+        }
+
+        if (self.match(TokenTag.returnKeyword)) {
+            if (self.match(TokenTag.semicolon)) {
+                return self.newDecl(idx, Statement{ .return_statement = .{ .expr = null } });
+            }
+
+            const expr = try self.parseExpression();
+            _ = try self.consume(TokenTag.semicolon);
+
+            return self.newDecl(idx, Statement{ .return_statement = .{ .expr = expr } });
+        }
+
+        const expr = try self.parseExpression();
+
+        switch (expr.*.expr) {
+            ExpressionTag.primary => |prim| {
+                switch (prim) {
+                    PrimaryTag.identifier => |ident| {
+                        if (self.match(TokenTag.equal)) {
+                            const valExpr = try self.parseExpression();
+                            _ = try self.consume(TokenTag.semicolon);
+                            return self.newDecl(idx, Statement{ .assignment_statement = .{
+                                .obj = null,
+                                .ident = ident,
+                                .expr = valExpr.*,
+                            } });
+                        }
+                    },
+                    else => {},
+                }
+            },
+            ExpressionTag.getProp => |propInfo| {
+                if (self.match(TokenTag.equal)) {
+                    const valExpr = try self.parseExpression();
+                    _ = try self.consume(TokenTag.semicolon);
+                    return self.newDecl(idx, Statement{ .assignment_statement = .{
+                        .obj = propInfo.obj.*,
+                        .ident = propInfo.name,
+                        .expr = valExpr.*,
+                    } });
+                }
+            },
+            // TODO: assign to indexed list
+            else => {},
+        }
+
+        _ = try self.consume(TokenTag.semicolon);
+        return self.newDecl(idx, Statement{ .expression_statement = expr });
+    }
+
+    pub fn parseVariableDeclaration(self: *Parser) !Declaration {
+        // NOTE: `let` already consumed
+
+        const identToken = try self.consume(TokenTag.identifier);
+
+        var expression: ?Expression = null;
+        if (self.match(TokenTag.equal)) {
+            expression = (try self.parseExpression()).*;
+        }
+
+        _ = try self.consume(TokenTag.semicolon);
+
+        return .{ .startIdx = self.prevIdxStart, .endIdx = self.prevIdx, .decl = .{ .variable_declaration = .{ .name = identToken.identifier, .expr = expression } } };
+    }
+
+    pub fn parseExpressionVal(self: *Parser) ParseError!Expression {
+        return (try self.parseLogicOr()).*;
+    }
+
+    pub fn parseExpression(self: *Parser) ParseError!*Expression {
+        return self.parseLogicOr();
+    }
+
+    const parseLogicOr = parseBinaryOp(parseLogicAnd, .{
+        .logicalOr = Token.orKeyword,
+    });
+    const parseLogicAnd = parseBinaryOp(parseEquality, .{
+        .logicalAnd = Token.andKeyword,
+    });
+    const parseEquality = parseBinaryOp(parseComparison, .{
+        .notEqual = Token.bangEqual,
+        .equal = Token.doubleEqual,
+    });
+    const parseComparison = parseBinaryOp(parseTerm, .{
+        .gt = Token.gt,
+        .gte = Token.gte,
+        .lt = Token.lte,
+        .lte = Token.lte,
+    });
+    const parseTerm = parseBinaryOp(parseFactor, .{
+        .plus = Token.plus,
+        .minus = Token.minus,
+    });
+    const parseFactor = parseBinaryOp(parseUnary, .{
+        .divide = Token.div,
+        .multiply = Token.star,
+    });
+
+    pub fn parseUnary(self: *Parser) !*Expression {
+        const idx = self.nextIdx();
+        if (self.match(Token.minus)) {
+            const a = try self.parseUnary();
+            const expr = try self.allocator.create(Expression);
+            expr.* = self.newExpr(idx, .{ .negation = .{ .a = a } });
+            return expr;
+        } else if (self.match(Token.bang)) {
+            const a = try self.parseUnary();
+            const expr = try self.allocator.create(Expression);
+            expr.* = self.newExpr(idx, .{ .not = .{ .a = a } });
+            return expr;
+        }
+        return try self.parseCall();
+    }
+
+    pub fn parseCall(self: *Parser) !*Expression {
+        const idx = self.nextIdx();
+        var expr = try self.parsePrimary();
+        while (true) {
+            if (self.match(Token.lParen)) {
+                if (!self.match(Token.rParen)) {
+                    const args = try self.parseArguments();
+                    _ = try self.consume(Token.rParen);
+
+                    const callee = expr;
+                    expr = try self.allocator.create(Expression);
+                    expr.* = self.newExpr(idx, .{ .call = CallInfo{ .callee = callee, .args = args } });
+                } else {
+                    const args = try self.allocator.alloc(Expression, 0);
+                    const callee = expr;
+                    expr = try self.allocator.create(Expression);
+                    expr.* = self.newExpr(idx, .{ .call = CallInfo{ .callee = callee, .args = args } });
+                }
+            } else if (self.match(Token.lSquare)) {
+                const index = try self.parseExpression();
+                _ = try self.consume(Token.rSquare);
+
+                const callee = expr;
+                expr = try self.allocator.create(Expression);
+                expr.* = self.newExpr(idx, .{ .index = IndexInfo{ .callee = callee, .index = index } });
+            } else if (self.match(Token.dot)) {
+                const ident = try self.consume(Token.identifier);
+                const callee = expr;
+                expr = try self.allocator.create(Expression);
+                expr.* = self.newExpr(idx, .{ .getProp = .{ .obj = callee, .name = ident.identifier } });
+            } else {
+                break;
+            }
+        }
+
+        return expr;
+    }
+
+    pub fn parsePrimary(self: *Parser) !*Expression {
+        const idx = self.nextIdx();
+        if (self.captureMatch(Token.intLiteral)) |val| {
+            const expr = try self.allocator.create(Expression);
+            expr.* = self.newExpr(idx, .{ .primary = .{ .intLiteral = val.intLiteral } });
+            return expr;
+        }
+
+        if (self.captureMatch(Token.floatLiteral)) |val| {
+            const expr = try self.allocator.create(Expression);
+            expr.* = self.newExpr(idx, .{ .primary = .{ .floatLiteral = val.floatLiteral } });
+            return expr;
+        }
+
+        if (self.captureMatch(Token.boolLiteral)) |val| {
+            const expr = try self.allocator.create(Expression);
+            expr.* = self.newExpr(idx, .{ .primary = .{ .boolLiteral = val.boolLiteral } });
+            return expr;
+        }
+
+        if (self.match(Token.nullLiteral)) {
+            const expr = try self.allocator.create(Expression);
+            expr.* = self.newExpr(idx, .{ .primary = .{ .nullLiteral = {} } });
+            return expr;
+        }
+
+        if (self.captureMatch(Token.stringLiteral)) |val| {
+            const expr = try self.allocator.create(Expression);
+            expr.* = self.newExpr(idx, .{ .primary = .{ .stringLiteral = val.stringLiteral } });
+            return expr;
+        }
+
+        if (self.captureMatch(Token.identifier)) |val| {
+            const expr = try self.allocator.create(Expression);
+            expr.* = self.newExpr(idx, .{ .primary = .{ .identifier = val.identifier } });
+            return expr;
+        }
+
+        if (self.match(Token.lSquare)) {
+            var args: []const Expression = undefined;
+            if (!self.match(Token.rSquare)) {
+                args = try self.parseArguments();
+                _ = try self.consume(Token.rSquare);
+            } else {
+                args = try self.allocator.alloc(Expression, 0);
+            }
+
+            const expr = try self.allocator.create(Expression);
+            expr.* = self.newExpr(idx, .{ .primary = .{ .listLiteral = args } });
+            return expr;
+        }
+
+        if (self.match(Token.lParen)) {
+            // NOTE: this doesn't (yet?) support the unit type ()
+            const expr = self.parseExpression();
+            _ = try self.consume(Token.rParen);
+
+            return expr;
+        }
+
+        return error.UnexpectedToken;
+    }
+
+    pub fn parseArguments(self: *Parser) ![]const Expression {
+        var args = std.ArrayList(Expression).init(self.allocator);
+        while (true) {
+            try args.append(try self.parseExpressionVal());
+            if (self.match(TokenTag.comma)) {
+                continue;
+            } else {
+                // TODO: support trailing comma
+                break;
+            }
+        }
+
+        return args.items;
+    }
+};
 //                logic_or       → logic_and ( "or" logic_and )* ;
 //                logic_and      → equality ( "and" equality )* ;
 //                equality       → comparison ( ( "!=" | "==" ) comparison )* ;
@@ -795,235 +1179,52 @@ pub fn parseExpression(allocator: std.mem.Allocator, tokens: *TokenStream) Parse
 //                primary        → "true" | "false" | "null"
 //                               | NUMBER | STRING | IDENTIFIER | "(" expression ")"
 
-pub fn parseLogicOr(allocator: std.mem.Allocator, tokens: *TokenStream) !*Expression {
-    const a = try parseLogicAnd(allocator, tokens);
-    if (tokens.match(Token.doublePipe)) {
-        const b = try parseLogicAnd(allocator, tokens);
-        const expr = try allocator.create(Expression);
-        expr.* = Expression{ .logicalOr = .{ .a = a, .b = b } };
-        return expr;
-    }
-    return a;
-}
+pub fn parseBinaryOp(
+    comptime higherPrecedence: fn (*Parser) ParseError!*Expression,
+    comptime opTable: anytype,
+) fn (*Parser) ParseError!*Expression {
+    return struct {
+        fn parser(self: *Parser) ParseError!*Expression {
+            const idx = self.nextIdx();
+            var expr = try higherPrecedence(self);
 
-pub fn parseLogicAnd(allocator: std.mem.Allocator, tokens: *TokenStream) !*Expression {
-    const a = try parseEquality(allocator, tokens);
-    if (tokens.match(Token.doubleEqual)) {
-        const b = try parseEquality(allocator, tokens);
-        const expr = try allocator.create(Expression);
-        expr.* = Expression{ .logicalAnd = .{ .a = a, .b = b } };
-        return expr;
-    }
-    return a;
-}
+            while (true) {
+                var shouldBreak = true;
+                inline for (std.meta.fields(@TypeOf(opTable))) |field| {
+                    if (self.match(@field(opTable, field.name))) {
+                        const a = expr;
+                        const b = try higherPrecedence(self);
 
-pub fn parseEquality(allocator: std.mem.Allocator, tokens: *TokenStream) !*Expression {
-    const a = try parseComparison(allocator, tokens);
-    if (tokens.match(Token.bangEqual)) {
-        const b = try parseComparison(allocator, tokens);
-        const expr = try allocator.create(Expression);
-        expr.* = Expression{ .notEqual = .{ .a = a, .b = b } };
-        return expr;
-    } else if (tokens.match(Token.doubleEqual)) {
-        const b = try parseComparison(allocator, tokens);
-        const expr = try allocator.create(Expression);
-        expr.* = Expression{ .equal = .{ .a = a, .b = b } };
-        return expr;
-    }
-    return a;
-}
+                        expr = try self.allocator.create(Expression);
+                        expr.* = self.newExpr(idx, @unionInit(ExpressionInner, field.name, .{ .a = a, .b = b }));
 
-pub fn parseComparison(allocator: std.mem.Allocator, tokens: *TokenStream) !*Expression {
-    const a = try parseTerm(allocator, tokens);
-    if (tokens.match(Token.gt)) {
-        const b = try parseTerm(allocator, tokens);
-        const expr = try allocator.create(Expression);
-        expr.* = Expression{ .gt = .{ .a = a, .b = b } };
-        return expr;
-    } else if (tokens.match(Token.gte)) {
-        const b = try parseTerm(allocator, tokens);
-        const expr = try allocator.create(Expression);
-        expr.* = Expression{ .gte = .{ .a = a, .b = b } };
-        return expr;
-    } else if (tokens.match(Token.lt)) {
-        const b = try parseTerm(allocator, tokens);
-        const expr = try allocator.create(Expression);
-        expr.* = Expression{ .lt = .{ .a = a, .b = b } };
-        return expr;
-    } else if (tokens.match(Token.lte)) {
-        const b = try parseTerm(allocator, tokens);
-        const expr = try allocator.create(Expression);
-        expr.* = Expression{ .lte = .{ .a = a, .b = b } };
-        return expr;
-    }
-    return a;
-}
-
-pub fn parseTerm(allocator: std.mem.Allocator, tokens: *TokenStream) !*Expression {
-    const a = try parseFactor(allocator, tokens);
-    if (tokens.match(Token.plus)) {
-        const b = try parseFactor(allocator, tokens);
-        const expr = try allocator.create(Expression);
-        expr.* = Expression{ .plus = .{ .a = a, .b = b } };
-        return expr;
-    } else if (tokens.match(Token.minus)) {
-        const b = try parseFactor(allocator, tokens);
-        const expr = try allocator.create(Expression);
-        expr.* = Expression{ .minus = .{ .a = a, .b = b } };
-        return expr;
-    }
-    return a;
-}
-
-pub fn parseFactor(allocator: std.mem.Allocator, tokens: *TokenStream) !*Expression {
-    const a = try parseUnary(allocator, tokens);
-    if (tokens.match(Token.div)) {
-        const b = try parseUnary(allocator, tokens);
-        const expr = try allocator.create(Expression);
-        expr.* = Expression{ .divide = .{ .a = a, .b = b } };
-        return expr;
-    } else if (tokens.match(Token.star)) {
-        const b = try parseUnary(allocator, tokens);
-        const expr = try allocator.create(Expression);
-        expr.* = Expression{ .multiply = .{ .a = a, .b = b } };
-        return expr;
-    }
-    return a;
-}
-
-pub fn parseUnary(allocator: std.mem.Allocator, tokens: *TokenStream) !*Expression {
-    if (tokens.match(Token.minus)) {
-        const a = try parseUnary(allocator, tokens);
-        const expr = try allocator.create(Expression);
-        expr.* = Expression{ .negation = .{ .a = a } };
-        return expr;
-    } else if (tokens.match(Token.bang)) {
-        const a = try parseUnary(allocator, tokens);
-        const expr = try allocator.create(Expression);
-        expr.* = Expression{ .not = .{ .a = a } };
-        return expr;
-    }
-    return try parseCall(allocator, tokens);
-}
-
-pub fn parseCall(allocator: std.mem.Allocator, tokens: *TokenStream) !*Expression {
-    const callee = try parsePrimary(allocator, tokens);
-    if (tokens.match(Token.lParen)) {
-        const args = try parseArguments(allocator, tokens);
-        _ = try tokens.consume(Token.rParen);
-
-        const expr = try allocator.create(Expression);
-        expr.* = Expression{ .call = CallInfo{ .callee = callee, .args = args } };
-        return expr;
-    }
-
-    if (tokens.match(Token.lSquare)) {
-        const index = try parseExpression(allocator, tokens);
-        _ = try tokens.consume(Token.rSquare);
-
-        const expr = try allocator.create(Expression);
-        expr.* = Expression{ .index = IndexInfo{ .callee = callee, .index = index } };
-        return expr;
-    }
-
-    return callee;
-}
-
-pub fn parsePrimary(allocator: std.mem.Allocator, tokens: *TokenStream) !*Expression {
-    if (tokens.captureMatch(Token.intLiteral)) |val| {
-        const expr = try allocator.create(Expression);
-        expr.* = Expression{ .primary = .{ .intLiteral = val.intLiteral } };
-        return expr;
-    }
-
-    if (tokens.captureMatch(Token.floatLiteral)) |val| {
-        const expr = try allocator.create(Expression);
-        expr.* = Expression{ .primary = .{ .floatLiteral = val.floatLiteral } };
-        return expr;
-    }
-
-    if (tokens.captureMatch(Token.boolLiteral)) |val| {
-        const expr = try allocator.create(Expression);
-        expr.* = Expression{ .primary = .{ .boolLiteral = val.boolLiteral } };
-        return expr;
-    }
-
-    if (tokens.match(Token.nullLiteral)) {
-        const expr = try allocator.create(Expression);
-        expr.* = Expression{ .primary = .{ .nullLiteral = {} } };
-        return expr;
-    }
-
-    if (tokens.captureMatch(Token.stringLiteral)) |val| {
-        const expr = try allocator.create(Expression);
-        expr.* = Expression{ .primary = .{ .stringLiteral = val.stringLiteral } };
-        return expr;
-    }
-
-    if (tokens.captureMatch(Token.identifier)) |val| {
-        const expr = try allocator.create(Expression);
-        expr.* = Expression{ .primary = .{ .identifier = val.identifier } };
-        return expr;
-    }
-
-    if (tokens.match(Token.lSquare)) {
-        const args = try parseArguments(allocator, tokens);
-        _ = try tokens.consume(Token.rSquare);
-
-        const expr = try allocator.create(Expression);
-        expr.* = Expression{ .primary = .{ .listLiteral = args } };
-        return expr;
-    }
-
-    if (tokens.match(Token.lParen)) {
-        const expr = parseExpression(allocator, tokens);
-        _ = try tokens.consume(Token.rParen);
-
-        return expr;
-    }
-
-    return error.UnexpectedToken;
-}
-
-pub fn parseArguments(allocator: std.mem.Allocator, tokens: *TokenStream) ![]const Expression {
-    var args = std.ArrayList(Expression).init(allocator);
-    while (true) {
-        try args.append(try parseExpressionVal(allocator, tokens));
-        if (tokens.match(tokenComma)) {
-            continue;
-        } else {
-            // TODO: support trailing comma
-            break;
+                        shouldBreak = false;
+                        break;
+                    }
+                }
+                if (shouldBreak) {
+                    break;
+                }
+            }
+            return expr;
         }
-    }
-
-    return args.items;
+    }.parser;
 }
 
 const TokenStream = struct {
-    tokens: []const Token,
+    tokens: []const TokenLoc,
 
-    pub fn new(tokens: []const Token) TokenStream {
+    pub fn new(tokens: []const TokenLoc) TokenStream {
         return TokenStream{ .tokens = tokens };
     }
 
-    pub fn pop(self: *TokenStream) !Token {
-        if (self.tokens.len == 0) {
-            return error.NoTokensRemaining;
-        }
-
-        const token = self.tokens[0];
-        self.*.tokens = self.tokens[1..];
-        return token;
-    }
-
     /// Consumes token if present returning the token, null otherwise.
-    pub fn captureMatch(self: *TokenStream, tag: TokenTag) ?Token {
+    pub fn captureMatch(self: *TokenStream, tag: TokenTag) ?TokenLoc {
         if (self.*.tokens.len == 0) {
             return null;
         }
 
-        if (@as(TokenTag, self.*.tokens[0]) == tag) {
+        if (@as(TokenTag, self.*.tokens[0].token) == tag) {
             const token = self.tokens[0];
             self.*.tokens = self.*.tokens[1..];
             return token;
@@ -1038,7 +1239,7 @@ const TokenStream = struct {
             return false;
         }
 
-        if (@as(TokenTag, self.*.tokens[0]) == tag) {
+        if (@as(TokenTag, self.*.tokens[0].token) == tag) {
             self.*.tokens = self.*.tokens[1..];
             return true;
         }
@@ -1047,12 +1248,12 @@ const TokenStream = struct {
     }
 
     /// Unconditionally consumes a token if it matches, returning an error
-    pub fn consume(self: *TokenStream, tag: TokenTag) !Token {
+    pub fn consume(self: *TokenStream, tag: TokenTag) !TokenLoc {
         if (self.tokens.len == 0) {
             return error.NoTokensRemaining;
         }
 
-        if (@as(TokenTag, self.tokens[0]) != tag) {
+        if (@as(TokenTag, self.tokens[0].token) != tag) {
             std.debug.print("Expected token {any} found {any}\n", .{ tag, self.tokens[0] });
             return error.MismatchedTokenTag;
         }
@@ -1176,6 +1377,16 @@ pub fn expectEqualTokens(expected: []const Token, actual: []const Token) !void {
 }
 
 test "basic tokenization" {
+    const tokenEq = Token{ .equal = {} };
+    const tokenLet = Token{ .letKeyword = {} };
+    const tokenComma = Token{ .comma = {} };
+    const tokenPlus = Token{ .plus = {} };
+    const tokenSemicolon = Token{ .semicolon = {} };
+    const tokenRSquare = Token{ .rSquare = {} };
+    const tokenLSquare = Token{ .lSquare = {} };
+    const tokenRParen = Token{ .rParen = {} };
+    const tokenLParen = Token{ .lParen = {} };
+
     try testTokenization(
         \\let lst = [1, 2, 3];
         \\print(lst[0]);
