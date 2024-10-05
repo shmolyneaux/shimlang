@@ -21,13 +21,13 @@ except ImportError:
 
 input_test_names = [Path(path).resolve() for path in sys.argv[1:]]
 
-windows_exe = Path(__file__).parent.joinpath("zig-out/bin/shimlang.exe").as_posix()
-linux_exe = Path(__file__).parent.joinpath("zig-out/bin/shimlang").as_posix()
+windows_exe = Path(__file__).parent.joinpath("zig-out/bin/shimlang.exe")
+linux_exe = Path(__file__).parent.joinpath("zig-out/bin/shimlang")
 if windows_exe.exists():
-    interpreter = windows_exe
+    interpreter = windows_exe.as_posix()
 else:
     print(linux_exe.parent.iterdir())
-    interpreter = linux_exe
+    interpreter = linux_exe.as_posix()
 
 test_dir = Path(__file__).parent / "tests"
 
