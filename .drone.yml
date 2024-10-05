@@ -3,7 +3,7 @@ name: default
 
 steps:
 - name: test
-  image: shmolyneaux/ziglang:0.13.0
+  image: shmolyneaux/ziglang:0.12.1
   commands:
     - zig build
     - apk add python3
