@@ -1,0 +1,5 @@
+// Test range with negative step
+let r = Range(10, 0).step(-2);
+for i in r {
+    print(i);
+}

@@ -1,0 +1,7 @@
+let lst = ["zero", "one", "two"];
+lst[0] = "0";
+lst[-1] = "2";
+
+for item in lst {
+    print(item);
+}

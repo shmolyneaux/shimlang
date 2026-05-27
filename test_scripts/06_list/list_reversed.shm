@@ -1,0 +1,16 @@
+// Test list reversed method (returns reversed copy)
+let lst = [1, 2, 3, 4, 5];
+let rev_lst = lst.reversed();
+
+// Original list unchanged
+assert(lst[0] == 1);
+assert(lst[1] == 2);
+
+// Reversed list is correct
+assert(rev_lst[0] == 5);
+assert(rev_lst[1] == 4);
+assert(rev_lst[2] == 3);
+assert(rev_lst[3] == 2);
+assert(rev_lst[4] == 1);
+
+print("List reversed passed");

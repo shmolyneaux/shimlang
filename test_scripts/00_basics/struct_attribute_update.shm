@@ -1,0 +1,8 @@
+struct Point {
+    x, y
+}
+
+let p = Point(2, 3);
+p.x = p.x + 1;
+
+print(p.x);

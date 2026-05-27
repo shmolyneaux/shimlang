@@ -1,0 +1,7 @@
+ 1 | fn outer() {
+ 2 |     fn inner() {
+ 3 |         undefined_var;
+             ^^^^^^^^^^^^^
+ 4 |     }
+ 5 |     inner();
+Error: Unknown identifier "undefined_var"

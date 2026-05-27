@@ -1,0 +1,7 @@
+let lst = [10, 20, 30];
+lst[0] += 5;
+lst[1] -= 5;
+lst[2] *= 2;
+print(lst[0]);
+print(lst[1]);
+print(lst[2]);

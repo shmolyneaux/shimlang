@@ -1,0 +1,16 @@
+let count = 0;
+
+fn incr_value() {
+    count = count + 1;
+    count
+}
+
+fn print_val(val=incr_value()) {
+    print(val);
+}
+
+print_val("first");
+print_val();
+print_val();
+print_val("fourth");
+print_val();

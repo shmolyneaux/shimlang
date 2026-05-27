@@ -1,0 +1,1 @@
+assert("Foo \( "biz \(13+2) baz" ) bar" == "Foo biz 15 baz bar");

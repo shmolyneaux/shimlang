@@ -1,0 +1,8 @@
+struct Calculator {
+    value
+    fn add(self, x) {
+        self.value + x;
+    }
+}
+let c = Calculator("not a number");
+c.add(5);

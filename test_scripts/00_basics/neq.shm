@@ -1,0 +1,3 @@
+assert("test" != "foo");
+assert(42 != 3);
+assert(42 != "three");

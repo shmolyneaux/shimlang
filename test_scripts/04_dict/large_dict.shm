@@ -1,0 +1,13 @@
+let d = dict();
+
+let count = 0;
+let end = 100; // 1000000
+while count < end {
+    d[count] = count + 1;
+    assert(d[count] == count + 1);
+    count = count + 1;
+}
+
+while count < end {
+    assert(d[count] == count + 1);
+}

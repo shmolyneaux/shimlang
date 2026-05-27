@@ -1,0 +1,6 @@
+fn print_vals(a, b, c) {
+    print(a, b, c);
+}
+
+print_vals("first", "third", b="second");
+print_vals("first", "second", "third");

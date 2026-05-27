@@ -1,0 +1,32 @@
+// Test list insert method
+let lst = [1, 2, 3, 4];
+
+// Insert at beginning
+lst.insert(0, 0);
+assert(lst.len() == 5);
+assert(lst[0] == 0);
+assert(lst[1] == 1);
+
+// Insert in middle
+lst.insert(3, 99);
+assert(lst.len() == 6);
+assert(lst[3] == 99);
+assert(lst[4] == 3);
+
+// Insert at end
+lst.insert(6, 100);
+assert(lst.len() == 7);
+assert(lst[6] == 100);
+
+// Negative index (insert before last element)
+lst.insert(-1, 88);
+assert(lst.len() == 8);
+assert(lst[6] == 88);
+assert(lst[7] == 100);
+
+// Very negative index (insert at beginning)
+lst.insert(-100, 77);
+assert(lst.len() == 9);
+assert(lst[0] == 77);
+
+print("List insert passed");

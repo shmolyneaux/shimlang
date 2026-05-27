@@ -1,0 +1,6 @@
+let foo = {
+    let var = 1;
+    let other = 2;
+    var + other
+};
+print(foo);

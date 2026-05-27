@@ -1,0 +1,7 @@
+let i = 0;
+while i < 100 {
+    let s = "allocation_" + str(i);
+    let l = [i, i+1, i+2];
+    i = i + 1;
+}
+print(i);

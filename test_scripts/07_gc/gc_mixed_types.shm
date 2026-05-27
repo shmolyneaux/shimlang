@@ -1,0 +1,13 @@
+struct Container {
+    data,
+    name,
+}
+
+let d = dict();
+d.set("key", [1, 2, 3]);
+let c = Container(d, "test");
+let inner_d = dict();
+inner_d.set("inner", "value");
+let items = [c, Container(inner_d, "other")];
+print(items[0].name);
+print(items[1].data["inner"]);

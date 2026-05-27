@@ -1,0 +1,11 @@
+struct Point {
+    x,
+    y,
+    
+    fn distance(self) {
+        (self.x * self.x + self.y * self.y)
+    }
+}
+
+let p = Point(3, 4);
+print(p.distance());

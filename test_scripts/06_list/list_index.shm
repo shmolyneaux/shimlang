@@ -1,0 +1,20 @@
+// Test list index method
+let lst = [10, 20, 30, 20, 40];
+
+// Find first occurrence
+let idx1 = lst.index(20);
+assert(idx1 == 1);
+
+// Find another value
+let idx2 = lst.index(30);
+assert(idx2 == 2);
+
+// Value not found - returns default (None)
+let idx3 = lst.index(999);
+assert(idx3 == None);
+
+// Value not found - returns custom default
+let idx4 = lst.index(999, -1);
+assert(idx4 == -1);
+
+print("List index passed");

@@ -1,0 +1,5 @@
+let lst = [0, "one", 4-2, "3"];
+
+for val in lst {
+    print(val);
+}

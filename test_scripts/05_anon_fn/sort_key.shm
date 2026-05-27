@@ -1,0 +1,69 @@
+struct Point {
+    x,
+    y,
+    name,
+
+    fn to_string(self) {
+        "Point(\(self.x), \(self.y), \(self.name))"
+    }
+
+    fn eq(self, other) {
+        self.x == other.x and self.y == other.y and self.name == other.name
+    }
+}
+
+struct SortPair {
+    item,
+    key
+}
+
+fn sorted(lst, key=None) {
+    key = key or fn(obj){obj};
+
+    // Create a new list with the item and its sort key
+    let pairs = [];
+    for item in lst {
+        pairs.append(SortPair(item, key(item)));
+    }
+
+    let i = 1;
+    while i < lst.len() {
+        let pair = pairs[i];
+        let current_key = pairs[i].key;
+
+        let j = i - 1;
+        while j >= 0 and pairs[j].key > current_key {
+            pairs[j+1] = pairs[j];
+            j = j - 1;
+        }
+
+        pairs[j+1] = pair;
+        i = i + 1;
+    }
+
+    // Copy the values back to a new list
+    let new_list = [];
+    for pair in pairs {
+        new_list.append(pair.item);
+    }
+
+    new_list
+}
+
+let lst = [Point(1, 2, "foo"), Point(2, 1, "bar"), Point(0, 0, "foo")];
+
+let lst2 = sorted(lst, key=fn(obj){obj.name});
+
+let expected = [
+    Point(2, 1, "bar"),
+    Point(1, 2, "foo"),
+    // Even though x/y are smaller, since this is a stable sort on "name" it should
+    // still appear second.
+    Point(0, 0, "foo")
+];
+
+let x = 0;
+while x < lst2.len() {
+    assert(lst[2].eq(expected[2]));
+    x = x + 1;
+}

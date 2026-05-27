@@ -1,0 +1,8 @@
+print(try_int(123));
+print(try_int(45.6));
+print(try_int(true));
+print(try_int(false));
+print(try_int("42"));
+print(try_int("invalid"));
+print(try_int(""));
+print(try_int([]));

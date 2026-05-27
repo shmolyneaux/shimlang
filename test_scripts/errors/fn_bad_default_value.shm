@@ -1,0 +1,2 @@
+fn test(a=undefined_var) { a; }
+test();

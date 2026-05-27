@@ -1,0 +1,11 @@
+struct Point {
+    x,
+    y
+
+    fn default() {
+        return Point(0, 0);
+    }
+}
+
+let p = Point.default();
+print(p.x, p.y);

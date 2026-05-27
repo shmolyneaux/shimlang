@@ -1,0 +1,7 @@
+Error: Key missing not in dict
+   --> 2:1
+   |
+ 2 | / d[
+ 3 | |     "missing"
+ 4 | | ];
+   | |_^

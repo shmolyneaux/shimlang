@@ -1,0 +1,7 @@
+fn outer() {
+    fn inner() {
+        undefined_var;
+    }
+    inner();
+}
+outer();

@@ -1,0 +1,13 @@
+// Test sorting with a key function
+let lst = [5, 2, 8, 1, 9, 3];
+// Sort by negative values (reverse order)
+lst.sort(fn(x) { 0 - x });
+
+assert(lst[0] == 9);
+assert(lst[1] == 8);
+assert(lst[2] == 5);
+assert(lst[3] == 3);
+assert(lst[4] == 2);
+assert(lst[5] == 1);
+
+print("Sort with key passed");

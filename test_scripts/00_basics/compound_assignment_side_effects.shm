@@ -1,0 +1,40 @@
+// Test that side-effecting expressions in compound assignments are evaluated only once
+
+// Side-effect counter for index expression
+let calls = 0;
+fn get_index() {
+    calls += 1;
+    return 0;
+}
+
+let lst = [10];
+lst[get_index()] += 5;
+assert(lst[0] == 15);
+assert(calls == 1);
+print(calls);
+
+// Side-effect counter for object expression
+let obj_calls = 0;
+fn get_list() {
+    obj_calls += 1;
+    return lst;
+}
+
+get_list()[0] += 100;
+assert(lst[0] == 115);
+assert(obj_calls == 1);
+print(obj_calls);
+
+// Side-effect counter for attribute access
+struct Point { x, y }
+let p = Point(1, 2);
+let attr_calls = 0;
+fn get_point() {
+    attr_calls += 1;
+    return p;
+}
+
+get_point().x += 10;
+assert(p.x == 11);
+assert(attr_calls == 1);
+print(attr_calls);

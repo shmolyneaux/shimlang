@@ -1,0 +1,6 @@
+struct Point {
+    x,
+    y
+}
+
+print(Point.__name__);

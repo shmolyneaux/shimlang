@@ -1,0 +1,8 @@
+let d = dict();
+d[1] = "one";
+d[2] = "two";
+d[-1] = "neg one";
+
+assert(d[2] == "two");
+assert(d[1] == "one");
+assert(d[-1] == "neg one");

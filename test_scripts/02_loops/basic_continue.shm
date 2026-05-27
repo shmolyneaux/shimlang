@@ -1,0 +1,15 @@
+let count = 0;
+while true {
+    count = count + 1;
+    if count == 2 {
+        continue;
+    }
+    if count == 4 {
+        continue;
+    }
+    if count == 6 {
+        break;
+    }
+    print("Count:", count);
+}
+print("done");

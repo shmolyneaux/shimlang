@@ -1,0 +1,4 @@
+// Test basic range operator
+for i in 0..5 {
+    print(i);
+}

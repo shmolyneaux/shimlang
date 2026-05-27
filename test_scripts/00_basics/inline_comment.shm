@@ -1,0 +1,4 @@
+let a=/*14*/13;
+/*test*/
+let b = 14;
+assert(a == 13);/**/assert(b == 14);

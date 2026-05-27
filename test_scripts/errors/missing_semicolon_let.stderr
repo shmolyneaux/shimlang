@@ -1,0 +1,5 @@
+Parse Error:
+ 1 | let x = 5
+             ^
+Error: Expected semicolon after `let <ident> = <expr>`, found EOF
+Failed to parse script

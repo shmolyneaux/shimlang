@@ -1,0 +1,4 @@
+let lst = [1, 2, 3];
+print(lst[0]);
+lst[1] = 5;
+print(lst[1]);

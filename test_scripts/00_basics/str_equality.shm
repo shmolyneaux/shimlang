@@ -1,0 +1,6 @@
+let a = "test";
+let b = "test";
+let c = "task";
+
+print("a == b =", a == b);
+print("a == c =", a == c);

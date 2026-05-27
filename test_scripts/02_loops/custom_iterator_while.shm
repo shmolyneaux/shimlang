@@ -1,0 +1,39 @@
+struct RangeIterator {
+    obj,
+    idx,
+
+    fn start(obj) {
+        RangeIterator(
+            obj,
+            obj.start,
+        )
+    }
+
+    fn next(self) {
+        if self.idx == self.obj.stop {
+            return None;
+        }
+        let val = self.idx;
+        self.idx = self.idx + 1;
+        return val;
+    }
+}
+
+struct Range {
+    start,
+    stop
+
+    fn iter(self) {
+        RangeIterator.start(self)
+    }
+}
+
+let obj = Range(2, 8);
+let itr = obj.iter();
+while true {
+    let val = itr.next();
+    if val == None {
+        break;
+    }
+    print("Val:", val);
+}

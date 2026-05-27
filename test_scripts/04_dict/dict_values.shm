@@ -1,0 +1,8 @@
+let d = dict();
+d.set("a", 100);
+d.set("b", 200);
+d.set("c", 300);
+
+for v in d.values() {
+    print(v);
+}

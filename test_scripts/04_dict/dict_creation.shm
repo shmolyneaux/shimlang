@@ -1,0 +1,8 @@
+let d = dict();
+d.set(42, "forty-two");
+d.set(12, "twelve");
+d.set(3, "three");
+
+print(d.get(42));
+
+print("12 in dict:", d.has(12));

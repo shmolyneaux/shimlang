@@ -1,0 +1,67 @@
+# MAJOR
+- Type annotations
+- AOT compilation
+
+# MINOR
+- Tuple
+- Tuple unpacking
+- String methods
+  - join
+  - upper
+  - lower
+  - strip
+  - remove_prefix
+  - remove_suffix
+  - split_lines
+  - contains
+  - ends_with
+  - starts_with
+  - find
+  - lstrip
+  - rstrip
+  - replace
+- `*args`, and `**kwargs`
+- Numeric literals with underscores
+- Hex literals (for colors)
+- Type annotations
+- Runtime type checking
+- Static type checking
+- Add value type for strings 6 bytes or less
+- How do we time-travel resources provided by external systems?
+  - Examples
+    - Models
+    - Textures
+    - Sound/Music
+  - Each resource is a handle
+  - A handle is an int
+  - Systems that provide handles need to be able to reproduce that resource for all time in dev mode
+  - In release mode, shimlang can keep track of references to resources and notify the external systems to free those resources when there are no more references
+- How do we resume from when we hit an error?
+  - We have a copy of memory from the start of the frame and we replay with the same inputs
+  - Those external systems also need a copy of their states to revert to (physics, audio)
+    - Maybe this also belongs in interpreter memory?
+    - Anything with a time dependence
+    - Audio needs special handling to avoid audio clipping
+- Update parser to produce nodes with node id's
+  - I'm hoping this makes it easier to optimize since spans won't be mixed in with data (less unpacking)
+- Debugger
+  - Step through bytecode/code (in, over, out)
+  - Show code for current span
+  - Show stack trace
+  - Show current environment
+  - Execute code
+  - Code breakpoint
+  - Conditional breakpoint
+  - Memory breakpoint 
+- Time-travel
+  - Look a things frame-by-frame to debug animation/collision
+- Memory viewer
+  - Colour-coded data types
+  - Links for u24's to other sections of menory
+  - Breakdown of memory usage (code, specific struct types, shimvalues)
+  - Rate of garbage production
+  - Memory fragmentation summary
+- Assemby viewer
+- Stack viewer
+- Spans for statements
+- Adding ident cache to Fn bytecode

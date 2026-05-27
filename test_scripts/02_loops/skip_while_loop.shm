@@ -1,0 +1,5 @@
+let myvar = "skipped loop";
+while false {
+    myvar = "in loop";
+}
+print(myvar);

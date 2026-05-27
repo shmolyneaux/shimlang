@@ -1,0 +1,4 @@
+ 1 | struct Point { x, y }
+ 2 | Point(1, 2, 3);
+     ^^^^^^^^^^^^^^
+Error: Too many positional args, 1 remaining

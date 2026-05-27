@@ -1,0 +1,6 @@
+print(float(123));
+print(float(45.6));
+print(float(true));
+print(float(false));
+print(float("3.14"));
+print(float("  -2.5  "));

@@ -1,0 +1,7 @@
+ 1 | let i = 0;
+ 2 | while i < 3 {
+ 3 |     let x = undefined_var;
+                 ^^^^^^^^^^^^^
+ 4 |     i = i + 1;
+ 5 | }
+Error: Unknown identifier "undefined_var"

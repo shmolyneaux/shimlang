@@ -1,0 +1,9 @@
+let count = 0;
+while true {
+    print("Count:", count);
+    count = count + 1;
+    if count == 5 {
+        break;
+    }
+}
+print("done");

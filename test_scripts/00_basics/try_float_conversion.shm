@@ -1,0 +1,8 @@
+print(try_float(123));
+print(try_float(45.6));
+print(try_float(true));
+print(try_float(false));
+print(try_float("3.14"));
+print(try_float("invalid"));
+print(try_float(""));
+print(try_float([]));

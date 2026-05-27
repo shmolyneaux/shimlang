@@ -1,0 +1,35 @@
+// Test sorting with a complex key that returns a list (multi-field sort)
+struct Point {
+    x,
+    y,
+    name
+}
+
+let points = [
+    Point(1, 2, "c"),
+    Point(1, 1, "a"),
+    Point(2, 1, "b"),
+    Point(1, 1, "d")
+];
+
+// Sort by [x, y] - first by x, then by y
+points.sort(fn(p) { [p.x, p.y] });
+
+// Expected order: (1,1,"a"), (1,1,"d"), (1,2,"c"), (2,1,"b")
+assert(points[0].x == 1);
+assert(points[0].y == 1);
+assert(points[0].name == "a");
+
+assert(points[1].x == 1);
+assert(points[1].y == 1);
+assert(points[1].name == "d");
+
+assert(points[2].x == 1);
+assert(points[2].y == 2);
+assert(points[2].name == "c");
+
+assert(points[3].x == 2);
+assert(points[3].y == 1);
+assert(points[3].name == "b");
+
+print("Multi-field sort passed");

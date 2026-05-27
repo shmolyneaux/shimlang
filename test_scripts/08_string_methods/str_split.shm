@@ -1,0 +1,2 @@
+let s = "hello  \n world\t !";
+assert(s.split() == ["hello", "world", "!"], s.split());

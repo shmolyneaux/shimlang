@@ -1,0 +1,5 @@
+Parse Error:
+ 1 | let = 5;
+         ^
+Error: Expected ident after let, found Equal
+Failed to parse script

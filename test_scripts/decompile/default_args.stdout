@@ -1,0 +1,28 @@
+   0:  JMP -> 70
+   3:  start_scope
+   4:  unpack_args required=1 optional=1 [name, greeting]
+  21:  JmpInitArg -> 33
+  24:  String "Hello"
+  31:  assign arg
+  32:  no-op
+  33:  load "print"
+  40:  load "greeting"
+  50:  load "name"
+  56:  call args=2  kwargs=0
+  59:  pop
+  60:  ShimValue None
+  69:  return
+  70:  CreateFn -> PC 3
+  73:  let "greet"
+  80:  load "greet"
+  87:  String "World"
+  94:  call args=1  kwargs=0
+  97:  pop
+  98:  load "greet"
+ 105:  String "Alice"
+ 112:  String "greeting"
+ 122:  String "Hi"
+ 126:  call args=1  kwargs=1
+ 129:  pop
+ 130:  None
+

@@ -1,0 +1,1 @@
+let x = if true { undefined_var } else { 2 };

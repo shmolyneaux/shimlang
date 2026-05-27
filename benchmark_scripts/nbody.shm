@@ -1,0 +1,147 @@
+// Adapted from https://benchmarksgame-team.pages.debian.net/benchmarksgame/program/nbody-python3-1.html
+
+fn combinations(l) {
+    let result = [];
+    for x in 0..(l.len() - 1) {
+        for idx in (x+1)..(l.len()) {
+            let y = l[idx];
+            result.append([l[x], y]);
+        }
+    }
+    result
+}
+
+struct Body {
+    x,
+    y,
+    z,
+    vx,
+    vy,
+    vz,
+    m
+}
+
+let PI = 3.14159265358979323;
+let SOLAR_MASS = 4 * PI * PI;
+let DAYS_PER_YEAR = 365.24;
+
+let BODIES = dict();
+BODIES["sun"] = Body(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, SOLAR_MASS);
+BODIES["jupiter"] = Body(
+    4.8414314424647209,
+    -1.16032004402742839,
+    -0.103622044471123109,
+    0.00166007664274403694 * DAYS_PER_YEAR,
+    0.00769901118419740425 * DAYS_PER_YEAR,
+    -0.0000690460016972063023 * DAYS_PER_YEAR,
+    0.000954791938424326609 * SOLAR_MASS
+);
+
+BODIES["saturn"] = Body(
+    8.34336671824457987,
+    4.12479856412430479,
+    -0.403523417114321381,
+    -0.00276742510726862411 * DAYS_PER_YEAR,
+    0.00499852801234917238 * DAYS_PER_YEAR,
+    0.0000230417297573763929 * DAYS_PER_YEAR,
+    0.000285885980666130812 * SOLAR_MASS
+);
+
+BODIES["uranus"] = Body(
+    12.8943695621391310,
+    -15.1111514016986312,
+    -0.223307578892655734,
+    0.00296460137564761618 * DAYS_PER_YEAR,
+    0.00237847173959480950 * DAYS_PER_YEAR,
+    -0.0000296589568540237556 * DAYS_PER_YEAR,
+    0.0000436624404335156298 * SOLAR_MASS
+);
+
+BODIES["neptune"] = Body(
+    15.3796971148509165,
+    -25.9193146099879641,
+    0.179258772950371181,
+    0.00268067772490389322 * DAYS_PER_YEAR,
+    0.00162824170038242295 * DAYS_PER_YEAR,
+    -0.0000951592254519715870 * DAYS_PER_YEAR,
+    0.0000515138902046611451 * SOLAR_MASS
+);
+
+let SYSTEM = [];
+for body_name in BODIES {
+    SYSTEM.append(BODIES[body_name]);
+}
+let PAIRS = combinations(SYSTEM);
+
+fn advance(dt, n, bodies=SYSTEM, pairs=PAIRS) {
+    for i in 0..n {
+        for pair in pairs {
+            let a = pair[0];
+            let b = pair[1];
+
+            let dx = a.x - b.x;
+            let dy = a.y - b.y;
+            let dz = a.z - b.z;
+
+            let mag = dt * ((dx*dx + dy*dy + dz*dz).pow(-1.5));
+            let b1m = a.m * mag;
+            let b2m = b.m * mag;
+
+            a.vx -= dx * b2m;
+            a.vy -= dy * b2m;
+            a.vz -= dz * b2m;
+            b.vx += dx * b1m;
+            b.vy += dy * b1m;
+            b.vz += dz * b1m;
+        }
+        for body in bodies {
+            body.x += dt * body.vx;
+            body.y += dt * body.vy;
+            body.z += dt * body.vz;
+        }
+    }
+}
+
+fn report_energy(bodies=SYSTEM, pairs=PAIRS, e=0.0) {
+    for pair in pairs {
+        let a = pair[0];
+        let b = pair[1];
+
+        let dx = a.x - b.x;
+        let dy = a.y - b.y;
+        let dz = a.z - b.z;
+
+        e -= (a.m * b.m) / (dx*dx + dy*dy + dz*dz).sqrt();
+    }
+
+    for b in bodies {
+        e += b.m * (
+            b.vx * b.vx +
+            b.vy * b.vy +
+            b.vz * b.vz
+        ) / 2;
+    }
+
+    print("\(e)");
+}
+
+fn offset_momentum(ref, bodies=SYSTEM, px=0.0, py=0.0, pz=0.0) {
+    for body in bodies {
+        px -= body.vx * body.m;
+        py -= body.vy * body.m;
+        pz -= body.vz * body.m;
+    }
+
+    ref.vx = px / ref.m;
+    ref.vy = py / ref.m;
+    ref.vz = pz / ref.m;
+}
+
+fn main(n, ref="sun") {
+    offset_momentum(BODIES[ref]);
+    report_energy();
+    advance(0.01, n);
+    report_energy();
+}
+
+main(500000);

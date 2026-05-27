@@ -1,0 +1,1 @@
+if undefined_var { 1; }

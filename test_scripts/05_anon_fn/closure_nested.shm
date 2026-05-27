@@ -1,0 +1,14 @@
+// Test closure with multiple nested functions
+fn outer(x) {
+    fn middle(y) {
+        fn inner(z) {
+            x + y + z
+        }
+        inner
+    }
+    middle
+}
+
+let f = outer(1);
+let g = f(10);
+print(g(100));

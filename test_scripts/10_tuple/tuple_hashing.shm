@@ -1,0 +1,6 @@
+let d = dict();
+assert(!((1, 2) in d));
+
+d[(1, 2)] = "test";
+assert((1, 2) in d);
+assert(d[(1, 2)] == "test");

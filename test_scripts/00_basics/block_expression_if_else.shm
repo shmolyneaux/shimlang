@@ -1,0 +1,11 @@
+let bar = true;
+let foo = {
+    if bar {
+        "is true"
+    } else {
+        "not true"
+    }
+};
+
+print(foo);
+print(if bar { "is true" } else { "not true" });

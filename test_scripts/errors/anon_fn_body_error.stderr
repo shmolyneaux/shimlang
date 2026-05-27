@@ -1,0 +1,4 @@
+ 1 | let f = fn() { undefined_var; };
+                    ^^^^^^^^^^^^^
+ 2 | f();
+Error: Unknown identifier "undefined_var"

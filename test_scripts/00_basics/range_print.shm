@@ -1,0 +1,2 @@
+// Test range printing
+print(3..12);

@@ -1,0 +1,26 @@
+
+fn myloop() {
+    let count = 0;
+    while true {
+        print("Fn count:", count);
+        if count == 5 {
+            return count;
+        }
+        count = count + 1;
+    }
+}
+
+let count = 0;
+while true {
+    print("Main count:", count);
+    count = count + 1;
+    if count == 2 {
+        myloop();
+    }
+
+    if count == 4 {
+        break;
+    }
+}
+
+print("done");

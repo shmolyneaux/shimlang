@@ -1,0 +1,4 @@
+ 1 | let l = [1,2,3];
+ 2 | l[10];
+     ^^^^^
+Error: Index 10 is out of bounds

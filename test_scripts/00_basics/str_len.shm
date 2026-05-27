@@ -1,0 +1,2 @@
+let mystr = "test";
+print("Str len:", mystr.len());

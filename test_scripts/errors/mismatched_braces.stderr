@@ -1,0 +1,5 @@
+Parse Error:
+ 1 | { let x = 1; ]
+                  ^
+Error: Brace { does not match ]
+Failed to parse script

@@ -1,0 +1,5 @@
+let d = dict();
+d["foo"] = "bar";
+assert(d.pop("foo") == "bar");
+assert(d.pop("foo", 42) == 42);
+assert(d.pop("foo", default=13) == 13);

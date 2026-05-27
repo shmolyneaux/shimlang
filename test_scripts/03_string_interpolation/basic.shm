@@ -1,0 +1,9 @@
+let a = 13;
+let foo = "Test: \( a )";
+
+assert(foo == "Test: 13");
+
+let bar = "\(1 + 1) == 2";
+assert(bar == "2 == 2");
+
+assert("test \( 42 ) test" == "test 42 test");

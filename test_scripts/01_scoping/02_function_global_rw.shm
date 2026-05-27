@@ -1,0 +1,13 @@
+let count = 0;
+
+fn inc() {
+    count = count + 1;
+}
+
+print(count);
+inc();
+print(count);
+inc();
+print(count);
+inc();
+print(count);

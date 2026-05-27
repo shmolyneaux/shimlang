@@ -1,0 +1,5 @@
+print(str(123));
+print(str(45.6));
+print(str(true));
+print(str(false));
+print(str("hello"));

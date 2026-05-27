@@ -1,0 +1,3 @@
+let x = "hello";
+let f = fn() { x + 1; };
+f();

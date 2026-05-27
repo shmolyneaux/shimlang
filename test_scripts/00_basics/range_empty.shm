@@ -1,0 +1,13 @@
+// Test empty range (start >= end with positive step)
+print("Empty range 5..3:");
+for i in 5..3 {
+    print(i);
+}
+print("Done");
+
+// Test empty range with step
+print("Empty range with positive step:");
+for i in Range(10, 5).step(1) {
+    print(i);
+}
+print("Done");

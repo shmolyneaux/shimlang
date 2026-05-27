@@ -1,0 +1,13 @@
+let a = 12;
+let b = 13;
+/*
+/*
+a = 42
+*/
+b = 42
+*/
+let c = 14;
+
+assert(a == 12);
+assert(b == 13);
+assert(c == 14);

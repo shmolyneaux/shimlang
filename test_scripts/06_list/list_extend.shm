@@ -1,0 +1,18 @@
+// Test list extend method
+let lst1 = [1, 2, 3];
+let lst2 = [4, 5, 6];
+
+lst1.extend(lst2);
+
+assert(lst1.len() == 6);
+assert(lst1[0] == 1);
+assert(lst1[1] == 2);
+assert(lst1[2] == 3);
+assert(lst1[3] == 4);
+assert(lst1[4] == 5);
+assert(lst1[5] == 6);
+
+// Original list2 should be unchanged
+assert(lst2.len() == 3);
+
+print("List extend passed");

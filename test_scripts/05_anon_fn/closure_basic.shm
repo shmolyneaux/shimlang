@@ -1,0 +1,14 @@
+// Test basic closure - function captures outer variable
+fn make_counter(start) {
+    let count = start;
+    fn increment() {
+        count = count + 1;
+        count
+    }
+    increment
+}
+
+let counter = make_counter(10);
+print(counter());
+print(counter());
+print(counter());

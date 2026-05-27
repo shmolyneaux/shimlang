@@ -1,0 +1,6 @@
+fn hello(name="Stephen") {
+    print("Hello " + name);
+}
+
+hello();
+hello("Kate");

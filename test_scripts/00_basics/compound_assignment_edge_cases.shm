@@ -1,0 +1,32 @@
+// Test compound assignment in a loop
+let sum = 0;
+for i in 1..5 {
+    sum += i;
+}
+assert(sum == 10);
+print(sum);
+
+// Test string concatenation with +=
+let s = "hello";
+s += " world";
+print(s);
+
+// Test multiple compound operations on same variable
+let x = 100;
+x -= 10;
+x *= 2;
+x /= 9;
+x %= 7;
+assert(x == 6);
+print(x);
+
+// Test compound assignment with expressions on the right side
+let a = 5;
+a += 2 * 3;
+assert(a == 11);
+print(a);
+
+// Test compound assignment with float
+let f = 1.0;
+f += 0.5;
+print(f);

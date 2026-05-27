@@ -1,0 +1,5 @@
+fn test(name) {
+    "hello \(name)"
+}
+
+assert("You say: '\(test("Stephen"))' to me" == "You say: 'hello Stephen' to me");

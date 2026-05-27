@@ -1,0 +1,10 @@
+   0:  ShimValue 1
+   9:  let "x"
+  12:  ShimValue 2
+  21:  assign "x"
+  24:  load "print"
+  31:  load "x"
+  34:  call args=1  kwargs=0
+  37:  pop
+  38:  None
+

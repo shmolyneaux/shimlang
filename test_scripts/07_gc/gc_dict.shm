@@ -1,0 +1,7 @@
+let d = dict();
+d.set("a", 1);
+d.set("b", 2);
+let e = dict();
+e.set("value", 42);
+print(d["a"]);
+print(e["value"]);

@@ -1,0 +1,8 @@
+let d = dict();
+d.set("x", 10);
+d.set("y", 20);
+d.set("z", 30);
+
+for k in d.keys() {
+    print(k);
+}

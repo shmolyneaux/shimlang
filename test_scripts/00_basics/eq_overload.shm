@@ -1,0 +1,93 @@
+struct Vec3 {
+    x,
+    y,
+    z,
+
+    fn add(self, other) {
+        Vec3(self.x + other.x, self.y + other.y, self.z + other.z)
+    }
+
+    fn sub(self, other) {
+        Vec3(self.x - other.x, self.y - other.y, self.z - other.z)
+    }
+
+    fn mul(self, other) {
+        Vec3(self.x * other.x, self.y * other.y, self.z * other.z)
+    }
+
+    fn div(self, other) {
+        Vec3(self.x / other.x, self.y / other.y, self.z / other.z)
+    }
+
+    fn modulus(self, other) {
+        Vec3(self.x % other.x, self.y % other.y, self.z % other.z)
+    }
+
+    fn eq(self, other) {
+        self.x == other.x and self.y == other.y and self.z == other.z
+    }
+
+    fn gt(self, other) {
+        self.x > other.x and self.y > other.y and self.z > other.z
+    }
+
+    fn lt(self, other) {
+        self.x < other.x and self.y < other.y and self.z < other.z
+    }
+
+    fn gte(self, other) {
+        self.x >= other.x and self.y >= other.y and self.z >= other.z
+    }
+
+    fn lte(self, other) {
+        self.x <= other.x and self.y <= other.y and self.z <= other.z
+    }
+
+    fn contains(self, val) {
+        self.x == val or self.y == val or self.z == val
+    }
+}
+
+let a = Vec3(1, 2, 3);
+let b = Vec3(1, 2, 3);
+let c = Vec3(4, 5, 6);
+
+// Test eq
+print(a == b);
+print(a == c);
+
+// Test add
+let d = a + c;
+print(d.x, d.y, d.z);
+
+// Test sub
+let e = c - a;
+print(e.x, e.y, e.z);
+
+// Test mul
+let f = a * c;
+print(f.x, f.y, f.z);
+
+// Test div
+let g = c / Vec3(2, 5, 3);
+print(g.x, g.y, g.z);
+
+// Test modulus
+let h = c % Vec3(3, 3, 4);
+print(h.x, h.y, h.z);
+
+// Test gt
+print(c > a);
+
+// Test lt
+print(a < c);
+
+// Test gte
+print(a >= b);
+
+// Test lte
+print(a <= b);
+
+// Test contains (in)
+print(2 in a);
+print(5 in a);

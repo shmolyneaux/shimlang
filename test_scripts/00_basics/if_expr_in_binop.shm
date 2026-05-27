@@ -1,0 +1,11 @@
+let y = 0;
+let foo = true;
+let bar = true;
+y += if foo { 1 } else { 0 } + if bar { -1 } else { 0 };
+print(y);
+
+let a = if true { 10 } else { 20 } + if false { 30 } else { 40 };
+print(a);
+
+let b = if false { 1 } else { 2 } * if true { 3 } else { 4 };
+print(b);

@@ -1,0 +1,37 @@
+let d = dict();
+d["a"] = 10;
+d["a"] += 5;
+assert(d["a"] == 15);
+print(d["a"]);
+
+d["b"] = 20;
+d["b"] -= 3;
+assert(d["b"] == 17);
+print(d["b"]);
+
+d["c"] = 4;
+d["c"] *= 3;
+assert(d["c"] == 12);
+print(d["c"]);
+
+d["d"] = 20;
+d["d"] /= 4;
+assert(d["d"] == 5);
+print(d["d"]);
+
+d["e"] = 17;
+d["e"] %= 5;
+assert(d["e"] == 2);
+print(d["e"]);
+
+// Test with string concatenation
+d["s"] = "hello";
+d["s"] += " world";
+assert(d["s"] == "hello world");
+print(d["s"]);
+
+// Test with integer key
+d[0] = 100;
+d[0] += 50;
+assert(d[0] == 150);
+print(d[0]);

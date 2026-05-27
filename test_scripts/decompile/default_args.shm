@@ -1,0 +1,5 @@
+fn greet(name, greeting="Hello") {
+    print(greeting, name);
+}
+greet("World");
+greet("Alice", greeting="Hi");

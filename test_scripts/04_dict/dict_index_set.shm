@@ -1,0 +1,5 @@
+let d = dict();
+
+d["test"] = "foo";
+
+print(d["test"]);

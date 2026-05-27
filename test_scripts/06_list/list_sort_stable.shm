@@ -1,0 +1,22 @@
+// Test stable sorting - items with equal keys maintain their original order
+let lst = [5, 2, 8, 1, 9, 3];
+// Sort by modulo 3, items with same remainder should maintain order
+lst.sort(fn(x) { x % 3 });
+
+// Items with x % 3 == 0: none
+// Items with x % 3 == 1: 1 (index 3)
+// Items with x % 3 == 2: 5 (index 0), 2 (index 1), 8 (index 2)
+
+// Expected order:
+// Items with remainder 0: 9, 3
+// Items with remainder 1: 1
+// Items with remainder 2: 5, 2, 8
+
+assert(lst[0] == 9);
+assert(lst[1] == 3);
+assert(lst[2] == 1);
+assert(lst[3] == 5);
+assert(lst[4] == 2);
+assert(lst[5] == 8);
+
+print("Stable sort passed");

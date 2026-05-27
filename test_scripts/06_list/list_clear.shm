@@ -1,0 +1,13 @@
+// Test list clear method
+let lst = [1, 2, 3, 4, 5];
+assert(lst.len() == 5);
+
+lst.clear();
+assert(lst.len() == 0);
+
+// Can still append after clearing
+lst.append(10);
+assert(lst.len() == 1);
+assert(lst[0] == 10);
+
+print("List clear passed");

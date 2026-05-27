@@ -1,0 +1,4 @@
+ 1 | fn test(a, b) { a + b; }
+ 2 | test();
+     ^^^^^^
+Error: Not enough positional args, arg_count: 0, kwarg_count: 0

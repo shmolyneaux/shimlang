@@ -1,0 +1,9 @@
+fn test() {
+    if true {
+        return "is true";
+    } else {
+        return "is false";
+    }
+}
+
+print(test());

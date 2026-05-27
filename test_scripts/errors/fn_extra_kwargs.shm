@@ -1,0 +1,5 @@
+fn test(a) {
+    print(a);
+}
+
+test("test", b="test", fizz="buzz");

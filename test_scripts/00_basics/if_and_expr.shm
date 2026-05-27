@@ -1,0 +1,3 @@
+if "1" and true {
+    print("test");
+}

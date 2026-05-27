@@ -1,0 +1,4 @@
+ 1 | fn test(a=undefined_var) { a; }
+               ^^^^^^^^^^^^^
+ 2 | test();
+Error: Unknown identifier "undefined_var"

@@ -1,0 +1,3 @@
+ 1 | int("not a number");
+     ^^^^^^^^^^^^^^^^^^^
+Error: Cannot convert string 'not a number' to int

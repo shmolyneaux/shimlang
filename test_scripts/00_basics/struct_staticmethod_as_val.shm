@@ -1,0 +1,20 @@
+struct Point {
+    x,
+    y
+
+    fn add(self, other) {
+        return Point(
+            self.x + other.x,
+            self.y + other.y,
+        );
+    }
+}
+
+let a = Point(1, 2);
+let b = Point(3, 4);
+
+let myfn = Point.add;
+
+let result = myfn(a, b);
+
+print("Result:", result.x, result.y);

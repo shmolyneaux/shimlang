@@ -1,0 +1,19 @@
+// Test list reverse method (in-place)
+let lst = [1, 2, 3, 4, 5];
+lst.reverse();
+
+assert(lst[0] == 5);
+assert(lst[1] == 4);
+assert(lst[2] == 3);
+assert(lst[3] == 2);
+assert(lst[4] == 1);
+
+// Test with even length
+let lst2 = [10, 20, 30, 40];
+lst2.reverse();
+assert(lst2[0] == 40);
+assert(lst2[1] == 30);
+assert(lst2[2] == 20);
+assert(lst2[3] == 10);
+
+print("List reverse passed");

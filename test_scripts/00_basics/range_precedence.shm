@@ -1,0 +1,12 @@
+// Test that range has lower precedence than logical and
+// Range has lower precedence, so "1..3 and true" should parse as "(1..3) and true"
+// Since Range is truthy, "and" returns the second operand: true
+let r1 = 1..3 and false;
+print(r1);
+
+// Test that range binds looser than addition
+// Should parse as "1..(2+3)" = "1..5"
+let r2 = 1..2+3;
+for i in r2 {
+    print(i);
+}

@@ -1,0 +1,9 @@
+struct Point {
+    x, y
+}
+
+Point(
+    1,
+    2,
+    3
+);

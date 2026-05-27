@@ -1,0 +1,5 @@
+// Should not panic because of short-circuiting
+0 and panic("Should not print");
+
+// Should print
+1 and print("should print");

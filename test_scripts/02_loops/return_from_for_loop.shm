@@ -1,0 +1,45 @@
+struct FrameOrder {
+    callbacks = [],
+
+    fn add(self, func) {
+        self.callbacks.append(func);
+    }
+
+    fn remove(self, func) {
+        for idx in 0..self.callbacks.len() {
+            if self.callbacks[idx] == func {
+                self.callbacks.pop(idx);
+                return;
+            }
+        }
+    }
+
+    fn execute(self) {
+        for idx in 0..self.callbacks.len() {
+            let func = self.callbacks[idx];
+            func();
+        }
+    }
+}
+
+let frame_order = FrameOrder();
+let results = [];
+
+fn callback1() { results.append("cb1"); }
+fn callback2() { results.append("cb2"); }
+
+fn remove_self() {
+    results.append("remove_self");
+    frame_order.remove(remove_self);
+}
+
+frame_order.add(callback1);
+frame_order.add(callback2);
+frame_order.add(remove_self);
+
+frame_order.execute();
+print(results);
+
+results = [];
+frame_order.execute();
+print(results);

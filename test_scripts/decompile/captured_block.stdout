@@ -1,0 +1,40 @@
+   0:  CreateList size=0
+   3:  let "funcs"
+  10:  ShimValue 1
+  19:  ShimValue 2
+  28:  ShimValue 3
+  37:  CreateList size=3
+  40:  get .iter
+  46:  call args=0  kwargs=0
+  49:  get .next
+  55:  Loop Start -> 119
+  58:  Copy
+  59:  call args=0  kwargs=0
+  62:  Copy
+  63:  None
+  64:  equal
+  65:  JMPNZ -> 118
+  68:  start_captured_scope
+  69:  let "i"
+  72:  start_captured_scope
+  73:  JMP -> 84
+  76:  start_scope
+  77:  unpack_args required=0 optional=0 []
+  80:  load "i"
+  83:  return
+  84:  CreateFn -> PC 76
+  87:  let "f"
+  90:  load "funcs"
+  97:  load "f"
+ 100:  attr_call .append args=1  kwargs=0
+ 110:  pop
+ 111:  None
+ 112:  pop
+ 113:  end_scope
+ 114:  end_scope
+ 115:  JMPUP -> 58
+ 118:  pop
+ 119:  Loop End
+ 120:  pop
+ 121:  None
+

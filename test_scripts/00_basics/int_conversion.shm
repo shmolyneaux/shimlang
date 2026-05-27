@@ -1,0 +1,6 @@
+print(int(123));
+print(int(45.6));
+print(int(true));
+print(int(false));
+print(int("42"));
+print(int("  -99  "));

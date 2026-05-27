@@ -1,0 +1,43 @@
+// Simple test of shrink_to_fit method
+let d = dict();
+
+// Add a few elements
+d[0] = "zero";
+d[1] = "one";
+d[2] = "two";
+d[3] = "three";
+d[4] = "four";
+
+print("Length after adding 5 elements:", d.len());
+assert(d.len() == 5);
+
+// Remove some elements
+d.pop(0);
+d.pop(1);
+d.pop(2);
+
+print("Length after removing 3 elements:", d.len());
+assert(d.len() == 2);
+
+// Verify we can still access remaining elements
+assert(d[3] == "three");
+assert(d[4] == "four");
+
+// Shrink the dict
+d.shrink_to_fit();
+
+print("After shrink_to_fit, length:", d.len());
+assert(d.len() == 2);
+
+// Verify elements are still accessible after shrinking
+assert(d[3] == "three");
+assert(d[4] == "four");
+
+// Test shrinking an empty dict
+let empty = dict();
+empty[1] = "test";
+empty.pop(1);
+empty.shrink_to_fit();
+assert(empty.len() == 0);
+
+print("All shrink_to_fit tests passed!");

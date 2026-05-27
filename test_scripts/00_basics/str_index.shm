@@ -1,0 +1,7 @@
+let mystr = "test";
+print(
+    mystr[0],
+    mystr[1],
+    mystr[2],
+    mystr[3],
+);

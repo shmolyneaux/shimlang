@@ -1,0 +1,21 @@
+// Test mutual recursion with closures
+fn is_even(n) {
+    if n == 0 {
+        true
+    } else {
+        is_odd(n - 1)
+    }
+}
+
+fn is_odd(n) {
+    if n == 0 {
+        false
+    } else {
+        is_even(n - 1)
+    }
+}
+
+print(is_even(4));
+print(is_odd(4));
+print(is_even(7));
+print(is_odd(7));

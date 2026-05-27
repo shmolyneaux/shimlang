@@ -1,0 +1,17 @@
+// Test list sorted method (returns sorted copy)
+let lst = [5, 2, 8, 1, 9, 3];
+let sorted_lst = lst.sorted();
+
+// Original list unchanged
+assert(lst[0] == 5);
+assert(lst[1] == 2);
+
+// Sorted list is correct
+assert(sorted_lst[0] == 1);
+assert(sorted_lst[1] == 2);
+assert(sorted_lst[2] == 3);
+assert(sorted_lst[3] == 5);
+assert(sorted_lst[4] == 8);
+assert(sorted_lst[5] == 9);
+
+print("List sorted passed");
