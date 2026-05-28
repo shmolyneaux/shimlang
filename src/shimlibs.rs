@@ -699,10 +699,10 @@ const fn generate_size_table() -> [u32; 256] {
 static LIST_CAPACITY_LUT: [u32; 256] = generate_size_table();
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct DictEntry {
-    pub(crate) hash: u64,
-    pub(crate) key: ShimValue,
-    pub(crate) value: ShimValue,
+pub struct DictEntry {
+    pub hash: u64,
+    pub key: ShimValue,
+    pub value: ShimValue,
 }
 
 impl DictEntry {
@@ -1079,7 +1079,7 @@ impl ShimDict {
         }
     }
 
-    pub(crate) fn set(
+    pub fn set(
         &mut self,
         interpreter: &mut Interpreter,
         key: ShimValue,
@@ -1162,7 +1162,7 @@ impl ShimDict {
     /**
      * Return the valid part of the entries array
      */
-    pub(crate) fn entries_array(&self, interpreter: &Interpreter) -> &'static [DictEntry] {
+    pub fn entries_array(&self, interpreter: &Interpreter) -> &'static [DictEntry] {
         unsafe {
             let u64_slice = &interpreter.mem.mem()[usize::from(self.entries)
                 ..usize::from(self.entries) + 3 * (self.entry_count as usize)];

@@ -288,7 +288,7 @@ impl MMU {
         }
     }
 
-    pub(crate) unsafe fn get<T: 'static>(&self, word: u24) -> &T {
+    pub unsafe fn get<T: 'static>(&self, word: u24) -> &T {
         unsafe {
             let ptr: *const T = &self.mem[usize::from(word)] as *const u64 as *const T;
             &*ptr
@@ -298,13 +298,13 @@ impl MMU {
     /// Like `get_mut` but returns a raw pointer so the MMU borrow is released
     /// immediately. Callers that need to reborrow the MMU after obtaining a
     /// mutable reference into it must use this instead of `get_mut`.
-    pub(crate) fn get_ptr_mut<T>(&mut self, word: u24) -> *mut T {
+    pub fn get_ptr_mut<T>(&mut self, word: u24) -> *mut T {
         let word_usize = usize::from(word);
         self.mark_dirty_range(word_usize, word_usize + std::mem::size_of::<T>().div_ceil(8));
         self.mem.as_mut_ptr().wrapping_add(word_usize) as *mut T
     }
 
-    pub(crate) unsafe fn get_mut<T>(&mut self, word: u24) -> &mut T {
+    pub unsafe fn get_mut<T>(&mut self, word: u24) -> &mut T {
         let word_usize = usize::from(word);
         self.mark_dirty_range(word_usize, word_usize + std::mem::size_of::<T>().div_ceil(8));
         unsafe {

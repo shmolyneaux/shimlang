@@ -564,28 +564,28 @@ pub(crate) fn format_float(val: f32) -> String {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) enum StructAttribute {
+pub enum StructAttribute {
     MemberInstanceOffset(u8),
     MethodDef(u24),
 }
 
 #[derive(Debug)]
-pub(crate) struct StructDef {
-    pub(crate) name: Vec<u8>,
-    pub(crate) member_count: u8,
-    lookup: Vec<(Vec<u8>, StructAttribute)>,
+pub struct StructDef {
+    pub name: Vec<u8>,
+    pub member_count: u8,
+    pub lookup: Vec<(Vec<u8>, StructAttribute)>,
 }
 
 // Stores function information in interpreter memory
-pub(crate) struct ShimFn {
+pub struct ShimFn {
     // Program counter where the function code begins
-    pub(crate) pc: u32,
+    pub pc: u32,
     // Length of the function name string
-    pub(crate) name_len: u16,
+    pub name_len: u16,
     // Memory position of the function name (stored as string)
-    pub(crate) name: u24,
+    pub name: u24,
     // The environment scope where this function was defined (for closures)
-    pub(crate) captured_scope: u32,
+    pub captured_scope: u32,
 }
 
 const _: () = {
@@ -593,7 +593,7 @@ const _: () = {
 };
 
 impl StructDef {
-    fn find(&self, ident: &[u8]) -> Option<StructAttribute> {
+    pub fn find(&self, ident: &[u8]) -> Option<StructAttribute> {
         for (attr, loc) in self.lookup.iter() {
             if ident == attr {
                 return Some(*loc);
@@ -602,13 +602,13 @@ impl StructDef {
         None
     }
 
-    pub(crate) fn mem_size(&self) -> usize {
+    pub fn mem_size(&self) -> usize {
         // TODO: if the StructDef changes it might be effectively non const sized
         // in interpreter memory
         std::mem::size_of::<StructDef>().div_ceil(8)
     }
 
-    pub(crate) fn method_fn_positions(&self) -> impl Iterator<Item = u24> + '_ {
+    pub fn method_fn_positions(&self) -> impl Iterator<Item = u24> + '_ {
         self.lookup.iter().filter_map(|(_, attr)| match attr {
             StructAttribute::MethodDef(pos) => Some(*pos),
             _ => None,
@@ -960,6 +960,9 @@ impl ShimValue {
                     }
                 }
 
+                // Fast case where we can copy the arguments straight into the allocated
+                // space for the struct (no keyword or default arguments)
+
                 // Allocate space for each member
                 let word_count: u24 = (struct_def.member_count as u32).into();
                 let new_pos = alloc!(interpreter.mem, word_count, "Struct instantiation");
@@ -1279,6 +1282,15 @@ impl ShimValue {
 
     pub fn list(&self, interpreter: &Interpreter) -> Result<&ShimList, String> {
         self.list_from_mem(&interpreter.mem)
+    }
+
+    pub fn struct_def<'a>(&self, interpreter: &'a Interpreter) -> Result<&'a StructDef, String> {
+        match self {
+            ShimValue::StructDef(def_pos) => unsafe {
+                Ok(interpreter.mem.get(*def_pos))
+            }
+            other => Err(format!("Value is not a StructDef {other:?}"))
+        }
     }
 
     fn native_from_mem<'a>(&self, mem: &'a MMU) -> Result<&'a dyn ShimNative, String> {
