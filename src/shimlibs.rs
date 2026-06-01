@@ -3032,8 +3032,7 @@ pub(crate) fn shim_clamp(
     Ok(value)
 }
 
-/// Clamp function that's generic over any comparable type.
-/// Prefers returning the original value when value == min or value == max
+/// Returns true if clamping wouldn't change the value
 pub(crate) fn shim_in_range(
     interpreter: &mut Interpreter,
     args: &ArgBundle,

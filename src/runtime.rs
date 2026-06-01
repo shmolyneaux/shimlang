@@ -90,6 +90,9 @@ impl EnvScope {
     /// the value (ShimValue) within the block, or None if not found.
     /// Layout per entry: [len: u8][ident_bytes: [u8; len]][value: ShimValue (8 bytes)]
     fn scan_for_key(&self, mem: &MMU, key: &[u8]) -> Option<usize> {
+        if key == b"log_lines" {
+            dbg!(self);
+        }
         let bytes = unsafe { self.raw_bytes(mem) };
         scan_for_key(bytes, key)
     }
@@ -370,23 +373,32 @@ impl Environment {
     }
 
     pub fn get(&self, interpreter: &mut Interpreter, key: &[u8]) -> Option<ShimValue> {
+        let debug = key == b"log_lines";
+        if debug { dbg!(key); }
         let mut current_scope_pos = self.current_scope;
 
         loop {
+            if debug { dbg!(&current_scope_pos); }
             if current_scope_pos == 0 {
                 break;
             }
 
             let (parent, value_offset) = unsafe {
+                if debug { dbg!("In A"); }
                 let scope: &EnvScope = interpreter.mem.get(u24::from(current_scope_pos));
+                if debug { dbg!("In B"); }
                 (scope.parent, scope.scan_for_key(&interpreter.mem, key))
             };
+            if debug { dbg!("In C"); }
 
             if let Some(value_offset) = value_offset {
+                if debug { dbg!(value_offset); }
                 // Read the ShimValue from the byte offset
                 let val: ShimValue = unsafe {
                     let scope: &EnvScope = interpreter.mem.get(u24::from(current_scope_pos));
+                    if debug { dbg!(scope); }
                     let bytes = scope.raw_bytes(&interpreter.mem);
+                    if debug { dbg!(&bytes); }
                     let mut val_bytes = [0u8; 8];
                     std::ptr::copy_nonoverlapping(
                         bytes[value_offset..].as_ptr(),
@@ -2528,16 +2540,33 @@ impl Interpreter {
                     pc += 1 + ident_len;
                 }
                 val if val == ByteCode::VariableLoad as u8 => {
+                    let debug = pc == 28094;
+                    if debug {
+                        dbg!(pc);
+                    }
                     let ident_len = bytes[pc + 1] as usize;
                     let ident = &bytes[pc + 2..pc + 2 + ident_len];
+                    if debug {
+                        dbg!("Getting env");
+                        dbg!(debug_u8s(ident));
+                    }
                     if let Some(value) = env.get(self, ident) {
+                        if debug {
+                            dbg!("Got env ident");
+                        }
                         stack.push(value);
                     } else {
+                        if debug {
+                            dbg!("No env ident");
+                        }
                         return Err(format_script_err(
                             self.program.spans[pc],
                             &self.program.script,
                             &format!("Unknown identifier {:?}", debug_u8s(ident)),
                         ));
+                    }
+                    if debug {
+                        dbg!("got here");
                     }
                     pc += 1 + ident_len;
                 }
