@@ -341,7 +341,7 @@ impl MMU {
         position
     }
 
-    fn alloc_debug(&mut self, words: u24, msg: &str) -> u24 {
+    pub fn alloc_debug(&mut self, words: u24, msg: &str) -> u24 {
         let result = self.alloc_no_debug(words);
         eprintln!(
             "Alloc {} {}: {}",
@@ -352,7 +352,7 @@ impl MMU {
         result
     }
 
-    pub(crate) fn alloc_no_debug(&mut self, words: u24) -> u24 {
+    pub fn alloc_no_debug(&mut self, words: u24) -> u24 {
         if u32::from(words) == 0u32 {
             return 0.into();
         }

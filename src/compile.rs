@@ -110,7 +110,8 @@ pub fn compile_fn_body_inner(
     body: &Block,
     fn_span: Span,
 ) -> Result<Vec<(u8, Span)>, String> {
-    let mut asm = if block_captures_env(body) {
+    let captures = block_captures_env(body) || pos_args_optional.iter().any(|(_ident, default_expr)| expression_captures_env(&default_expr.data));
+    let mut asm = if captures {
         vec![(ByteCode::StartCapturedScope as u8, fn_span)]
     } else {
         vec![(ByteCode::StartScope as u8, fn_span)]

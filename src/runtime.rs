@@ -2087,7 +2087,7 @@ impl Interpreter {
                         for (attr, loc) in def.lookup.iter() {
                             match loc {
                                 StructAttribute::MemberInstanceOffset(offset) => {
-                                    let val: ShimValue = *self.mem.get(pos + *offset as u32 + 1);
+                                    let val: ShimValue = *self.mem.get(pos + *offset as u32);
                                     println!("                - {} = {:?}", debug_u8s(attr), val);
                                 }
                                 StructAttribute::MethodDef(_) => (),
@@ -2540,25 +2540,11 @@ impl Interpreter {
                     pc += 1 + ident_len;
                 }
                 val if val == ByteCode::VariableLoad as u8 => {
-                    let debug = pc == 28094;
-                    if debug {
-                        dbg!(pc);
-                    }
                     let ident_len = bytes[pc + 1] as usize;
                     let ident = &bytes[pc + 2..pc + 2 + ident_len];
-                    if debug {
-                        dbg!("Getting env");
-                        dbg!(debug_u8s(ident));
-                    }
                     if let Some(value) = env.get(self, ident) {
-                        if debug {
-                            dbg!("Got env ident");
-                        }
                         stack.push(value);
                     } else {
-                        if debug {
-                            dbg!("No env ident");
-                        }
                         return Err(format_script_err(
                             self.program.spans[pc],
                             &self.program.script,
