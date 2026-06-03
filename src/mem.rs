@@ -231,6 +231,10 @@ macro_rules! alloc {
 }
 
 impl MMU {
+    pub fn mem_high_point(&self) -> u32 {
+        self.free_list.last().map(|block| u32::from(block.pos)).unwrap_or(0)
+    }
+
     fn eprint_free_list(&self) {
         eprintln!("Free list:");
         for block in self.free_list.iter() {

@@ -2109,8 +2109,6 @@ impl Interpreter {
 
     pub fn gc(&mut self, env: &Environment) {
         let _zone = zone_scoped!("GC");
-        //self.print_mem();
-        //self.print_env(env);
 
         unsafe {
             let _scope: &EnvScope = self.mem.get(u24::from(env.current_scope));
@@ -2123,8 +2121,12 @@ impl Interpreter {
             let _zone = zone_scoped!("Init GC");
             GC::new(&self.mem)
         };
-        gc.mark(roots);
-        self.mem.free_list = gc.sweep();
+
+        {
+            let _zone = zone_scoped!("GC Mark and Sweep");
+            gc.mark(roots);
+            self.mem.free_list = gc.sweep();
+        }
     }
 
     pub fn create(config: &Config, program: Program) -> Self {
