@@ -223,6 +223,7 @@ impl Environment {
             (b"dict", Box::new(shim_dict)),
             (b"Range", Box::new(shim_range)),
             (b"enumerate", Box::new(shim_enumerate)),
+            (b"average", Box::new(shim_average)),
             (b"assert", Box::new(shim_assert)),
             (b"str", Box::new(shim_str)),
             (b"int", Box::new(shim_int)),
@@ -1062,6 +1063,7 @@ impl ShimValue {
                     b"len" => shim_list_len,
                     b"iter" => shim_list_iter,
                     b"enumerate" => shim_enumerate,
+                    b"average" => shim_average,
                     b"sort" => shim_list_sort,
                     b"append" => shim_list_append,
                     b"clear" => shim_list_clear,
@@ -1537,7 +1539,7 @@ impl ShimValue {
         self.to_string_mem(&interpreter.mem)
     }
 
-    pub(crate) fn is_truthy(&self, interpreter: &mut Interpreter) -> Result<bool, String> {
+    pub fn is_truthy(&self, interpreter: &mut Interpreter) -> Result<bool, String> {
         match self {
             ShimValue::None => Ok(false),
             ShimValue::Integer(i) => Ok(*i != 0),
@@ -1550,7 +1552,7 @@ impl ShimValue {
         }
     }
 
-    pub(crate) fn add(
+    pub fn add(
         &self,
         interpreter: &mut Interpreter,
         other: &Self,
@@ -1600,11 +1602,11 @@ impl ShimValue {
         }
     }
 
-    fn sub(&self, interpreter: &mut Interpreter, other: &Self) -> Result<ShimValue, String> {
+    pub fn sub(&self, interpreter: &mut Interpreter, other: &Self) -> Result<ShimValue, String> {
         numeric_op!(self - other, interpreter, b"sub")
     }
 
-    pub(crate) fn equal_inner(
+    pub fn equal_inner(
         &self,
         interpreter: &mut Interpreter,
         other: &Self,
@@ -1716,19 +1718,19 @@ impl ShimValue {
         }
     }
 
-    fn equal(&self, interpreter: &mut Interpreter, other: &Self) -> Result<ShimValue, String> {
+    pub fn equal(&self, interpreter: &mut Interpreter, other: &Self) -> Result<ShimValue, String> {
         Ok(ShimValue::Bool(self.equal_inner(interpreter, other)?))
     }
 
-    fn not_equal(&self, interpreter: &mut Interpreter, other: &Self) -> Result<ShimValue, String> {
+    pub fn not_equal(&self, interpreter: &mut Interpreter, other: &Self) -> Result<ShimValue, String> {
         Ok(ShimValue::Bool(!self.equal_inner(interpreter, other)?))
     }
 
-    fn mul(&self, interpreter: &mut Interpreter, other: &Self) -> Result<ShimValue, String> {
+    pub fn mul(&self, interpreter: &mut Interpreter, other: &Self) -> Result<ShimValue, String> {
         numeric_op!(self * other, interpreter, b"mul")
     }
 
-    fn div(&self, interpreter: &mut Interpreter, other: &Self) -> Result<ShimValue, String> {
+    pub fn div(&self, interpreter: &mut Interpreter, other: &Self) -> Result<ShimValue, String> {
         match (self, other) {
             (ShimValue::Integer(a), ShimValue::Integer(b)) => Ok(ShimValue::Float((*a as f32) / (*b as f32))),
             (ShimValue::Float(a), ShimValue::Float(b)) => Ok(ShimValue::Float(*a / *b)),
@@ -1751,7 +1753,7 @@ impl ShimValue {
         }
     }
 
-    fn modulus(&self, interpreter: &mut Interpreter, other: &Self) -> Result<ShimValue, String> {
+    pub fn modulus(&self, interpreter: &mut Interpreter, other: &Self) -> Result<ShimValue, String> {
         match (self, other) {
             (ShimValue::Integer(a), ShimValue::Integer(b)) => Ok(ShimValue::Integer(a.rem_euclid(*b))),
             (ShimValue::Float(a), ShimValue::Float(b)) => Ok(ShimValue::Float(a.rem_euclid(*b))),
@@ -1774,7 +1776,7 @@ impl ShimValue {
         }
     }
 
-    pub(crate) fn gt(
+    pub fn gt(
         &self,
         interpreter: &mut Interpreter,
         other: &Self,
@@ -1796,7 +1798,7 @@ impl ShimValue {
         }
     }
 
-    pub(crate) fn lt(
+    pub fn lt(
         &self,
         interpreter: &mut Interpreter,
         other: &Self,
@@ -1808,7 +1810,7 @@ impl ShimValue {
         }
     }
 
-    fn lte(&self, interpreter: &mut Interpreter, other: &Self) -> Result<ShimValue, String> {
+    pub fn lte(&self, interpreter: &mut Interpreter, other: &Self) -> Result<ShimValue, String> {
         match compare_values(interpreter, self, other) {
             Ok(std::cmp::Ordering::Less) | Ok(std::cmp::Ordering::Equal) => {
                 Ok(ShimValue::Bool(true))
@@ -1818,7 +1820,7 @@ impl ShimValue {
         }
     }
 
-    fn contains(
+    pub fn contains(
         &self,
         interpreter: &mut Interpreter,
         some_key: &Self,
@@ -1868,7 +1870,7 @@ impl ShimValue {
         }
     }
 
-    fn not(&self, interpreter: &mut Interpreter) -> Result<ShimValue, String> {
+    pub fn not(&self, interpreter: &mut Interpreter) -> Result<ShimValue, String> {
         match self {
             ShimValue::Bool(a) => Ok(ShimValue::Bool(!a)),
             ShimValue::Float(a) => Ok(ShimValue::Bool(*a == 0.0)),
@@ -1879,7 +1881,7 @@ impl ShimValue {
         }
     }
 
-    fn neg(&self, interpreter: &mut Interpreter) -> Result<ShimValue, String> {
+    pub fn neg(&self, interpreter: &mut Interpreter) -> Result<ShimValue, String> {
         match self {
             ShimValue::Float(a) => Ok(ShimValue::Float(-a)),
             ShimValue::Integer(a) => Ok(ShimValue::Integer(-a)),
@@ -1890,7 +1892,7 @@ impl ShimValue {
         }
     }
 
-    pub(crate) fn get_attr(
+    pub fn get_attr(
         &self,
         interpreter: &mut Interpreter,
         ident: &[u8],
@@ -1921,7 +1923,7 @@ impl ShimValue {
         }
     }
 
-    fn set_attr(
+    pub fn set_attr(
         &self,
         interpreter: &mut Interpreter,
         ident: &[u8],

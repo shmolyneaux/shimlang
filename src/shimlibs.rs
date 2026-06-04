@@ -1401,6 +1401,71 @@ pub(crate) fn shim_enumerate(
     Ok(interpreter.mem.alloc_native(Enumerator { obj }))
 }
 
+pub(crate) fn shim_average(
+    interpreter: &mut Interpreter,
+    args: &ArgBundle,
+) -> Result<ShimValue, String> {
+    let mut unpacker = ArgUnpacker::new(args);
+    let obj = unpacker.required(b"obj")?;
+    unpacker.end()?;
+
+    let mut args = ArgBundle::new();
+    let inner_iter = match obj.attr_call(b"iter", interpreter, &mut args)? {
+        CallResult::ReturnValue(v) => v,
+        CallResult::PC(pc, captured_scope) => {
+            let mut new_env = Environment::with_scope(captured_scope);
+            interpreter.execute_bytecode_extended(
+                &mut (pc as usize),
+                args,
+                &mut new_env,
+            )?
+        }
+    };
+
+    let mut acc: Option<ShimValue> = None;
+    let mut count = 0;
+    loop {
+        let mut args = ArgBundle::new();
+        let val = match inner_iter.attr_call(b"next", interpreter, &mut args)? {
+            CallResult::ReturnValue(v) => v,
+            CallResult::PC(pc, captured_scope) => {
+                let mut new_env = Environment::with_scope(captured_scope);
+                interpreter.execute_bytecode_extended(
+                    &mut (pc as usize),
+                    args,
+                    &mut new_env,
+                )?
+            }
+        };
+        if val.is_none() {
+            break;
+        }
+        acc = match acc {
+            None => Some(val),
+            Some(v) => {
+                let mut args = ArgBundle::new();
+                Some(
+                    match v.add(interpreter, &val, &mut args)? {
+                        CallResult::ReturnValue(v) => v,
+                        CallResult::PC(pc, captured_scope) => {
+                            let mut new_env = Environment::with_scope(captured_scope);
+                            interpreter.execute_bytecode_extended(
+                                &mut (pc as usize),
+                                args,
+                                &mut new_env,
+                            )?
+                        }
+                    }
+                )
+            }
+        };
+        count += 1;
+    }
+
+    let mut args = ArgBundle::new();
+    acc.unwrap_or(ShimValue::Float(0.0)).div(interpreter, &ShimValue::Integer(count))
+}
+
 pub(crate) fn shim_range(
     interpreter: &mut Interpreter,
     args: &ArgBundle,
