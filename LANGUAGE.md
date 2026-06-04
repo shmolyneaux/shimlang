@@ -1403,6 +1403,73 @@ Output:
 You say: 'hello Alice' to me
 ```
 
+### The `.format` method
+
+Interpolating a value is implemented by calling its `.format` method, so
+`"Value: \(x)"` is equivalent to `"Value: " + x.format()`. Every value type
+has a default `.format` implementation that produces its standard string
+representation.
+
+The interpolation may pass positional and keyword arguments to `.format`. For
+example, `"\(value, pretty=true)"` calls `value.format(pretty=true)`. The
+default `.format` does not accept any extra arguments (passing some raises an
+error), but a type can override `format` to accept them. A struct, for
+instance, can override `format` to customize how it is rendered:
+
+```rust
+struct Point {
+    x,
+    y,
+
+    fn format(self, pretty=false) {
+        if pretty {
+            "Point { x: \(self.x), y: \(self.y) }"
+        } else {
+            "(\(self.x), \(self.y))"
+        }
+    }
+}
+
+let p = Point(1, 2);
+print("\(p)");
+print("\(p, pretty=true)");
+```
+
+Output:
+
+```
+(1, 2)
+Point { x: 1, y: 2 }
+```
+
+#### Formatting floats
+
+The `.format` method on floats accepts several options (all optional), which
+can be supplied as positional or keyword arguments:
+
+- `fill`: the single character used to pad empty space (defaults to `" "`)
+- `align`: `"left"`, `"center"`, or `"right"` (defaults to `"right"`)
+- `force_sign`: always show the `+`/`-` sign (defaults to `false`)
+- `width`: the total width of the formatted string
+- `precision`: the number of digits to show after the decimal point
+- `notation`: `"e"` or `"E"` to force scientific notation
+
+```rust
+print("\(3.14159, precision=2)");
+print("\(3.14, width=8, fill="0")");
+print("\(3.14, force_sign=true)");
+print("\(1234.5, notation="e")");
+```
+
+Output:
+
+```
+3.14
+00003.14
++3.14
+1.2345e3
+```
+
 ## Block Expressions
 
 Curly braces create block expressions. The value of the last expression in a

@@ -3,7 +3,6 @@
 - AOT compilation
 
 # MINOR
-- String formatting specifiers (like number of decimal places for a float)
 - Tuple
 - Tuple unpacking
 - String methods

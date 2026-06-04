@@ -1,0 +1,32 @@
+// String interpolation lowers `\(value, args...)` to `value.format(args...)`.
+
+// The default `.format` is available on every value type and matches the
+// default string representation.
+assert("\(13)" == "13");
+assert("\(true)" == "true");
+assert("\(None)" == "None");
+assert("\([1, 2, 3])" == "[1, 2, 3]");
+
+// Calling `.format` directly produces the same result.
+assert((42).format() == "42");
+
+// Structs may override `.format` to customize interpolation, including
+// accepting positional and keyword arguments.
+struct Point {
+    x,
+    y,
+
+    fn format(self, pretty=false) {
+        if pretty {
+            "Point { x: \(self.x), y: \(self.y) }"
+        } else {
+            "(\(self.x), \(self.y))"
+        }
+    }
+}
+
+let p = Point(1, 2);
+assert("\(p)" == "(1, 2)");
+assert("Value: \(p, pretty=true)" == "Value: Point { x: 1, y: 2 }");
+assert(p.format() == "(1, 2)");
+assert(p.format(pretty=true) == "Point { x: 1, y: 2 }");

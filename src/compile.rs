@@ -59,7 +59,6 @@ pub(crate) enum ByteCode {
     EndScope,
     LoopStart,
     LoopEnd,
-    Stringify,
     Break,
     Continue,
     Call,
@@ -794,7 +793,6 @@ pub fn expression_captures_env(input_expr: &Expression) -> bool {
             UnaryOp::Not(expr) => expression_captures_env(&expr.data),
             UnaryOp::Negate(expr) => expression_captures_env(&expr.data),
         },
-        Expression::Stringify(expr) => expression_captures_env(&expr.data),
         Expression::Call(func, args, kwargs) => {
             if expression_captures_env(&func.data) {
                 return true;
@@ -1088,11 +1086,6 @@ pub fn compile_expression(expr: &ExprNode) -> Result<Vec<(u8, Span)>, String> {
             let mut res = compile_expression(a)?;
             res.push((opcode as u8, expr.span));
             Ok(res)
-        }
-        Expression::Stringify(expr) => {
-            let mut asm = compile_expression(expr)?;
-            asm.push((ByteCode::Stringify as u8, expr.span));
-            Ok(asm)
         }
         Expression::Index(obj_expr, index_expr) => {
             let mut asm = compile_expression(obj_expr)?;
@@ -1450,8 +1443,6 @@ pub fn format_asm(bytes: &[u8]) -> String {
             idx += 2;
         } else if *b == ByteCode::LoopEnd as u8 {
             out.push_str("Loop End");
-        } else if *b == ByteCode::Stringify as u8 {
-            out.push_str("stringify");
         } else if *b == ByteCode::StartScope as u8 {
             out.push_str("start_scope");
         } else if *b == ByteCode::StartCapturedScope as u8 {

@@ -2222,6 +2222,162 @@ pub(crate) fn shim_dict_shrink_to_fit(
     Ok(ShimValue::None)
 }
 
+/// Default implementation of the `.format` method available on every
+/// `ShimValue`. It is used by string interpolation (`"\(value)"`) and may be
+/// overridden by structs or native types that define their own `format`
+/// method. The default implementation renders the value's string
+/// representation and does not accept any additional formatting arguments.
+pub(crate) fn shim_format(
+    interpreter: &mut Interpreter,
+    args: &ArgBundle,
+) -> Result<ShimValue, String> {
+    let mut unpacker = ArgUnpacker::new(args);
+    let obj = unpacker.required(b"obj")?;
+    unpacker.end()?;
+
+    let s = obj.to_string_mem(&interpreter.mem);
+    Ok(interpreter.mem.alloc_str(s.as_bytes()))
+}
+
+enum FloatAlign {
+    Left,
+    Center,
+    Right,
+}
+
+enum FloatNotation {
+    Lower,
+    Upper,
+}
+
+/// Implementation of the `.format` method for floats. It supports a number of
+/// formatting options (all optional, passed as keyword or positional
+/// arguments after the value):
+///
+/// - `fill`: the single character used to pad empty space (defaults to `" "`)
+/// - `align`: `"left"`, `"center"`, or `"right"` (defaults to `"right"`)
+/// - `force_sign`: always show the `+`/`-` sign (defaults to `false`)
+/// - `width`: the total width of the formatted string
+/// - `precision`: the number of digits to show after the decimal point
+/// - `notation`: `"e"` or `"E"` to force scientific notation
+pub(crate) fn shim_float_format(
+    interpreter: &mut Interpreter,
+    args: &ArgBundle,
+) -> Result<ShimValue, String> {
+    let mut unpacker = ArgUnpacker::new(args);
+    let value = match unpacker.required(b"obj")? {
+        ShimValue::Float(f) => f,
+        ShimValue::Integer(i) => i as f32,
+        other => {
+            return Err(format!(
+                "float format expects a number, got {}",
+                other.to_string_mem(&interpreter.mem)
+            ));
+        }
+    };
+
+    let fill = match unpacker.optional(b"fill") {
+        Some(v) => {
+            let bytes = v.string(interpreter)?;
+            let s = std::str::from_utf8(bytes)
+                .map_err(|_| "`fill` must be a valid utf-8 string".to_string())?;
+            let mut chars = s.chars();
+            match (chars.next(), chars.next()) {
+                (Some(c), None) => c,
+                _ => return Err("`fill` must be a single character".to_string()),
+            }
+        }
+        None => ' ',
+    };
+
+    let align = match unpacker.optional(b"align") {
+        Some(v) => match v.string(interpreter)? {
+            b"left" => FloatAlign::Left,
+            b"center" => FloatAlign::Center,
+            b"right" => FloatAlign::Right,
+            other => {
+                return Err(format!(
+                    "`align` must be \"left\", \"center\", or \"right\", got {:?}",
+                    debug_u8s(other)
+                ));
+            }
+        },
+        None => FloatAlign::Right,
+    };
+
+    let force_sign = match unpacker.optional(b"force_sign") {
+        Some(ShimValue::Bool(b)) => b,
+        Some(_) => return Err("`force_sign` must be a bool".to_string()),
+        None => false,
+    };
+
+    let width = match unpacker.optional(b"width") {
+        Some(ShimValue::Integer(i)) if i >= 0 => Some(i as usize),
+        Some(_) => return Err("`width` must be a non-negative integer".to_string()),
+        None => None,
+    };
+
+    let precision = match unpacker.optional(b"precision") {
+        Some(ShimValue::Integer(i)) if i >= 0 => Some(i as usize),
+        Some(_) => return Err("`precision` must be a non-negative integer".to_string()),
+        None => None,
+    };
+
+    let notation = match unpacker.optional(b"notation") {
+        Some(v) => match v.string(interpreter)? {
+            b"e" => Some(FloatNotation::Lower),
+            b"E" => Some(FloatNotation::Upper),
+            other => {
+                return Err(format!(
+                    "`notation` must be \"e\" or \"E\", got {:?}",
+                    debug_u8s(other)
+                ));
+            }
+        },
+        None => None,
+    };
+
+    unpacker.end()?;
+
+    // Render the number itself (sign + digits) before applying any padding.
+    let mut num = match (precision, &notation) {
+        (Some(p), Some(FloatNotation::Lower)) => format!("{:.*e}", p, value),
+        (Some(p), Some(FloatNotation::Upper)) => format!("{:.*E}", p, value),
+        (Some(p), None) => format!("{:.*}", p, value),
+        (None, Some(FloatNotation::Lower)) => format!("{:e}", value),
+        (None, Some(FloatNotation::Upper)) => format!("{:E}", value),
+        (None, None) => format_float(value),
+    };
+
+    if force_sign && !num.starts_with('-') {
+        num.insert(0, '+');
+    }
+
+    // Pad to the requested width using the fill character and alignment.
+    if let Some(width) = width {
+        let len = num.chars().count();
+        if len < width {
+            let pad = width - len;
+            let (left, right) = match align {
+                FloatAlign::Left => (0, pad),
+                FloatAlign::Right => (pad, 0),
+                FloatAlign::Center => (pad / 2, pad - pad / 2),
+            };
+            let mut padded = String::with_capacity(num.len() + pad);
+            for _ in 0..left {
+                padded.push(fill);
+            }
+            padded.push_str(&num);
+            for _ in 0..right {
+                padded.push(fill);
+            }
+            num = padded;
+        }
+    }
+
+    Ok(interpreter.mem.alloc_str(num.as_bytes()))
+}
+
 pub(crate) fn shim_str_len(
     interpreter: &mut Interpreter,
     args: &ArgBundle,

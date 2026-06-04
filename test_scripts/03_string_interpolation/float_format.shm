@@ -1,0 +1,31 @@
+// `.format` on floats supports rich formatting options.
+
+// Default rendering matches the standard float representation.
+assert((3.0).format() == "3.0");
+assert((3.14).format() == "3.14");
+
+// precision controls digits after the decimal point.
+assert((3.14159).format(precision=2) == "3.14");
+assert((3.0).format(precision=3) == "3.000");
+
+// force_sign always shows the sign.
+assert((3.14).format(force_sign=true) == "+3.14");
+assert((-3.14).format(force_sign=true) == "-3.14");
+assert((-3.14).format() == "-3.14");
+
+// width pads to a total width, right-aligned by default.
+assert((3.14).format(width=8) == "    3.14");
+assert((3.14).format(width=8, align="left") == "3.14    ");
+assert((3.14).format(width=8, align="center") == "  3.14  ");
+
+// fill chooses the padding character.
+assert((3.14).format(width=8, fill="0") == "00003.14");
+assert((3.14).format(width=8, fill="*", align="left") == "3.14****");
+
+// notation forces scientific notation.
+assert((1234.5).format(notation="e") == "1.2345e3");
+assert((1234.5).format(notation="E") == "1.2345E3");
+assert((1234.5).format(notation="e", precision=2) == "1.23e3");
+
+// Options combine, and work through string interpolation.
+assert("v=\(3.14159, precision=3, width=10)" == "v=     3.142");
