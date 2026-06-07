@@ -3,7 +3,7 @@ use crate::shimlibs::*;
 use shm_tracy::zone_scoped;
 use shm_tracy::*;
 use std::any::TypeId;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::ops::{Add, AddAssign, Sub, SubAssign};
 
@@ -213,6 +213,13 @@ pub struct MMU {
     /// Maps autoincrementing index back to type info (vtable + word_count).
     /// The index into this Vec is the autoincrementing id stored in ShimValue::Native.
     pub native_type_registry: Vec<NativeTypeInfo>,
+
+    /// The position of ShimValue::Native values in memory that need to be
+    /// explicitly dropped in the sweep phase when unreachable by the GC. These
+    /// are the types that set T::NEEDS_DROP to true.
+    droppable_native_pos: HashSet<usize>, // TODO: potentially needs a different type since this is non-deterministic
+                                          // TODO: Maybe storing the type id here would be faster
+                                          // than needing to load it at sweep type?
 }
 
 macro_rules! alloc {
@@ -255,6 +262,7 @@ impl MMU {
             free_list,
             native_type_ids: HashMap::new(),
             native_type_registry: Vec::new(),
+            droppable_native_pos: HashSet::new(),
         }
     }
 
@@ -580,6 +588,9 @@ impl MMU {
         unsafe {
             let ptr: *mut T = &mut self.mem[usize::from(position)] as *mut u64 as *mut T;
             ptr.write(val);
+        }
+        if T::NEEDS_DROP {
+            self.droppable_native_pos.add(position);
         }
         ShimValue::Native(u24::from(type_idx), position)
     }
@@ -1142,6 +1153,13 @@ impl<'a> GC<'a> {
 
     pub(crate) fn sweep(&mut self) -> Vec<FreeBlock> {
         let _zone = zone_scoped!("GC sweep");
+
+        for pos in self.droppable_native_pos.iter() {
+            if self.mask.is_set(pos) {
+                // GET THE VALUE FROM POS
+                // CALL gc_drop
+            }
+        }
 
         // TODO: need to add the original last block from the free list
         let last_block = self.mem.free_list[self.mem.free_list.len() - 1];

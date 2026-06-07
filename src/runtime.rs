@@ -521,6 +521,8 @@ const _: () = {
 };
 
 pub trait ShimNative: 'static {
+    const NEEDS_DROP: bool = false;
+
     fn to_string(&self, _interpreter: &mut Interpreter) -> String {
         type_name::<Self>().to_string()
     }
@@ -546,6 +548,10 @@ pub trait ShimNative: 'static {
     ) -> Result<(), String> {
         Err(format!("Can't set_attr on {}", type_name::<Self>()))
     }
+
+    fn needs_drop(&self) -> bool { Self::NEEDS_DROP }
+
+    fn gc_drop(&self, &mut Interpreter) {}
 
     fn gc_vals(&self) -> Vec<ShimValue>;
 }
