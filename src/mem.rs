@@ -3,7 +3,7 @@ use crate::shimlibs::*;
 use shm_tracy::zone_scoped;
 use shm_tracy::*;
 use std::any::TypeId;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::ops::Range;
 use std::ops::{Add, AddAssign, Sub, SubAssign};
 
@@ -216,10 +216,14 @@ pub struct MMU {
 
     /// The position of ShimValue::Native values in memory that need to be
     /// explicitly dropped in the sweep phase when unreachable by the GC. These
-    /// are the types that set T::NEEDS_DROP to true.
-    droppable_native_pos: HashSet<usize>, // TODO: potentially needs a different type since this is non-deterministic
-                                          // TODO: Maybe storing the type id here would be faster
-                                          // than needing to load it at sweep type?
+    /// are the types that set needs_drop() to true.
+    /// Each entry is (mmu_position, type_idx).
+    droppable_native_pos: Vec<(u32, u24)>,
+
+    /// Set to true while gc_drop callbacks are executing. Any MMU allocation
+    /// attempted in this state panics, because newly allocated words would be
+    /// invisible to the GC bitmask and immediately reclaimed by sweep.
+    dropping_native: bool,
 }
 
 macro_rules! alloc {
@@ -262,7 +266,8 @@ impl MMU {
             free_list,
             native_type_ids: HashMap::new(),
             native_type_registry: Vec::new(),
-            droppable_native_pos: HashSet::new(),
+            droppable_native_pos: Vec::new(),
+            dropping_native: false,
         }
     }
 
@@ -365,6 +370,11 @@ impl MMU {
     }
 
     pub fn alloc_no_debug(&mut self, words: u24) -> u24 {
+        assert!(
+            !self.dropping_native,
+            "MMU allocation attempted during gc_drop; newly allocated words would be invisible \
+             to the GC bitmask and immediately reclaimed by sweep"
+        );
         if u32::from(words) == 0u32 {
             return 0.into();
         }
@@ -582,17 +592,19 @@ impl MMU {
             }
         };
 
+        let type_idx = u24::from(type_idx);
+
         // Allocate T directly in MMU memory (no Box).
         let word_count: u24 = (std::mem::size_of::<T>() as u32).div_ceil(8).into();
         let position = alloc!(self, word_count, "Native");
+        if val.needs_drop() {
+            self.droppable_native_pos.push((u32::from(position), type_idx));
+        }
         unsafe {
             let ptr: *mut T = &mut self.mem[usize::from(position)] as *mut u64 as *mut T;
             ptr.write(val);
         }
-        if T::NEEDS_DROP {
-            self.droppable_native_pos.add(position);
-        }
-        ShimValue::Native(u24::from(type_idx), position)
+        ShimValue::Native(type_idx, position)
     }
 
     pub fn alloc_bound_method(&mut self, obj: &ShimValue, func_pos: u24) -> ShimValue {
@@ -799,17 +811,17 @@ impl Bitmask {
 }
 
 pub(crate) struct GC<'a> {
-    pub mem: &'a MMU,
+    pub interpreter: &'a mut Interpreter,
     pub mask: Bitmask,
 }
 
 impl<'a> GC<'a> {
-    pub(crate) fn new(mem: &'a MMU) -> Self {
-        let last_block_start = mem.free_list[mem.free_list.len() - 1].pos;
+    pub(crate) fn new(interpreter: &'a mut Interpreter) -> Self {
+        let last_block_start = interpreter.mem.free_list[interpreter.mem.free_list.len() - 1].pos;
         let mut mask = Bitmask::new(last_block_start.into());
         // Mark word 0 so the GC never frees the sentinel reserved by MMU::with_capacity
         mark_bit!(mask, 0, MemDescriptor::other(0, 1, "null"));
-        Self { mem, mask }
+        Self { interpreter, mask }
     }
 
     pub(crate) fn mark(&mut self, mut vals: Vec<ShimValue>) {
@@ -836,7 +848,7 @@ impl<'a> GC<'a> {
                         }
 
                         // Mark the function name string
-                        let shim_fn: &ShimFn = self.mem.get(fn_pos);
+                        let shim_fn: &ShimFn = self.interpreter.mem.get(fn_pos);
                         vals.push(ShimValue::String(shim_fn.name_len, 0, shim_fn.name));
 
                         // Mark the captured scope if present
@@ -852,7 +864,7 @@ impl<'a> GC<'a> {
                         let desc = MemDescriptor::other(pos, pos + len, "Tuple contents");
 
                         for idx in pos..(pos + len) {
-                            vals.push(*self.mem.get(idx.into()));
+                            vals.push(*self.interpreter.mem.get(idx.into()));
                             mark_bit!(self.mask, idx, desc);
                         }
                     }
@@ -866,9 +878,9 @@ impl<'a> GC<'a> {
                         let desc = MemDescriptor::other(pos, pos + 1, "List header");
                         mark_bit!(self.mask, pos, desc);
 
-                        let lst: &ShimList = self.mem.get(pos.into());
+                        let lst: &ShimList = self.interpreter.mem.get(pos.into());
                         for idx in 0..lst.len() {
-                            vals.push(lst.get(self.mem, idx as isize).unwrap());
+                            vals.push(lst.get(&self.interpreter.mem, idx as isize).unwrap());
                         }
 
                         let contents_pos = usize::from(lst.data);
@@ -891,7 +903,7 @@ impl<'a> GC<'a> {
                         let offset = offset as usize;
                         #[cfg(feature = "gc_debug")]
                         let desc = {
-                            let contents = s.string_from_mem(self.mem).unwrap();
+                            let contents = s.string_from_mem(&self.interpreter.mem).unwrap();
                             MemDescriptor::other(
                                 pos,
                                 (offset + len).div_ceil(8),
@@ -910,8 +922,8 @@ impl<'a> GC<'a> {
                         if self.mask.is_set(pos) {
                             continue;
                         }
-                        let dict: &ShimDict = std::mem::transmute(&self.mem.mem[pos]);
-                        let u64_slice = &self.mem.mem[usize::from(dict.entries)
+                        let dict: &ShimDict = std::mem::transmute(&self.interpreter.mem.mem[pos]);
+                        let u64_slice = &self.interpreter.mem.mem[usize::from(dict.entries)
                             ..usize::from(dict.entries) + 3 * (dict.entry_count as usize)];
                         let entries: &[DictEntry] = std::slice::from_raw_parts(
                             u64_slice.as_ptr() as *const DictEntry,
@@ -974,7 +986,7 @@ impl<'a> GC<'a> {
                         if self.mask.is_set(pos) {
                             continue;
                         }
-                        let def: &StructDef = self.mem.get(pos.into());
+                        let def: &StructDef = self.interpreter.mem.get(pos.into());
                         #[cfg(feature = "gc_debug")]
                         let desc = MemDescriptor::other(
                             pos,
@@ -995,13 +1007,13 @@ impl<'a> GC<'a> {
                         if self.mask.is_set(pos) {
                             continue;
                         }
-                        let def: &StructDef = self.mem.get(def_pos);
+                        let def: &StructDef = self.interpreter.mem.get(def_pos);
 
                         #[cfg(feature = "gc_debug")]
                         let desc = {
                             let mut members = Vec::new();
                             for idx in pos..(pos + def.member_count as usize) {
-                                members.push(ShimValue::from_u64(self.mem.mem[idx]));
+                                members.push(ShimValue::from_u64(self.interpreter.mem.mem[idx]));
                             }
                             MemDescriptor::struct_desc(
                                 pos,
@@ -1013,7 +1025,7 @@ impl<'a> GC<'a> {
                         for idx in pos..(pos + def.member_count as usize) {
                             mark_bit!(self.mask, idx, desc);
                             // Push the members
-                            vals.push(ShimValue::from_u64(self.mem.mem[idx]));
+                            vals.push(ShimValue::from_u64(self.interpreter.mem.mem[idx]));
                         }
                         vals.push(ShimValue::StructDef(def_pos));
                     }
@@ -1034,7 +1046,7 @@ impl<'a> GC<'a> {
                             continue;
                         }
                         let type_idx: usize = type_idx.into();
-                        let info = &self.mem.native_type_registry[type_idx];
+                        let info = &self.interpreter.mem.native_type_registry[type_idx];
                         let native_word_count = info.word_count;
                         #[cfg(feature = "gc_debug")]
                         let desc = MemDescriptor::other(pos, pos + native_word_count, "Native");
@@ -1044,7 +1056,7 @@ impl<'a> GC<'a> {
 
                         // Reconstruct a fat pointer to call gc_vals() without a Box.
                         let vtable = info.vtable;
-                        let data_ptr = &self.mem.mem[pos] as *const u64 as *const ();
+                        let data_ptr = &self.interpreter.mem.mem[pos] as *const u64 as *const ();
                         let fat_ptr: (*const (), *const ()) = (data_ptr, vtable);
                         let native_ref: &dyn ShimNative = std::mem::transmute(fat_ptr);
                         vals.extend(native_ref.gc_vals());
@@ -1066,9 +1078,9 @@ impl<'a> GC<'a> {
                             MemDescriptor::other(pos + 1, pos + 2, "Bound Method fn")
                         );
 
-                        let obj = ShimValue::from_u64(self.mem.mem[pos]);
+                        let obj = ShimValue::from_u64(self.interpreter.mem.mem[pos]);
                         vals.push(obj);
-                        let func_pos = u24::from(self.mem.mem[pos + 1]);
+                        let func_pos = u24::from(self.interpreter.mem.mem[pos + 1]);
                         vals.push(ShimValue::Fn(func_pos));
                     }
                     ShimValue::BoundNativeMethod(pos) => {
@@ -1091,7 +1103,7 @@ impl<'a> GC<'a> {
 
                         // word[pos] is the ShimValue object (e.g. ShimValue::Native); push it to
                         // be processed so its memory is also marked and gc_vals() called on it.
-                        let obj = ShimValue::from_u64(self.mem.mem[pos]);
+                        let obj = ShimValue::from_u64(self.interpreter.mem.mem[pos]);
                         vals.push(obj);
                     }
                     ShimValue::Environment(pos) => {
@@ -1100,7 +1112,7 @@ impl<'a> GC<'a> {
                         if self.mask.is_set(pos) {
                             continue;
                         }
-                        let scope: &EnvScope = self.mem.get(og_pos);
+                        let scope: &EnvScope = self.interpreter.mem.get(og_pos);
 
                         // Chunk of memory that store the EnvScope metadata
                         #[cfg(feature = "gc_debug")]
@@ -1118,13 +1130,13 @@ impl<'a> GC<'a> {
                         let end = start + scope.capacity as usize;
                         #[cfg(feature = "gc_debug")]
                         let scope_description =
-                            MemDescriptor::env_data(start, end, &scope.to_string(self.mem));
+                            MemDescriptor::env_data(start, end, &scope.to_string(&self.interpreter.mem));
                         for bit in start..end {
                             mark_bit!(self.mask, bit, scope_description);
                         }
 
                         // Walk the contiguous data block and collect values
-                        let bytes = scope.raw_bytes(self.mem);
+                        let bytes = scope.raw_bytes(&self.interpreter.mem);
                         let mut off = 0usize;
                         while off < bytes.len() {
                             let key_len = bytes[off] as usize;
@@ -1151,18 +1163,32 @@ impl<'a> GC<'a> {
         }
     }
 
-    pub(crate) fn sweep(&mut self) -> Vec<FreeBlock> {
-        let _zone = zone_scoped!("GC sweep");
+    pub fn drop_orphaned_native_types(&mut self) {
+        let (to_keep, to_drop): (Vec<_>, Vec<_>) = self.interpreter.mem.droppable_native_pos
+            .drain(..)
+            .partition(|(pos, _)| self.mask.is_set(*pos as usize));
 
-        for pos in self.droppable_native_pos.iter() {
-            if self.mask.is_set(pos) {
-                // GET THE VALUE FROM POS
-                // CALL gc_drop
+        self.interpreter.mem.droppable_native_pos = to_keep;
+        self.interpreter.mem.dropping_native = true;
+
+        for (pos, type_idx) in to_drop {
+            let vtable = self.interpreter.mem.native_type_registry[usize::from(type_idx)].vtable;
+            unsafe {
+                let data_ptr = self.interpreter.mem.mem().as_ptr().add(pos as usize) as *const ();
+                let fat_ptr: (*const (), *const ()) = (data_ptr, vtable);
+                let val: &dyn ShimNative = std::mem::transmute(fat_ptr);
+                val.gc_drop(self.interpreter);
             }
         }
 
+        self.interpreter.mem.dropping_native = false;
+    }
+
+    pub(crate) fn sweep(&mut self) {
+        let _zone = zone_scoped!("GC sweep");
+
         // TODO: need to add the original last block from the free list
-        let last_block = self.mem.free_list[self.mem.free_list.len() - 1];
+        let last_block = self.interpreter.mem.free_list[self.interpreter.mem.free_list.len() - 1];
         let mut free_list: Vec<FreeBlock> = self
             .mask
             .find_zeros()
@@ -1184,6 +1210,6 @@ impl<'a> GC<'a> {
             free_list.push(last_block);
         }
 
-        free_list
+        self.interpreter.mem.free_list = free_list;
     }
 }

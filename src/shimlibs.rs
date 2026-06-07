@@ -1462,7 +1462,6 @@ pub(crate) fn shim_average(
         count += 1;
     }
 
-    let mut args = ArgBundle::new();
     acc.unwrap_or(ShimValue::Float(0.0)).div(interpreter, &ShimValue::Integer(count))
 }
 

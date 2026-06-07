@@ -521,8 +521,6 @@ const _: () = {
 };
 
 pub trait ShimNative: 'static {
-    const NEEDS_DROP: bool = false;
-
     fn to_string(&self, _interpreter: &mut Interpreter) -> String {
         type_name::<Self>().to_string()
     }
@@ -549,9 +547,9 @@ pub trait ShimNative: 'static {
         Err(format!("Can't set_attr on {}", type_name::<Self>()))
     }
 
-    fn needs_drop(&self) -> bool { Self::NEEDS_DROP }
+    fn needs_drop(&self) -> bool { false }
 
-    fn gc_drop(&self, &mut Interpreter) {}
+    fn gc_drop(&self, _interpreter: &mut Interpreter) {}
 
     fn gc_vals(&self) -> Vec<ShimValue>;
 }
@@ -2138,16 +2136,15 @@ impl Interpreter {
 
         let roots = vec![ShimValue::Environment(u24::from(env.current_scope))];
 
-        // Now create GC and process roots
-        let mut gc = {
-            let _zone = zone_scoped!("Init GC");
-            GC::new(&self.mem)
-        };
-
         {
             let _zone = zone_scoped!("GC Mark and Sweep");
+            let mut gc = {
+                let _zone = zone_scoped!("Init GC");
+                GC::new(self)
+            };
             gc.mark(roots);
-            self.mem.free_list = gc.sweep();
+            gc.sweep();
+            gc.drop_orphaned_native_types();
         }
     }
 
@@ -2946,13 +2943,13 @@ impl Interpreter {
         }
     }
 
-    pub fn describe_memory(&self, env: &Environment) -> HashMap<usize, MemDescriptor> {
+    pub fn describe_memory(&mut self, env: &Environment) -> HashMap<usize, MemDescriptor> {
         let roots = vec![ShimValue::Environment(u24::from(env.current_scope))];
 
         // Now create GC and process roots
         let mut gc = {
             let _zone = zone_scoped!("Init GC");
-            GC::new(&self.mem)
+            GC::new(self)
         };
         gc.mark(roots);
 
