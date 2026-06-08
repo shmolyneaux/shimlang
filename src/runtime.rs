@@ -192,7 +192,7 @@ fn scan_for_key(bytes: &[u8], key: &[u8]) -> Option<usize> {
     None
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Environment {
     // Points to the current EnvScope in MMU
     // u32 is used as u24 converted to u32, 0 means no scope (empty environment)
@@ -215,34 +215,36 @@ impl Environment {
         }
     }
 
-    pub fn new_with_builtins(interpreter: &mut Interpreter) -> Self {
-        let mut env = Self::new(&mut interpreter.mem);
-        let builtins: &[(&[u8], Box<NativeFn>)] = &[
-            (b"print", Box::new(shim_print)),
-            (b"panic", Box::new(shim_panic)),
-            (b"dict", Box::new(shim_dict)),
-            (b"Range", Box::new(shim_range)),
-            (b"enumerate", Box::new(shim_enumerate)),
-            (b"average", Box::new(shim_average)),
-            (b"assert", Box::new(shim_assert)),
-            (b"str", Box::new(shim_str)),
-            (b"int", Box::new(shim_int)),
-            (b"float", Box::new(shim_float)),
-            (b"try_int", Box::new(shim_try_int)),
-            (b"try_float", Box::new(shim_try_float)),
+    pub fn new_with_builtins(mem: &mut MMU) -> Self {
+        let mut env = Self::new(mem);
+        let builtins: &[(&[u8], NativeFn)] = &[
+            (b"print", shim_print),
+            (b"panic", shim_panic),
+            (b"dict", shim_dict),
+            (b"Range", shim_range),
+            (b"enumerate", shim_enumerate),
+            (b"average", shim_average),
+            (b"assert", shim_assert),
+            (b"str", shim_str),
+            (b"int", shim_int),
+            (b"float", shim_float),
+            (b"try_int", shim_try_int),
+            (b"try_float", shim_try_float),
         ];
 
         for (name, func) in builtins {
-            let position = interpreter
-                .mem
-                .alloc_and_set(**func, &format!("builtin func {}", debug_u8s(name)));
-            env.insert_new(interpreter, name.to_vec(), ShimValue::NativeFn(position));
+            env.insert_native_fn(mem, name, *func);
         }
 
         env
     }
 
-    pub fn insert_new(&mut self, interpreter: &mut Interpreter, key: Vec<u8>, val: ShimValue) {
+    pub fn insert_native_fn(&mut self, mem: &mut MMU, name: &[u8], func: NativeFn) {
+        let position = mem.alloc_and_set(func, &format!("native fn {}", debug_u8s(name)));
+        self.insert_new(mem, name.to_vec(), ShimValue::NativeFn(position));
+    }
+
+    pub fn insert_new(&mut self, mem: &mut MMU, key: Vec<u8>, val: ShimValue) {
         assert!(
             key.len() <= u8::MAX as usize,
             "Key length {} exceeds maximum {}",
@@ -251,18 +253,18 @@ impl Environment {
         );
 
         // Check if key already exists in the current scope — update in place (upsert)
-        let scope: &EnvScope = unsafe { interpreter.mem.get(u24::from(self.current_scope)) };
-        if let Some(value_offset) = scope.scan_for_key(&interpreter.mem, &key) {
+        let scope: &EnvScope = unsafe { mem.get(u24::from(self.current_scope)) };
+        if let Some(value_offset) = scope.scan_for_key(mem, &key) {
             let (data, capacity) = (scope.data, scope.capacity);
             unsafe {
-                EnvScope::write_value_at(&mut interpreter.mem, data, capacity, value_offset, val);
+                EnvScope::write_value_at(mem, data, capacity, value_offset, val);
             }
             return;
         }
 
         // Read current scope header via raw pointer to avoid borrow issues
         let (data, capacity, used) = unsafe {
-            let scope_ptr: *mut EnvScope = interpreter.mem.mem_mut(
+            let scope_ptr: *mut EnvScope = mem.mem_mut(
                 usize::from(u24::from(self.current_scope)),
                 std::mem::size_of::<EnvScope>().div_ceil(8),
             ).as_mut_ptr() as *mut EnvScope;
@@ -284,7 +286,7 @@ impl Environment {
                 new_capacity *= 2;
             }
             let new_data =
-                EnvScope::realloc(&mut interpreter.mem, data, capacity, used, new_capacity);
+                EnvScope::realloc(mem, data, capacity, used, new_capacity);
             (new_data, new_capacity)
         } else {
             (data, capacity)
@@ -292,7 +294,7 @@ impl Environment {
 
         // Update scope header (data/capacity may have changed)
         unsafe {
-            let scope_ptr: *mut EnvScope = interpreter.mem.mem_mut(
+            let scope_ptr: *mut EnvScope = mem.mem_mut(
                 usize::from(u24::from(self.current_scope)),
                 std::mem::size_of::<EnvScope>().div_ceil(8),
             ).as_mut_ptr() as *mut EnvScope;
@@ -302,14 +304,14 @@ impl Environment {
 
         // Append entry: [len: u8][ident_bytes][value: ShimValue (8 bytes)]
         unsafe {
-            let buf = EnvScope::raw_bytes_mut_from(&mut interpreter.mem, data, capacity);
+            let buf = EnvScope::raw_bytes_mut_from(mem, data, capacity);
             let off = used as usize;
             buf[off] = key.len() as u8;
             buf[off + 1..off + 1 + key.len()].copy_from_slice(&key);
         }
         unsafe {
             EnvScope::write_value_at(
-                &mut interpreter.mem,
+                mem,
                 data,
                 capacity,
                 used as usize + 1 + key.len(),
@@ -319,7 +321,7 @@ impl Environment {
 
         // Update used in scope header
         unsafe {
-            let scope_ptr: *mut EnvScope = interpreter.mem.mem_mut(
+            let scope_ptr: *mut EnvScope = mem.mem_mut(
                 usize::from(u24::from(self.current_scope)),
                 std::mem::size_of::<EnvScope>().div_ceil(8),
             ).as_mut_ptr() as *mut EnvScope;
@@ -329,7 +331,7 @@ impl Environment {
 
     pub fn update(
         &mut self,
-        interpreter: &mut Interpreter,
+        mem: &mut MMU,
         key: &[u8],
         val: ShimValue,
     ) -> Result<(), String> {
@@ -342,24 +344,18 @@ impl Environment {
             }
 
             let (parent, data, capacity, value_offset) = unsafe {
-                let scope: &EnvScope = interpreter.mem.get(u24::from(current_scope_pos));
+                let scope: &EnvScope = mem.get(u24::from(current_scope_pos));
                 (
                     scope.parent,
                     scope.data,
                     scope.capacity,
-                    scope.scan_for_key(&interpreter.mem, key),
+                    scope.scan_for_key(mem, key),
                 )
             };
 
             if let Some(value_offset) = value_offset {
                 unsafe {
-                    EnvScope::write_value_at(
-                        &mut interpreter.mem,
-                        data,
-                        capacity,
-                        value_offset,
-                        val,
-                    );
+                    EnvScope::write_value_at(mem, data, capacity, value_offset, val);
                 }
                 return Ok(());
             }
@@ -370,7 +366,7 @@ impl Environment {
         Err(format!("Key {:?} not found in environment", key))
     }
 
-    pub fn get(&self, interpreter: &mut Interpreter, key: &[u8]) -> Option<ShimValue> {
+    pub fn get(&self, mem: &MMU, key: &[u8]) -> Option<ShimValue> {
         let mut current_scope_pos = self.current_scope;
 
         loop {
@@ -379,15 +375,15 @@ impl Environment {
             }
 
             let (parent, value_offset) = unsafe {
-                let scope: &EnvScope = interpreter.mem.get(u24::from(current_scope_pos));
-                (scope.parent, scope.scan_for_key(&interpreter.mem, key))
+                let scope: &EnvScope = mem.get(u24::from(current_scope_pos));
+                (scope.parent, scope.scan_for_key(mem, key))
             };
 
             if let Some(value_offset) = value_offset {
                 // Read the ShimValue from the byte offset
                 let val: ShimValue = unsafe {
-                    let scope: &EnvScope = interpreter.mem.get(u24::from(current_scope_pos));
-                    let bytes = scope.raw_bytes(&interpreter.mem);
+                    let scope: &EnvScope = mem.get(u24::from(current_scope_pos));
+                    let bytes = scope.raw_bytes(mem);
                     let mut val_bytes = [0u8; 8];
                     std::ptr::copy_nonoverlapping(
                         bytes[value_offset..].as_ptr(),
@@ -405,8 +401,8 @@ impl Environment {
         None
     }
 
-    fn contains_key(&self, interpreter: &mut Interpreter, key: &[u8]) -> bool {
-        self.get(interpreter, key).is_some()
+    fn contains_key(&self, mem: &MMU, key: &[u8]) -> bool {
+        self.get(mem, key).is_some()
     }
 
     fn push_scope(&mut self, mem: &mut MMU, captures: bool) {
@@ -2037,6 +2033,7 @@ pub struct Interpreter {
     pub source: HashMap<String, String>,
     pub program: Arc<Program>,
     singletons: HashMap<TypeId, Box<dyn Any + Send>>,
+    pub root_env: Environment,
 }
 
 impl Interpreter {
@@ -2127,14 +2124,15 @@ impl Interpreter {
         }
     }
 
-    pub fn gc(&mut self, env: &Environment) {
+    pub fn gc(&mut self) {
         let _zone = zone_scoped!("GC");
+        let root_scope = self.root_env.current_scope;
 
         unsafe {
-            let _scope: &EnvScope = self.mem.get(u24::from(env.current_scope));
+            let _scope: &EnvScope = self.mem.get(u24::from(root_scope));
         }
 
-        let roots = vec![ShimValue::Environment(u24::from(env.current_scope))];
+        let roots = vec![ShimValue::Environment(u24::from(root_scope))];
 
         {
             let _zone = zone_scoped!("GC Mark and Sweep");
@@ -2149,14 +2147,45 @@ impl Interpreter {
     }
 
     pub fn create(config: &Config, program: Program) -> Self {
-        let mmu = MMU::with_capacity(u24::from(config.memory_space_bytes / 8));
+        let mut mmu = MMU::with_capacity(u24::from(config.memory_space_bytes / 8));
 
+        let root_env = Environment::new_with_builtins(&mut mmu);
         Self {
             mem: mmu,
             source: HashMap::new(),
             program: Arc::new(program),
             singletons: HashMap::new(),
+            root_env,
         }
+    }
+
+    /// Add a native function to the interpreter's root environment.
+    pub fn add_native_fn(&mut self, name: &[u8], func: NativeFn) {
+        self.root_env.insert_native_fn(&mut self.mem, name, func);
+    }
+
+    pub fn execute(&mut self) -> Result<ShimValue, String> {
+        let mut pc = 0;
+        self.execute_at(&mut pc)
+    }
+
+    pub fn execute_at(&mut self, pc: &mut usize) -> Result<ShimValue, String> {
+        let mut env = std::mem::take(&mut self.root_env);
+        let result = self.execute_bytecode_extended(pc, ArgBundle::new(), &mut env);
+        self.root_env = env;
+        result
+    }
+
+    pub fn insert_in_root_env(&mut self, key: &[u8], val: ShimValue) {
+        self.root_env.insert_new(&mut self.mem, key.to_vec(), val);
+    }
+
+    pub fn update_in_root_env(&mut self, key: &[u8], val: ShimValue) -> Result<(), String> {
+        self.root_env.update(&mut self.mem, key, val)
+    }
+
+    pub fn get_from_root_env(&mut self, key: &[u8]) -> Option<ShimValue> {
+        self.root_env.get(&self.mem, key)
     }
 
     pub fn fetch_mut<T: Default + Send + 'static>(&mut self) -> &mut T {
@@ -2418,7 +2447,7 @@ impl Interpreter {
                         }
                         if let Some(idx) = found_idx {
                             let (_ident, val) = pending_args.kwargs.remove(idx);
-                            env.insert_new(self, param_name.to_vec(), val);
+                            env.insert_new(&mut self.mem, param_name.to_vec(), val);
                             set_arg = true;
                         }
 
@@ -2448,7 +2477,7 @@ impl Interpreter {
 
                                 ShimValue::Uninitialized
                             };
-                            env.insert_new(self, param_name.to_vec(), val);
+                            env.insert_new(&mut self.mem, param_name.to_vec(), val);
                         }
 
                         idx += 1 + len as usize;
@@ -2480,7 +2509,7 @@ impl Interpreter {
                     let optional_param_name = &fn_optional_param_names[fn_optional_param_name_idx];
                     fn_optional_param_name_idx += 1;
 
-                    match env.get(self, optional_param_name) {
+                    match env.get(&self.mem, optional_param_name) {
                         Some(ShimValue::Uninitialized) => (),
                         Some(_) => {
                             let new_pc =
@@ -2497,7 +2526,7 @@ impl Interpreter {
                 val if val == ByteCode::AssignArg as u8 => {
                     let arg_num = bytes[pc + 1] as usize;
                     let optional_param_name = &fn_optional_param_names[arg_num];
-                    env.update(self, optional_param_name, stack.pop().unwrap())?;
+                    env.update(&mut self.mem, optional_param_name, stack.pop().unwrap())?;
                     pc += 1;
                 }
                 val if val == ByteCode::LiteralShimValue as u8 => {
@@ -2525,7 +2554,7 @@ impl Interpreter {
                     let val = stack.pop().expect("Value for declaration");
                     let ident_len = bytes[pc + 1] as usize;
                     let ident = &bytes[pc + 2..pc + 2 + ident_len];
-                    env.insert_new(self, ident.to_vec(), val);
+                    env.insert_new(&mut self.mem, ident.to_vec(), val);
                     pc += 1 + ident_len;
                 }
                 val if val == ByteCode::Assignment as u8 => {
@@ -2533,21 +2562,21 @@ impl Interpreter {
                     let ident_len = bytes[pc + 1] as usize;
                     let ident = &bytes[pc + 2..pc + 2 + ident_len];
 
-                    if !env.contains_key(self, ident) {
+                    if !env.contains_key(&self.mem, ident) {
                         return Err(format_script_err(
                             self.program.spans[pc],
                             &self.program.script,
                             &format!("Identifier {:?} not found", ident),
                         ));
                     }
-                    env.update(self, ident, val)?;
+                    env.update(&mut self.mem, ident, val)?;
 
                     pc += 1 + ident_len;
                 }
                 val if val == ByteCode::VariableLoad as u8 => {
                     let ident_len = bytes[pc + 1] as usize;
                     let ident = &bytes[pc + 2..pc + 2 + ident_len];
-                    if let Some(value) = env.get(self, ident) {
+                    if let Some(value) = env.get(&self.mem, ident) {
                         stack.push(value);
                     } else {
                         return Err(format_script_err(
@@ -3026,8 +3055,8 @@ mod tests {
         let mut interpreter = test_interpreter();
         let mut env = Environment::new(&mut interpreter.mem);
 
-        env.insert_new(&mut interpreter, b"x".to_vec(), ShimValue::Integer(42));
-        let val = env.get(&mut interpreter, b"x");
+        env.insert_new(&mut interpreter.mem, b"x".to_vec(), ShimValue::Integer(42));
+        let val = env.get(&interpreter.mem, b"x");
         assert!(val.is_some());
         match val.unwrap() {
             ShimValue::Integer(42) => {}
@@ -3040,10 +3069,10 @@ mod tests {
         let mut interpreter = test_interpreter();
         let mut env = Environment::new(&mut interpreter.mem);
 
-        env.insert_new(&mut interpreter, b"y".to_vec(), ShimValue::Integer(1));
-        env.update(&mut interpreter, b"y", ShimValue::Integer(99))
+        env.insert_new(&mut interpreter.mem, b"y".to_vec(), ShimValue::Integer(1));
+        env.update(&mut interpreter.mem, b"y", ShimValue::Integer(99))
             .unwrap();
-        match env.get(&mut interpreter, b"y").unwrap() {
+        match env.get(&interpreter.mem, b"y").unwrap() {
             ShimValue::Integer(99) => {}
             other => panic!("Expected Integer(99), got {:?}", other),
         }
@@ -3055,32 +3084,32 @@ mod tests {
         let mut env = Environment::new(&mut interpreter.mem);
 
         env.insert_new(
-            &mut interpreter,
+            &mut interpreter.mem,
             b"root_var".to_vec(),
             ShimValue::Integer(10),
         );
         env.push_scope(&mut interpreter.mem, false);
         env.insert_new(
-            &mut interpreter,
+            &mut interpreter.mem,
             b"child_var".to_vec(),
             ShimValue::Integer(20),
         );
 
         // Can see child var
-        match env.get(&mut interpreter, b"child_var").unwrap() {
+        match env.get(&interpreter.mem, b"child_var").unwrap() {
             ShimValue::Integer(20) => {}
             other => panic!("Expected Integer(20), got {:?}", other),
         }
         // Can see parent var through scope chain
-        match env.get(&mut interpreter, b"root_var").unwrap() {
+        match env.get(&interpreter.mem, b"root_var").unwrap() {
             ShimValue::Integer(10) => {}
             other => panic!("Expected Integer(10), got {:?}", other),
         }
 
         // Pop scope and child var is gone
         env.pop_scope(&mut interpreter.mem).unwrap();
-        assert!(env.get(&mut interpreter, b"child_var").is_none());
-        match env.get(&mut interpreter, b"root_var").unwrap() {
+        assert!(env.get(&interpreter.mem, b"child_var").is_none());
+        match env.get(&interpreter.mem, b"root_var").unwrap() {
             ShimValue::Integer(10) => {}
             other => panic!("Expected Integer(10), got {:?}", other),
         }
@@ -3095,7 +3124,7 @@ mod tests {
         for i in 0..20u8 {
             let name = format!("var_{}", i);
             env.insert_new(
-                &mut interpreter,
+                &mut interpreter.mem,
                 name.into_bytes(),
                 ShimValue::Integer(i as i32),
             );
@@ -3103,7 +3132,7 @@ mod tests {
         // Verify all are retrievable
         for i in 0..20u8 {
             let name = format!("var_{}", i);
-            match env.get(&mut interpreter, name.as_bytes()).unwrap() {
+            match env.get(&interpreter.mem, name.as_bytes()).unwrap() {
                 ShimValue::Integer(v) if v == i as i32 => {}
                 other => panic!("Expected Integer({}), got {:?}", i, other),
             }

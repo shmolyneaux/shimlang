@@ -39,13 +39,11 @@ fn run() -> Result<(), String> {
     };
     let program = shimlang::compile_ast(&ast)?;
     let mut interpreter = shimlang::Interpreter::create(&Config::default(), program);
-    let mut env = shimlang::Environment::new_with_builtins(&mut interpreter);
-    let mut pc = 0;
 
     for _ in 0..3 {
-        match interpreter.execute_bytecode_extended(&mut pc, shimlang::ArgBundle::new(), &mut env) {
+        match interpreter.execute() {
             Ok(_) => {
-                interpreter.gc(&env);
+                interpreter.gc();
             }
             Err(msg) => {
                 eprintln!("{msg}");
