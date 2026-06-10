@@ -1,5 +1,6 @@
 use std::any::{Any, TypeId, type_name};
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::mem::size_of;
 use std::sync::Arc;
 
@@ -2027,6 +2028,38 @@ impl ShimValue {
     }
 }
 
+pub enum DebugHookResponse {
+    PropogateError(String),
+    RetryInstruction,
+}
+
+pub trait DebugHook: Send {
+    fn on_execute_error(
+        &mut self,
+        msg: &str,
+        interpreter: &mut Interpreter,
+        pending_args: &mut ArgBundle,
+        env: &mut Environment,
+        initial_scope: u32,
+        bytes: &[u8],
+        pc: usize,
+        stack_frame: &mut Vec<(
+            usize,
+            Vec<(usize, usize, usize)>,
+            usize,
+            u32,
+            Vec<Ident>,
+            usize,
+            usize,
+        )>,
+        stack: &mut Vec<ShimValue>,
+        loop_info: &mut Vec<(usize, usize, usize)>,
+        fn_optional_param_name_idx: &mut usize,
+        fn_optional_param_names: &mut Vec<Ident>,
+    ) -> DebugHookResponse;
+}
+
+
 // TODO: uncomment #[derive(Facet)]
 pub struct Interpreter {
     pub mem: MMU,
@@ -2034,9 +2067,18 @@ pub struct Interpreter {
     pub program: Arc<Program>,
     singletons: HashMap<TypeId, Box<dyn Any + Send>>,
     pub root_env: Environment,
+    pub debug_hook: Option<Box<dyn DebugHook>>,
 }
 
 impl Interpreter {
+    pub fn set_debug_hook(&mut self, hook: Box<dyn DebugHook>) {
+        self.debug_hook = Some(hook);
+    }
+
+    pub fn clear_debug_hook(&mut self) {
+        self.debug_hook = None;
+    }
+
     pub fn print_mem(&self) {
         let _zone = zone_scoped!("print_mem");
         let mut count = 0;
@@ -2054,8 +2096,9 @@ impl Interpreter {
         }
     }
 
-    pub fn print_env(&self, env: &Environment) {
-        let _zone = zone_scoped!("print_env");
+    pub fn format_env(&self, env: &Environment) -> String {
+        let _zone = zone_scoped!("format_env");
+        let mut out = String::new();
         let mut current_scope_pos = env.current_scope;
         let mut idx = 0;
 
@@ -2064,7 +2107,7 @@ impl Interpreter {
                 break;
             }
 
-            println!("Scope {idx}");
+            out.push_str(&format!("Scope {idx}\n"));
 
             // Get the EnvScope
             let scope: &EnvScope = unsafe { self.mem.get(u24::from(current_scope_pos)) };
@@ -2085,7 +2128,7 @@ impl Interpreter {
                     );
                     std::mem::transmute(val_bytes)
                 };
-                println!("{:>12}: {:?}", debug_u8s(key_bytes), val);
+                out.push_str(&format!("{:>12}: {:?}\n", debug_u8s(key_bytes), val));
                 match val {
                     ShimValue::Struct(def_pos, pos) => unsafe {
                         let def: &StructDef = self.mem.get(def_pos);
@@ -2093,7 +2136,7 @@ impl Interpreter {
                             match loc {
                                 StructAttribute::MemberInstanceOffset(offset) => {
                                     let val: ShimValue = *self.mem.get(pos + *offset as u32);
-                                    println!("                - {} = {:?}", debug_u8s(attr), val);
+                                    out.push_str(&format!("                - {} = {:?}\n", debug_u8s(attr), val));
                                 }
                                 StructAttribute::MethodDef(_) => (),
                             };
@@ -2104,10 +2147,10 @@ impl Interpreter {
                         for (attr, loc) in def.lookup.iter() {
                             match loc {
                                 StructAttribute::MemberInstanceOffset(_) => {
-                                    println!("                - {}", debug_u8s(attr));
+                                    out.push_str(&format!("                - {}\n", debug_u8s(attr)));
                                 }
                                 StructAttribute::MethodDef(_) => {
-                                    println!("                - {}()", debug_u8s(attr));
+                                    out.push_str(&format!("                - {}()\n", debug_u8s(attr)));
                                 }
                             };
                         }
@@ -2122,6 +2165,12 @@ impl Interpreter {
             current_scope_pos = parent;
             idx += 1;
         }
+
+        out
+    }
+
+    pub fn print_env(&self, env: &Environment) {
+        print!("{}", self.format_env(env));
     }
 
     pub fn gc(&mut self) {
@@ -2156,6 +2205,7 @@ impl Interpreter {
             program: Arc::new(program),
             singletons: HashMap::new(),
             root_env,
+            debug_hook: None,
         }
     }
 
@@ -2233,22 +2283,7 @@ impl Interpreter {
         // This is the (PC, loop_info, scope_count, caller_scope, fn_optional_param_names,
         // fn_optional_param_name_idx, stack_depth) call stack
         #[allow(clippy::type_complexity)]
-        let mut stack_frame: Vec<(
-            // PC
-            usize,
-            // loop_info
-            Vec<(usize, usize, usize)>,
-            // scope_count
-            usize,
-            // caller_scope
-            u32,
-            // fn_optional_param_names
-            Vec<Ident>,
-            // fn_optional_param_name_idx
-            usize,
-            // stack_depth at call site (used to clean up on return)
-            usize,
-        )> = Vec::new();
+        let mut stack_frame = Vec::new();
 
         // This is the PC of the (start, end, scope_count) of the current loop for the
         // current function
@@ -2259,6 +2294,71 @@ impl Interpreter {
 
         let bytes = &self.program.clone().bytecode;
         while pc < bytes.len() {
+            match self.execute_bytecode_extended_inner(
+                &mut pending_args, env, initial_scope, bytes, pc,
+                &mut stack_frame, &mut stack, &mut loop_info,
+                &mut fn_optional_param_name_idx, &mut fn_optional_param_names,
+            ) {
+                Ok((new_pc, None)) => pc = new_pc,
+                Ok((new_pc, Some(val))) => {
+                    *mod_pc = new_pc;
+                    return Ok(val);
+                }
+                Err(msg) => {
+                    let hook = std::mem::take(&mut self.debug_hook);
+                    if let Some(mut hook) = hook {
+                        match hook.on_execute_error(
+                            &msg, self,
+                            &mut pending_args, env, initial_scope, bytes, pc,
+                            &mut stack_frame, &mut stack, &mut loop_info,
+                            &mut fn_optional_param_name_idx, &mut fn_optional_param_names,
+                        ) {
+                            DebugHookResponse::PropogateError(msg) => {
+                                println!("Debug hook propagating error");
+                                return Err(msg);
+                            }
+                            _ => todo!(),
+                        }
+                    } else {
+                        return Err(msg);
+                    }
+                }
+            }
+        }
+
+        *mod_pc = pc;
+        if !stack.is_empty() {
+            Ok(stack.pop().unwrap())
+        } else {
+            Ok(ShimValue::Uninitialized)
+        }
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn execute_bytecode_extended_inner(
+        &mut self,
+        pending_args: &mut ArgBundle,
+        env: &mut Environment,
+        initial_scope: u32,
+        bytes: &[u8],
+        mut pc: usize,
+        stack_frame: &mut Vec<(
+            usize,
+            Vec<(usize, usize, usize)>,
+            usize,
+            u32,
+            Vec<Ident>,
+            usize,
+            usize,
+        )>,
+        stack: &mut Vec<ShimValue>,
+        loop_info: &mut Vec<(usize, usize, usize)>,
+        fn_optional_param_name_idx: &mut usize,
+        fn_optional_param_names: &mut Vec<Ident>,
+    ) -> Result<(usize, Option<ShimValue>), String> {
+        // Adding nesting so that the diff is clearer when this inner loop
+        // was factored out
+        {
             //let _zone = zone_scoped!("Execute Single Instruction");
             match bytes[pc] {
                 val if val == ByteCode::Pop as u8 => {
@@ -2268,7 +2368,7 @@ impl Interpreter {
                     let b = stack.pop().expect("Operand for add");
                     let a = stack.pop().expect("Operand for add");
 
-                    match a.add(self, &b, &mut pending_args).map_err(|err_str| {
+                    match a.add(self, &b, pending_args).map_err(|err_str| {
                         format_script_err(self.program.spans[pc], &self.program.script, &err_str)
                     })? {
                         CallResult::ReturnValue(res) => stack.push(res),
@@ -2279,14 +2379,14 @@ impl Interpreter {
                                 env.scope_depth(&self.mem),
                                 env.current_scope,
                                 fn_optional_param_names.clone(),
-                                fn_optional_param_name_idx,
+                                *fn_optional_param_name_idx,
                                 stack.len(),
                             ));
-                            loop_info = Vec::new();
+                            *loop_info = Vec::new();
                             // Restore the captured environment and push a new scope for function locals
                             env.current_scope = captured_scope;
                             pc = new_pc as usize;
-                            continue;
+                            return Ok((pc, None));
                         }
                     }
                 }
@@ -2406,7 +2506,7 @@ impl Interpreter {
                         env.pop_scope(&mut self.mem).unwrap();
                     }
                     pc = *end_pc;
-                    continue;
+                    return Ok((pc, None));
                 }
                 val if val == ByteCode::Continue as u8 => {
                     let (start_pc, _, scope_count) =
@@ -2415,7 +2515,7 @@ impl Interpreter {
                         env.pop_scope(&mut self.mem).unwrap();
                     }
                     pc = *start_pc;
-                    continue;
+                    return Ok((pc, None));
                 }
                 val if val == ByteCode::UnpackArgs as u8 => {
                     let required_arg_count = bytes[pc + 1] as usize;
@@ -2424,7 +2524,7 @@ impl Interpreter {
                     let mut pos_arg_idx = 0;
 
                     fn_optional_param_names.clear();
-                    fn_optional_param_name_idx = 0;
+                    *fn_optional_param_name_idx = 0;
 
                     // Assign each parameter in the function to something
                     let mut idx = pc + 3;
@@ -2503,11 +2603,11 @@ impl Interpreter {
                         ));
                     }
                     pc = idx;
-                    continue;
+                    return Ok((pc, None));
                 }
                 val if val == ByteCode::JmpInitArg as u8 => {
-                    let optional_param_name = &fn_optional_param_names[fn_optional_param_name_idx];
-                    fn_optional_param_name_idx += 1;
+                    let optional_param_name = &fn_optional_param_names[*fn_optional_param_name_idx];
+                    *fn_optional_param_name_idx += 1;
 
                     match env.get(&self.mem, optional_param_name) {
                         Some(ShimValue::Uninitialized) => (),
@@ -2515,7 +2615,7 @@ impl Interpreter {
                             let new_pc =
                                 pc + (((bytes[pc + 1] as usize) << 8) + bytes[pc + 2] as usize);
                             pc = new_pc;
-                            continue;
+                            return Ok((pc, None));
                         }
                         None => {
                             return Err("Expected UnpackArgs to set indent that doesn't exist!".to_string());
@@ -2662,7 +2762,7 @@ impl Interpreter {
 
                     let callable = stack.pop().expect("callable not on stack");
 
-                    match callable.call(self, &mut pending_args).map_err(|err_str| {
+                    match callable.call(self, pending_args).map_err(|err_str| {
                         format_script_err(self.program.spans[pc], &self.program.script, &err_str)
                     })? {
                         CallResult::ReturnValue(res) => stack.push(res),
@@ -2673,14 +2773,14 @@ impl Interpreter {
                                 env.scope_depth(&self.mem),
                                 env.current_scope,
                                 fn_optional_param_names.clone(),
-                                fn_optional_param_name_idx,
+                                *fn_optional_param_name_idx,
                                 stack.len(),
                             ));
-                            loop_info = Vec::new();
+                            *loop_info = Vec::new();
                             // Restore the captured environment and push a new scope for function locals
                             env.current_scope = captured_scope;
                             pc = new_pc as usize;
-                            continue;
+                            return Ok((pc, None));
                         }
                     }
                     pc += 2;
@@ -2711,7 +2811,7 @@ impl Interpreter {
                     let obj = stack.pop().expect("obj not on stack");
 
                     match obj
-                        .attr_call(ident, self, &mut pending_args)
+                        .attr_call(ident, self, pending_args)
                         .map_err(|err_str| {
                             format_script_err(
                                 self.program.spans[pc],
@@ -2727,14 +2827,14 @@ impl Interpreter {
                                 env.scope_depth(&self.mem),
                                 env.current_scope,
                                 fn_optional_param_names.clone(),
-                                fn_optional_param_name_idx,
+                                *fn_optional_param_name_idx,
                                 stack.len(),
                             ));
-                            loop_info = Vec::new();
+                            *loop_info = Vec::new();
                             // Restore the captured environment and push a new scope for function locals
                             env.current_scope = captured_scope;
                             pc = new_pc as usize;
-                            continue;
+                            return Ok((pc, None));
                         }
                     }
                     pc += 3 + ident_len as usize;
@@ -2765,28 +2865,18 @@ impl Interpreter {
                             env.pop_scope(&mut self.mem).unwrap();
                         }
 
-                        // TODO: we should supply `pc` as a `&mut usize`, but
-                        // that requires changing far too much code here that
-                        // works with `pc` as a value.
-                        *mod_pc = pc;
-                        return Ok(return_value);
+                        return Ok((pc, Some(return_value)));
                     }
 
                     // The value at the top of the stack is the return value of
                     // the function, so we just need to pop the PC
                     let return_value = stack.pop().expect("return value on stack");
-                    let scope_count;
-                    let caller_scope;
-                    let stack_depth;
-                    (
-                        pc,
-                        loop_info,
-                        scope_count,
-                        caller_scope,
-                        fn_optional_param_names,
-                        fn_optional_param_name_idx,
-                        stack_depth,
-                    ) = stack_frame.pop().expect("stack frame to return to");
+                    let (new_pc, new_loop_info, scope_count, caller_scope, new_fn_names, new_fn_name_idx, stack_depth) =
+                        stack_frame.pop().expect("stack frame to return to");
+                    pc = new_pc;
+                    *loop_info = new_loop_info;
+                    *fn_optional_param_names = new_fn_names;
+                    *fn_optional_param_name_idx = new_fn_name_idx;
                     // Clean up any extra values left on the stack (e.g. for-loop
                     // iterators that weren't popped due to early return)
                     stack.truncate(stack_depth);
@@ -2796,18 +2886,18 @@ impl Interpreter {
                     }
                     // Restore the caller's environment scope
                     env.current_scope = caller_scope;
-                    continue;
+                    return Ok((pc, None));
                 }
                 val if val == ByteCode::JmpUp as u8 => {
                     let new_pc = pc - (((bytes[pc + 1] as usize) << 8) + bytes[pc + 2] as usize);
                     pc = new_pc;
-                    continue;
+                    return Ok((pc, None));
                 }
                 val if val == ByteCode::Jmp as u8 => {
                     // TODO: signed jumps
                     let new_pc = pc + ((bytes[pc + 1] as usize) << 8) + bytes[pc + 2] as usize;
                     pc = new_pc;
-                    continue;
+                    return Ok((pc, None));
                 }
                 val if val == ByteCode::JmpNZ as u8 => {
                     let conditional = stack.pop().expect("JMPNZ val to check");
@@ -2815,7 +2905,7 @@ impl Interpreter {
                         // TODO: signed jumps
                         let new_pc = pc + ((bytes[pc + 1] as usize) << 8) + bytes[pc + 2] as usize;
                         pc = new_pc;
-                        continue;
+                        return Ok((pc, None));
                     }
                     pc += 2;
                 }
@@ -2825,7 +2915,7 @@ impl Interpreter {
                         // TODO: signed jumps
                         let new_pc = pc + ((bytes[pc + 1] as usize) << 8) + bytes[pc + 2] as usize;
                         pc = new_pc;
-                        continue;
+                        return Ok((pc, None));
                     }
                     pc += 2;
                 }
@@ -2954,21 +3044,14 @@ impl Interpreter {
                     stack.push(ShimValue::StructDef(pos));
 
                     pc = new_pc;
-                    continue;
+                    return Ok((pc, None));
                 }
                 b => {
                     print_asm(bytes);
                     return Err(format!("Unknown bytecode {b} at PC {pc}"));
                 }
             }
-            pc += 1;
-        }
-
-        *mod_pc = pc;
-        if !stack.is_empty() {
-            Ok(stack.pop().unwrap())
-        } else {
-            Ok(ShimValue::Uninitialized)
+            Ok((pc + 1, None))
         }
     }
 
