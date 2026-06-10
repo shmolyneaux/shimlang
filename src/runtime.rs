@@ -2295,13 +2295,11 @@ impl Interpreter {
         let bytes = &self.program.clone().bytecode;
         while pc < bytes.len() {
             match self.execute_bytecode_extended_inner(
-                &mut pending_args, env, initial_scope, bytes, pc,
+                &mut pending_args, env, initial_scope, bytes, &mut pc,
                 &mut stack_frame, &mut stack, &mut loop_info,
                 &mut fn_optional_param_name_idx, &mut fn_optional_param_names,
             ) {
-                Ok((new_pc, None)) => pc = new_pc,
-                Ok((new_pc, Some(val))) => {
-                    *mod_pc = new_pc;
+                Ok(val) => {
                     return Ok(val);
                 }
                 Err(msg) => {
@@ -2340,7 +2338,7 @@ impl Interpreter {
         env: &mut Environment,
         initial_scope: u32,
         bytes: &[u8],
-        mut pc: usize,
+        pc: &mut usize,
         stack_frame: &mut Vec<(
             usize,
             Vec<(usize, usize, usize)>,
@@ -2354,12 +2352,11 @@ impl Interpreter {
         loop_info: &mut Vec<(usize, usize, usize)>,
         fn_optional_param_name_idx: &mut usize,
         fn_optional_param_names: &mut Vec<Ident>,
-    ) -> Result<(usize, Option<ShimValue>), String> {
-        // Adding nesting so that the diff is clearer when this inner loop
-        // was factored out
-        {
+    ) -> Result<ShimValue, String> {
+        let _zone = zone_scoped!("Execute Bytecode");
+        while *pc < bytes.len() {
             //let _zone = zone_scoped!("Execute Single Instruction");
-            match bytes[pc] {
+            match bytes[*pc] {
                 val if val == ByteCode::Pop as u8 => {
                     stack.pop();
                 }
@@ -2368,12 +2365,12 @@ impl Interpreter {
                     let a = stack.pop().expect("Operand for add");
 
                     match a.add(self, &b, pending_args).map_err(|err_str| {
-                        format_script_err(self.program.spans[pc], &self.program.script, &err_str)
+                        format_script_err(self.program.spans[*pc], &self.program.script, &err_str)
                     })? {
                         CallResult::ReturnValue(res) => stack.push(res),
                         CallResult::PC(new_pc, captured_scope) => {
                             stack_frame.push((
-                                pc + 1,
+                                *pc + 1,
                                 loop_info.clone(),
                                 env.scope_depth(&self.mem),
                                 env.current_scope,
@@ -2384,8 +2381,8 @@ impl Interpreter {
                             *loop_info = Vec::new();
                             // Restore the captured environment and push a new scope for function locals
                             env.current_scope = captured_scope;
-                            pc = new_pc as usize;
-                            return Ok((pc, None));
+                            *pc = new_pc as usize;
+                            continue;
                         }
                     }
                 }
@@ -2393,7 +2390,7 @@ impl Interpreter {
                     let b = stack.pop().expect("Operand for add");
                     let a = stack.pop().expect("Operand for add");
                     stack.push(a.sub(self, &b).map_err(|err_str| {
-                        format_script_err(self.program.spans[pc], &self.program.script, &err_str)
+                        format_script_err(self.program.spans[*pc], &self.program.script, &err_str)
                     })?);
                 }
                 val if val == ByteCode::Equal as u8 => {
@@ -2410,49 +2407,49 @@ impl Interpreter {
                     let b = stack.pop().expect("Operand for ByteCode::Multiply");
                     let a = stack.pop().expect("Operand for ByteCode::Multiply");
                     stack.push(a.mul(self, &b).map_err(|err_str| {
-                        format_script_err(self.program.spans[pc], &self.program.script, &err_str)
+                        format_script_err(self.program.spans[*pc], &self.program.script, &err_str)
                     })?);
                 }
                 val if val == ByteCode::Divide as u8 => {
                     let b = stack.pop().expect("Operand for ByteCode::Divide");
                     let a = stack.pop().expect("Operand for ByteCode::Divide");
                     stack.push(a.div(self, &b).map_err(|err_str| {
-                        format_script_err(self.program.spans[pc], &self.program.script, &err_str)
+                        format_script_err(self.program.spans[*pc], &self.program.script, &err_str)
                     })?);
                 }
                 val if val == ByteCode::Modulus as u8 => {
                     let b = stack.pop().expect("Operand for ByteCode::Modulus");
                     let a = stack.pop().expect("Operand for ByteCode::Modulus");
                     stack.push(a.modulus(self, &b).map_err(|err_str| {
-                        format_script_err(self.program.spans[pc], &self.program.script, &err_str)
+                        format_script_err(self.program.spans[*pc], &self.program.script, &err_str)
                     })?);
                 }
                 val if val == ByteCode::GT as u8 => {
                     let b = stack.pop().expect("Operand for ByteCode::GT");
                     let a = stack.pop().expect("Operand for ByteCode::GT");
                     stack.push(a.gt(self, &b).map_err(|err_str| {
-                        format_script_err(self.program.spans[pc], &self.program.script, &err_str)
+                        format_script_err(self.program.spans[*pc], &self.program.script, &err_str)
                     })?);
                 }
                 val if val == ByteCode::Gte as u8 => {
                     let b = stack.pop().expect("Operand for ByteCode::Gte");
                     let a = stack.pop().expect("Operand for ByteCode::Gte");
                     stack.push(a.gte(self, &b).map_err(|err_str| {
-                        format_script_err(self.program.spans[pc], &self.program.script, &err_str)
+                        format_script_err(self.program.spans[*pc], &self.program.script, &err_str)
                     })?);
                 }
                 val if val == ByteCode::LT as u8 => {
                     let b = stack.pop().expect("Operand for ByteCode::LT");
                     let a = stack.pop().expect("Operand for ByteCode::LT");
                     stack.push(a.lt(self, &b).map_err(|err_str| {
-                        format_script_err(self.program.spans[pc], &self.program.script, &err_str)
+                        format_script_err(self.program.spans[*pc], &self.program.script, &err_str)
                     })?);
                 }
                 val if val == ByteCode::Lte as u8 => {
                     let b = stack.pop().expect("Operand for ByteCode::Lte");
                     let a = stack.pop().expect("Operand for ByteCode::Lte");
                     stack.push(a.lte(self, &b).map_err(|err_str| {
-                        format_script_err(self.program.spans[pc], &self.program.script, &err_str)
+                        format_script_err(self.program.spans[*pc], &self.program.script, &err_str)
                     })?);
                 }
                 val if val == ByteCode::In as u8 => {
@@ -2485,15 +2482,15 @@ impl Interpreter {
                     stack.push(*stack.last().expect("non-empty stack"));
                 }
                 val if val == ByteCode::CopyFrom as u8 => {
-                    let offset = bytes[pc + 1] as usize;
+                    let offset = bytes[*pc + 1] as usize;
                     let idx = stack.len() - 1 - offset;
                     stack.push(stack[idx]);
-                    pc += 1;
+                    *pc += 1;
                 }
                 val if val == ByteCode::LoopStart as u8 => {
-                    let loop_end = pc + (((bytes[pc + 1] as usize) << 8) + bytes[pc + 2] as usize);
-                    loop_info.push((pc + 3, loop_end, env.scope_depth(&self.mem)));
-                    pc += 2;
+                    let loop_end = *pc + (((bytes[*pc + 1] as usize) << 8) + bytes[*pc + 2] as usize);
+                    loop_info.push((*pc + 3, loop_end, env.scope_depth(&self.mem)));
+                    *pc += 2;
                 }
                 val if val == ByteCode::LoopEnd as u8 => {
                     loop_info.pop().expect("loop end should have loop info");
@@ -2504,8 +2501,8 @@ impl Interpreter {
                     while env.scope_depth(&self.mem) > *scope_count {
                         env.pop_scope(&mut self.mem).unwrap();
                     }
-                    pc = *end_pc;
-                    return Ok((pc, None));
+                    *pc = *end_pc;
+                    continue;
                 }
                 val if val == ByteCode::Continue as u8 => {
                     let (start_pc, _, scope_count) =
@@ -2513,12 +2510,12 @@ impl Interpreter {
                     while env.scope_depth(&self.mem) > *scope_count {
                         env.pop_scope(&mut self.mem).unwrap();
                     }
-                    pc = *start_pc;
-                    return Ok((pc, None));
+                    *pc = *start_pc;
+                    continue;
                 }
                 val if val == ByteCode::UnpackArgs as u8 => {
-                    let required_arg_count = bytes[pc + 1] as usize;
-                    let optional_arg_count = bytes[pc + 2] as usize;
+                    let required_arg_count = bytes[*pc + 1] as usize;
+                    let optional_arg_count = bytes[*pc + 2] as usize;
 
                     let mut pos_arg_idx = 0;
 
@@ -2526,7 +2523,7 @@ impl Interpreter {
                     *fn_optional_param_name_idx = 0;
 
                     // Assign each parameter in the function to something
-                    let mut idx = pc + 3;
+                    let mut idx = *pc + 3;
                     for param_idx in 0..(required_arg_count + optional_arg_count) {
                         let len = bytes[idx];
                         let param_name = &bytes[idx + 1..idx + 1 + len as usize];
@@ -2601,8 +2598,8 @@ impl Interpreter {
                             &msg,
                         ));
                     }
-                    pc = idx;
-                    return Ok((pc, None));
+                    *pc = idx;
+                    continue;
                 }
                 val if val == ByteCode::JmpInitArg as u8 => {
                     let optional_param_name = &fn_optional_param_names[*fn_optional_param_name_idx];
@@ -2612,83 +2609,83 @@ impl Interpreter {
                         Some(ShimValue::Uninitialized) => (),
                         Some(_) => {
                             let new_pc =
-                                pc + (((bytes[pc + 1] as usize) << 8) + bytes[pc + 2] as usize);
-                            pc = new_pc;
-                            return Ok((pc, None));
+                                *pc + (((bytes[*pc + 1] as usize) << 8) + bytes[*pc + 2] as usize);
+                            *pc = new_pc;
+                            continue;
                         }
                         None => {
                             return Err("Expected UnpackArgs to set indent that doesn't exist!".to_string());
                         }
                     }
-                    pc += 2;
+                    *pc += 2;
                 }
                 val if val == ByteCode::AssignArg as u8 => {
-                    let arg_num = bytes[pc + 1] as usize;
+                    let arg_num = bytes[*pc + 1] as usize;
                     let optional_param_name = &fn_optional_param_names[arg_num];
                     env.update(&mut self.mem, optional_param_name, stack.pop().unwrap())?;
-                    pc += 1;
+                    *pc += 1;
                 }
                 val if val == ByteCode::LiteralShimValue as u8 => {
                     let bytes = [
-                        bytes[pc + 1],
-                        bytes[pc + 2],
-                        bytes[pc + 3],
-                        bytes[pc + 4],
-                        bytes[pc + 5],
-                        bytes[pc + 6],
-                        bytes[pc + 7],
-                        bytes[pc + 8],
+                        bytes[*pc + 1],
+                        bytes[*pc + 2],
+                        bytes[*pc + 3],
+                        bytes[*pc + 4],
+                        bytes[*pc + 5],
+                        bytes[*pc + 6],
+                        bytes[*pc + 7],
+                        bytes[*pc + 8],
                     ];
                     stack.push(ShimValue::from_bytes(bytes));
-                    pc += 8;
+                    *pc += 8;
                 }
                 val if val == ByteCode::LiteralString as u8 => {
-                    let str_len = bytes[pc + 1] as usize;
-                    let contents = &bytes[pc + 2..pc + 2 + str_len];
+                    let str_len = bytes[*pc + 1] as usize;
+                    let contents = &bytes[*pc + 2..*pc + 2 + str_len];
 
                     stack.push(self.mem.alloc_str(contents));
-                    pc += 1 + str_len;
+                    *pc += 1 + str_len;
                 }
                 val if val == ByteCode::VariableDeclaration as u8 => {
                     let val = stack.pop().expect("Value for declaration");
-                    let ident_len = bytes[pc + 1] as usize;
-                    let ident = &bytes[pc + 2..pc + 2 + ident_len];
+                    let ident_len = bytes[*pc + 1] as usize;
+                    let ident = &bytes[*pc + 2..*pc + 2 + ident_len];
                     env.insert_new(&mut self.mem, ident.to_vec(), val);
-                    pc += 1 + ident_len;
+                    *pc += 1 + ident_len;
                 }
                 val if val == ByteCode::Assignment as u8 => {
                     let val = stack.pop().expect("Value for assignment");
-                    let ident_len = bytes[pc + 1] as usize;
-                    let ident = &bytes[pc + 2..pc + 2 + ident_len];
+                    let ident_len = bytes[*pc + 1] as usize;
+                    let ident = &bytes[*pc + 2..*pc + 2 + ident_len];
 
                     if !env.contains_key(&self.mem, ident) {
                         return Err(format_script_err(
-                            self.program.spans[pc],
+                            self.program.spans[*pc],
                             &self.program.script,
                             &format!("Identifier {:?} not found", ident),
                         ));
                     }
                     env.update(&mut self.mem, ident, val)?;
 
-                    pc += 1 + ident_len;
+                    *pc += 1 + ident_len;
                 }
                 val if val == ByteCode::VariableLoad as u8 => {
-                    let ident_len = bytes[pc + 1] as usize;
-                    let ident = &bytes[pc + 2..pc + 2 + ident_len];
+                    let ident_len = bytes[*pc + 1] as usize;
+                    let ident = &bytes[*pc + 2..*pc + 2 + ident_len];
                     if let Some(value) = env.get(&self.mem, ident) {
                         stack.push(value);
                     } else {
                         return Err(format_script_err(
-                            self.program.spans[pc],
+                            self.program.spans[*pc],
                             &self.program.script,
                             &format!("Unknown identifier {:?}", debug_u8s(ident)),
                         ));
                     }
-                    pc += 1 + ident_len;
+                    *pc += 1 + ident_len;
                 }
                 val if val == ByteCode::GetAttr as u8 => {
-                    let ident_len = bytes[pc + 1] as usize;
-                    let ident = &bytes[pc + 2..pc + 2 + ident_len];
+                    let ident_len = bytes[*pc + 1] as usize;
+                    let ident = &bytes[*pc + 2..*pc + 2 + ident_len];
 
                     let obj = stack.pop().expect("val to access");
 
@@ -2696,7 +2693,7 @@ impl Interpreter {
                         Ok(val) => val,
                         Err(msg) => {
                             return Err(format_script_err(
-                                self.program.spans[pc],
+                                self.program.spans[*pc],
                                 &self.program.script,
                                 &msg,
                             ));
@@ -2705,26 +2702,26 @@ impl Interpreter {
 
                     stack.push(res);
 
-                    pc += 1 + ident_len;
+                    *pc += 1 + ident_len;
                 }
                 val if val == ByteCode::SetAttr as u8 => {
-                    let ident_len = bytes[pc + 1] as usize;
-                    let ident = &bytes[pc + 2..pc + 2 + ident_len];
+                    let ident_len = bytes[*pc + 1] as usize;
+                    let ident = &bytes[*pc + 2..*pc + 2 + ident_len];
 
                     let val = stack.pop().expect("val to assign");
                     let obj = stack.pop().expect("obj to set");
                     obj.set_attr(self, ident, val).map_err(|err_str| {
-                        format_script_err(self.program.spans[pc], &self.program.script, &err_str)
+                        format_script_err(self.program.spans[*pc], &self.program.script, &err_str)
                     })?;
 
-                    pc += 1 + ident_len;
+                    *pc += 1 + ident_len;
                 }
                 val if val == ByteCode::Index as u8 => {
                     let index = stack.pop().expect("index val");
                     let obj = stack.pop().expect("index obj");
 
                     let val = obj.index(self, &index).map_err(|err_str| {
-                        format_script_err(self.program.spans[pc], &self.program.script, &err_str)
+                        format_script_err(self.program.spans[*pc], &self.program.script, &err_str)
                     })?;
 
                     stack.push(val);
@@ -2735,12 +2732,12 @@ impl Interpreter {
                     let obj = stack.pop().expect("index obj");
 
                     obj.set_index(self, &index, &val).map_err(|err_str| {
-                        format_script_err(self.program.spans[pc], &self.program.script, &err_str)
+                        format_script_err(self.program.spans[*pc], &self.program.script, &err_str)
                     })?;
                 }
                 val if val == ByteCode::Call as u8 => {
-                    let arg_count = bytes[pc + 1];
-                    let kwarg_count = bytes[pc + 2];
+                    let arg_count = bytes[*pc + 1];
+                    let kwarg_count = bytes[*pc + 2];
 
                     pending_args.clear();
 
@@ -2762,12 +2759,12 @@ impl Interpreter {
                     let callable = stack.pop().expect("callable not on stack");
 
                     match callable.call(self, pending_args).map_err(|err_str| {
-                        format_script_err(self.program.spans[pc], &self.program.script, &err_str)
+                        format_script_err(self.program.spans[*pc], &self.program.script, &err_str)
                     })? {
                         CallResult::ReturnValue(res) => stack.push(res),
                         CallResult::PC(new_pc, captured_scope) => {
                             stack_frame.push((
-                                pc + 3,
+                                *pc + 3,
                                 loop_info.clone(),
                                 env.scope_depth(&self.mem),
                                 env.current_scope,
@@ -2778,17 +2775,17 @@ impl Interpreter {
                             *loop_info = Vec::new();
                             // Restore the captured environment and push a new scope for function locals
                             env.current_scope = captured_scope;
-                            pc = new_pc as usize;
-                            return Ok((pc, None));
+                            *pc = new_pc as usize;
+                            continue;
                         }
                     }
-                    pc += 2;
+                    *pc += 2;
                 }
                 val if val == ByteCode::AttrCall as u8 => {
-                    let arg_count = bytes[pc + 1];
-                    let kwarg_count = bytes[pc + 2];
-                    let ident_len = bytes[pc + 3];
-                    let ident = &bytes[pc + 4..pc + 4 + ident_len as usize];
+                    let arg_count = bytes[*pc + 1];
+                    let kwarg_count = bytes[*pc + 2];
+                    let ident_len = bytes[*pc + 3];
+                    let ident = &bytes[*pc + 4..*pc + 4 + ident_len as usize];
 
                     pending_args.clear();
 
@@ -2813,7 +2810,7 @@ impl Interpreter {
                         .attr_call(ident, self, pending_args)
                         .map_err(|err_str| {
                             format_script_err(
-                                self.program.spans[pc],
+                                self.program.spans[*pc],
                                 &self.program.script,
                                 &err_str,
                             )
@@ -2821,7 +2818,7 @@ impl Interpreter {
                         CallResult::ReturnValue(res) => stack.push(res),
                         CallResult::PC(new_pc, captured_scope) => {
                             stack_frame.push((
-                                pc + 4 + ident_len as usize,
+                                *pc + 4 + ident_len as usize,
                                 loop_info.clone(),
                                 env.scope_depth(&self.mem),
                                 env.current_scope,
@@ -2832,11 +2829,11 @@ impl Interpreter {
                             *loop_info = Vec::new();
                             // Restore the captured environment and push a new scope for function locals
                             env.current_scope = captured_scope;
-                            pc = new_pc as usize;
-                            return Ok((pc, None));
+                            *pc = new_pc as usize;
+                            continue;
                         }
                     }
-                    pc += 3 + ident_len as usize;
+                    *pc += 3 + ident_len as usize;
                 }
                 val if val == ByteCode::StartScope as u8 => {
                     env.push_scope(&mut self.mem, false);
@@ -2863,19 +2860,24 @@ impl Interpreter {
                         while env.current_scope != initial_scope {
                             env.pop_scope(&mut self.mem).unwrap();
                         }
-
-                        return Ok((pc, Some(return_value)));
+                        return Ok(return_value);
                     }
 
                     // The value at the top of the stack is the return value of
-                    // the function, so we just need to pop the PC
+                    // the function, so we just need to pop the *pc
                     let return_value = stack.pop().expect("return value on stack");
-                    let (new_pc, new_loop_info, scope_count, caller_scope, new_fn_names, new_fn_name_idx, stack_depth) =
-                        stack_frame.pop().expect("stack frame to return to");
-                    pc = new_pc;
-                    *loop_info = new_loop_info;
-                    *fn_optional_param_names = new_fn_names;
-                    *fn_optional_param_name_idx = new_fn_name_idx;
+                    let scope_count;
+                    let caller_scope;
+                    let stack_depth;
+                    (
+                        *pc,
+                        *loop_info,
+                        scope_count,
+                        caller_scope,
+                        *fn_optional_param_names,
+                        *fn_optional_param_name_idx,
+                        stack_depth,
+                    ) = stack_frame.pop().expect("stack frame to return to");
                     // Clean up any extra values left on the stack (e.g. for-loop
                     // iterators that weren't popped due to early return)
                     stack.truncate(stack_depth);
@@ -2885,41 +2887,41 @@ impl Interpreter {
                     }
                     // Restore the caller's environment scope
                     env.current_scope = caller_scope;
-                    return Ok((pc, None));
+                    continue;
                 }
                 val if val == ByteCode::JmpUp as u8 => {
-                    let new_pc = pc - (((bytes[pc + 1] as usize) << 8) + bytes[pc + 2] as usize);
-                    pc = new_pc;
-                    return Ok((pc, None));
+                    let new_pc = *pc - (((bytes[*pc + 1] as usize) << 8) + bytes[*pc + 2] as usize);
+                    *pc = new_pc;
+                    continue;
                 }
                 val if val == ByteCode::Jmp as u8 => {
                     // TODO: signed jumps
-                    let new_pc = pc + ((bytes[pc + 1] as usize) << 8) + bytes[pc + 2] as usize;
-                    pc = new_pc;
-                    return Ok((pc, None));
+                    let new_pc = *pc + ((bytes[*pc + 1] as usize) << 8) + bytes[*pc + 2] as usize;
+                    *pc = new_pc;
+                    continue;
                 }
                 val if val == ByteCode::JmpNZ as u8 => {
                     let conditional = stack.pop().expect("JMPNZ val to check");
                     if conditional.is_truthy(self)? {
                         // TODO: signed jumps
-                        let new_pc = pc + ((bytes[pc + 1] as usize) << 8) + bytes[pc + 2] as usize;
-                        pc = new_pc;
-                        return Ok((pc, None));
+                        let new_pc = *pc + ((bytes[*pc + 1] as usize) << 8) + bytes[*pc + 2] as usize;
+                        *pc = new_pc;
+                        continue;
                     }
-                    pc += 2;
+                    *pc += 2;
                 }
                 val if val == ByteCode::JmpZ as u8 => {
                     let conditional = stack.pop().expect("JMP val to check");
                     if !conditional.is_truthy(self)? {
                         // TODO: signed jumps
-                        let new_pc = pc + ((bytes[pc + 1] as usize) << 8) + bytes[pc + 2] as usize;
-                        pc = new_pc;
-                        return Ok((pc, None));
+                        let new_pc = *pc + ((bytes[*pc + 1] as usize) << 8) + bytes[*pc + 2] as usize;
+                        *pc = new_pc;
+                        continue;
                     }
-                    pc += 2;
+                    *pc += 2;
                 }
                 val if val == ByteCode::UnpackTuple as u8 => {
-                    let inst_len = ((bytes[pc + 1] as usize) << 8) + bytes[pc + 2] as usize;
+                    let inst_len = ((bytes[*pc + 1] as usize) << 8) + bytes[*pc + 2] as usize;
 
                     match stack.pop().expect("UnpackTuple stack value") {
                         ShimValue::Tuple(tuple_len, pos) => {
@@ -2936,10 +2938,10 @@ impl Interpreter {
                         val => return Err(format!("Can't UnpackTuple {val:?}"))
                     }
 
-                    pc += 2;
+                    *pc += 2;
                 }
                 val if val == ByteCode::CreateTuple as u8 => {
-                    let len = ((bytes[pc + 1] as usize) << 8) + bytes[pc + 2] as usize;
+                    let len = ((bytes[*pc + 1] as usize) << 8) + bytes[*pc + 2] as usize;
 
                     let mut items = Vec::new();
                     for item in stack.drain(stack.len() - len..) {
@@ -2950,10 +2952,10 @@ impl Interpreter {
 
                     stack.push(tpl);
 
-                    pc += 2;
+                    *pc += 2;
                 }
                 val if val == ByteCode::CreateList as u8 => {
-                    let len = ((bytes[pc + 1] as usize) << 8) + bytes[pc + 2] as usize;
+                    let len = ((bytes[*pc + 1] as usize) << 8) + bytes[*pc + 2] as usize;
 
                     let lst_val = self.mem.alloc_list();
                     let lst_pos = match lst_val { ShimValue::List(p) => p, _ => unreachable!() };
@@ -2964,26 +2966,26 @@ impl Interpreter {
 
                     stack.push(lst_val);
 
-                    pc += 2;
+                    *pc += 2;
                 }
                 val if val == ByteCode::CreateFn as u8 => {
-                    let instruction_offset = ((bytes[pc + 1] as u32) << 8) + bytes[pc + 2] as u32;
-                    let fn_pc = pc as u32 - instruction_offset;
+                    let instruction_offset = ((bytes[*pc + 1] as u32) << 8) + bytes[*pc + 2] as u32;
+                    let fn_pc = *pc as u32 - instruction_offset;
                     // Use descriptive name for anonymous functions
                     // Capture the current environment scope
                     let fn_val = self.mem.alloc_fn(fn_pc, b"<anonymous>", env.current_scope);
                     stack.push(fn_val);
-                    pc += 2;
+                    *pc += 2;
                 }
                 val if val == ByteCode::CreateStruct as u8 => {
                     // Everything after the first two bytes is data for the
                     // struct definition.
-                    let new_pc = pc + ((bytes[pc + 1] as usize) << 8) + bytes[pc + 2] as usize;
+                    let new_pc = *pc + ((bytes[*pc + 1] as usize) << 8) + bytes[*pc + 2] as usize;
 
-                    let member_count = bytes[pc + 3];
-                    let method_count = bytes[pc + 4];
+                    let member_count = bytes[*pc + 3];
+                    let method_count = bytes[*pc + 4];
 
-                    let mut idx = pc + 5;
+                    let mut idx = *pc + 5;
 
                     // Read struct name
                     let name_len = bytes[idx];
@@ -3003,7 +3005,7 @@ impl Interpreter {
                     }
 
                     for _ in 0..method_count {
-                        let method_pc = pc + ((bytes[idx] as usize) << 8) + bytes[idx + 1] as usize;
+                        let method_pc = *pc + ((bytes[idx] as usize) << 8) + bytes[idx + 1] as usize;
 
                         idx += 2;
 
@@ -3027,7 +3029,7 @@ impl Interpreter {
                     let pos = alloc!(
                         self.mem,
                         struct_def_words.into(),
-                        &format!("ByteCode::CreateStruct def PC {pc}")
+                        &format!("ByteCode::CreateStruct def *pc {*pc}")
                     );
 
                     unsafe {
@@ -3042,16 +3044,23 @@ impl Interpreter {
                     // Then push the struct definition to the stack
                     stack.push(ShimValue::StructDef(pos));
 
-                    pc = new_pc;
-                    return Ok((pc, None));
+                    *pc = new_pc;
+                    continue;
                 }
                 b => {
                     print_asm(bytes);
-                    return Err(format!("Unknown bytecode {b} at PC {pc}"));
+                    return Err(format!("Unknown bytecode {b} at pc {pc}"));
                 }
             }
-            Ok((pc + 1, None))
+            *pc += 1;
         }
+
+        if !stack.is_empty() {
+            Ok(stack.pop().unwrap())
+        } else {
+            Ok(ShimValue::Uninitialized)
+        }
+
     }
 
     pub fn describe_memory(&mut self, env: &Environment) -> HashMap<usize, MemDescriptor> {
@@ -3257,7 +3266,7 @@ mod tests {
 /**
  *
  * Struct Bytecode Format
- *  - CreateStruct OpCode
+ *  - CreateStruct O*pcode
  *    - Two byte relative jump to end of struct def
  *    - u8 member count
  *    - u8 method count
@@ -3269,14 +3278,14 @@ mod tests {
  *
  * Struct Instance Data Format:
  *  - Header value that points to object metadata
- *    - Contains mapping of ident to member offset or method PC
+ *    - Contains mapping of ident to member offset or method *pc
  *  - Member 0
  *  - Member 1
  *  - ...
  *
  * Struct Metadata Format:
  *  - Just a list for now
- *    - Vec<(Vec<u8>, Offset | PC)>
+ *    - Vec<(Vec<u8>, Offset | *pc)>
  *
  *
  *
