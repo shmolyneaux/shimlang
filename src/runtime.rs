@@ -2314,7 +2314,6 @@ impl Interpreter {
                             &mut fn_optional_param_name_idx, &mut fn_optional_param_names,
                         ) {
                             DebugHookResponse::PropogateError(msg) => {
-                                println!("Debug hook propagating error");
                                 return Err(msg);
                             }
                             _ => todo!(),
