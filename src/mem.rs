@@ -14,7 +14,7 @@ use crate::lex::debug_u8s;
 pub struct Config {
     // There are max 2^24 addressable values, each 8 bytes large
     // This value can be up to 2^27-1.
-    pub(crate) memory_space_bytes: u32,
+    pub memory_space_bytes: u32,
 }
 
 impl Default for Config {
