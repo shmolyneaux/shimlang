@@ -1056,7 +1056,7 @@ impl ShimDict {
                 // Hash matches, let's check the entry and see if the key matches
                 let entry_idx = indices.get(idx);
                 let entry = self.get_entry_mut(interpreter, entry_idx);
-                if key.equal_inner(interpreter, &entry.key)? {
+                if key.dict_key_equal(interpreter, &entry.key)? {
                     return Ok(DictSlot::Occupied(idx, entry));
                 }
                 // Otherwise continue probing
@@ -1523,17 +1523,21 @@ pub(crate) fn shim_assert(
         return Err("Assert doesn't take keyword arguments".to_string());
     }
     if args.len() > 2 {
-        return Err(format!("Assert got more than two arguments! {:?}", args));
+        return Err(format!(
+            "assert takes at most two arguments (condition, message), got {}",
+            args.len()
+        ));
     }
     if args.len() == 0 {
         return Ok(ShimValue::None);
     }
 
-    if !args.args[0].is_truthy(interpreter)? {
+    let condition = args.args[0];
+    if !condition.is_truthy(interpreter)? {
         let msg = if args.len() > 1 {
             args.args[1].to_string(interpreter)
         } else {
-            format!("Assert Failed: {:?} not truthy", args.args[0])
+            format!("Assert Failed: {} is not truthy", condition.to_string(interpreter))
         };
         Err(msg)
     } else {
@@ -2993,7 +2997,8 @@ pub(crate) fn shim_pow(
     match (base, exp) {
         (ShimValue::Integer(b), ShimValue::Integer(e)) => {
             if e >= 0 {
-                Ok(ShimValue::Integer(b.pow(e as u32)))
+                // Saturate at i32::MIN/i32::MAX instead of panicking on overflow.
+                Ok(ShimValue::Integer(b.saturating_pow(e as u32)))
             } else {
                 Ok(ShimValue::Float((b as f32).powi(e)))
             }

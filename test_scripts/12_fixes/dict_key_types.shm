@@ -1,0 +1,8 @@
+let d = dict();
+d[1] = "int";
+d[1.0] = "float";
+d[true] = "bool";
+print(d.len());
+print(d[1]);
+print(d[1.0]);
+print(d[true]);

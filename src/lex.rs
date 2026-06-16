@@ -378,6 +378,15 @@ pub fn lex_string(text: &mut &[u8]) -> Result<StringLexResult, String> {
                 escape_next = true;
                 continue;
             }
+            // Strings are byte-oriented and intended for ASCII text. Reject
+            // non-ASCII bytes at lex time rather than crashing later when the
+            // bytes are indexed or iterated.
+            0x80..=0xFF => {
+                return Err(format!(
+                    "Non-ASCII byte {} in string literal; strings must be ASCII",
+                    printable_byte(*c)
+                ));
+            }
             _ => {
                 out.push(*c);
             }
@@ -389,81 +398,81 @@ pub fn lex_string(text: &mut &[u8]) -> Result<StringLexResult, String> {
     ))
 }
 
+/// Build a token from a numeric literal.
+///
+/// Supports integer and float literals, including:
+///   - a leading decimal point (`.5`)
+///   - `e`/`E` exponent notation (`1e20`, `1.5E-3`)
+///   - `_` digit separators (`1_000`, `3.141_592`)
+fn parse_number_token(digits: &[u8], is_float: bool) -> Result<Token, String> {
+    // Strip `_` separators before handing the literal to Rust's parser.
+    let cleaned: Vec<u8> = digits.iter().copied().filter(|c| *c != b'_').collect();
+    let string_slice = match std::str::from_utf8(&cleaned) {
+        Ok(s) => s,
+        Err(e) => return Err(format!("Not utf-8 {:?}", e)),
+    };
+    if is_float {
+        Ok(Token::Float(string_slice.parse().map_err(|e| {
+            format!("Could not tokenize number '{}' {:?}", string_slice, e)
+        })?))
+    } else {
+        Ok(Token::Integer(string_slice.parse().map_err(|e| {
+            format!("Could not tokenize number '{}' {:?}", string_slice, e)
+        })?))
+    }
+}
+
 pub fn lex_number(text: &mut &[u8]) -> Result<Token, String> {
     let mut found_decimal = false;
-    for (idx, c) in text.iter().enumerate() {
+    let mut found_exp = false;
+    let mut idx = 0;
+    while idx < text.len() {
+        let c = text[idx];
         match c {
-            b'0'..=b'9' => continue,
+            b'0'..=b'9' | b'_' => {
+                idx += 1;
+            }
             b'.' => {
-                // Check if this is a range operator (..)
+                // A `..` range operator ends the number.
                 if idx + 1 < text.len() && text[idx + 1] == b'.' {
-                    // This is a range operator, stop here
-                    let token = if found_decimal {
-                        Token::Float(unsafe {
-                            let slice = &text[..idx];
-                            std::str::from_utf8_unchecked(slice).parse().map_err(|e| {
-                                let string_slice = match std::str::from_utf8(slice) {
-                                    Ok(s) => s,
-                                    Err(e) => return format!("Not utf-8 {:?}", e),
-                                };
-                                format!("Could not tokenize number '{}' {:?}", string_slice, e)
-                            })?
-                        })
-                    } else {
-                        Token::Integer(unsafe {
-                            let slice = &text[..idx];
-                            std::str::from_utf8_unchecked(slice).parse().map_err(|e| {
-                                let string_slice = match std::str::from_utf8(slice) {
-                                    Ok(s) => s,
-                                    Err(e) => return format!("Not utf-8 {:?}", e),
-                                };
-                                format!("Could not tokenize number '{}' {:?}", string_slice, e)
-                            })?
-                        })
-                    };
-                    *text = &text[(idx - 1)..];
-                    return Ok(token);
+                    break;
                 }
-                if found_decimal {
-                    return Err("Found multiple decimals in number".to_string());
+                // A second decimal point, or a `.` after an exponent, ends the
+                // number (e.g. `1.2.3` lexes `1.2` then `.3`).
+                if found_decimal || found_exp {
+                    break;
                 }
                 found_decimal = true;
+                idx += 1;
             }
-            _ => {
-                let token = if found_decimal {
-                    Token::Float(unsafe {
-                        let slice = &text[..idx];
-                        std::str::from_utf8_unchecked(slice).parse().map_err(|e| {
-                            let string_slice = match std::str::from_utf8(slice) {
-                                Ok(s) => s,
-                                Err(e) => return format!("Not utf-8 {:?}", e),
-                            };
-                            format!("Could not tokenize number '{}' {:?}", string_slice, e)
-                        })?
-                    })
+            b'e' | b'E' => {
+                if found_exp {
+                    break;
+                }
+                // Only treat `e`/`E` as an exponent when followed by an optional
+                // sign and at least one digit; otherwise it ends the number.
+                let mut peek = idx + 1;
+                if peek < text.len() && (text[peek] == b'+' || text[peek] == b'-') {
+                    peek += 1;
+                }
+                if peek < text.len() && text[peek].is_ascii_digit() {
+                    found_exp = true;
+                    // The exponent makes this a float literal.
+                    found_decimal = true;
+                    // Consume `e`/`E` and the optional sign now.
+                    idx = peek;
                 } else {
-                    Token::Integer(unsafe {
-                        let slice = &text[..idx];
-                        std::str::from_utf8_unchecked(slice).parse().map_err(|e| {
-                            let string_slice = match std::str::from_utf8(slice) {
-                                Ok(s) => s,
-                                Err(e) => return format!("Not utf-8 {:?}", e),
-                            };
-                            format!("Could not tokenize number '{}' {:?}", string_slice, e)
-                        })?
-                    })
-                };
-                *text = &text[(idx - 1)..];
-                return Ok(token);
+                    break;
+                }
             }
+            _ => break,
         }
     }
-    // End of string - consume all of text
-    let token = Token::Integer(unsafe {
-        std::str::from_utf8_unchecked(text)
-            .parse()
-            .map_err(|e| format!("{:?}", e))?
-    });
+
+    let token = parse_number_token(&text[..idx], found_decimal)?;
+    // Leave `text` one byte before the end so the caller's `+1` advance lands
+    // just past the consumed number.
+    *text = &text[(idx - 1)..];
     Ok(token)
 }
 
@@ -750,6 +759,9 @@ pub fn lex(text: &[u8]) -> Result<TokenStream, String> {
                 if text.len() > 1 && text[1] == b'.' {
                     text = &text[1..];
                     tokens.push(Token::DotDot);
+                } else if text.len() > 1 && text[1].is_ascii_digit() {
+                    // A leading-dot float literal such as `.5`.
+                    tokens.push(lex_number(&mut text)?);
                 } else {
                     tokens.push(Token::Dot);
                 }

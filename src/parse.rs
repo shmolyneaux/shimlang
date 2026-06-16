@@ -108,12 +108,27 @@ pub struct Block {
     pub(crate) last_expr: Option<Box<ExprNode>>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum CompareOp {
+    Eq,
+    Ne,
+    Gt,
+    Gte,
+    Lt,
+    Lte,
+}
+
 #[derive(Debug)]
 pub enum Expression {
     Primary(Primary),
     BooleanOp(BooleanOp),
     BinaryOp(BinaryOp),
     UnaryOp(UnaryOp),
+    /// A chained comparison such as `a < b < c`. Holds `n` operands and
+    /// `n - 1` operators (always at least two operators; single comparisons
+    /// stay as `BinaryOp`). Operands are evaluated at most once, left to right,
+    /// and evaluation short-circuits as soon as a comparison fails.
+    Compare(Vec<ExprNode>, Vec<CompareOp>),
     Call(Box<ExprNode>, Vec<ExprNode>, Vec<(Ident, ExprNode)>),
     Index(Box<ExprNode>, Box<ExprNode>),
     Attribute(Box<ExprNode>, Vec<u8>),
@@ -568,49 +583,56 @@ pub fn parse_range(tokens: &mut TokenStream) -> Result<ExprNode, String> {
     Ok(expr)
 }
 
+/// Build a single relational `BinaryOp` node from an operator token.
+fn build_relational(op: &Token, a: ExprNode, b: ExprNode, span: Span) -> ExprNode {
+    let data = match op {
+        Token::GT => Expression::BinaryOp(BinaryOp::GT(Box::new(a), Box::new(b))),
+        Token::Gte => Expression::BinaryOp(BinaryOp::Gte(Box::new(a), Box::new(b))),
+        Token::LT => Expression::BinaryOp(BinaryOp::LT(Box::new(a), Box::new(b))),
+        Token::Lte => Expression::BinaryOp(BinaryOp::Lte(Box::new(a), Box::new(b))),
+        _ => unreachable!("build_relational called with non-relational token"),
+    };
+    Node { data, span }
+}
+
+fn relational_compare_op(op: &Token) -> CompareOp {
+    match op {
+        Token::GT => CompareOp::Gt,
+        Token::Gte => CompareOp::Gte,
+        Token::LT => CompareOp::Lt,
+        Token::Lte => CompareOp::Lte,
+        _ => unreachable!("relational_compare_op called with non-relational token"),
+    }
+}
+
 pub fn parse_comparison(tokens: &mut TokenStream) -> Result<ExprNode, String> {
     let mut expr = parse_term(tokens)?;
     while !tokens.is_empty() {
         let span = tokens.peek_span()?;
         match tokens.peek()? {
-            Token::GT => {
-                tokens.advance()?;
-                expr = Node {
-                    data: Expression::BinaryOp(BinaryOp::GT(
-                        Box::new(expr),
-                        Box::new(parse_term(tokens)?),
-                    )),
-                    span,
-                };
-            }
-            Token::Gte => {
-                tokens.advance()?;
-                expr = Node {
-                    data: Expression::BinaryOp(BinaryOp::Gte(
-                        Box::new(expr),
-                        Box::new(parse_term(tokens)?),
-                    )),
-                    span,
-                };
-            }
-            Token::LT => {
-                tokens.advance()?;
-                expr = Node {
-                    data: Expression::BinaryOp(BinaryOp::LT(
-                        Box::new(expr),
-                        Box::new(parse_term(tokens)?),
-                    )),
-                    span,
-                };
-            }
-            Token::Lte => {
-                tokens.advance()?;
-                expr = Node {
-                    data: Expression::BinaryOp(BinaryOp::Lte(
-                        Box::new(expr),
-                        Box::new(parse_term(tokens)?),
-                    )),
-                    span,
+            Token::GT | Token::Gte | Token::LT | Token::Lte => {
+                // Collect a run of relational operators so that `a < b < c`
+                // becomes a single chained comparison rather than `(a < b) < c`.
+                let mut operands = vec![expr];
+                let mut ops: Vec<Token> = Vec::new();
+                while matches!(
+                    tokens.peek()?,
+                    Token::GT | Token::Gte | Token::LT | Token::Lte
+                ) {
+                    ops.push(tokens.pop()?);
+                    operands.push(parse_term(tokens)?);
+                }
+
+                expr = if ops.len() == 1 {
+                    let b = operands.pop().unwrap();
+                    let a = operands.pop().unwrap();
+                    build_relational(&ops[0], a, b, span)
+                } else {
+                    let compare_ops = ops.iter().map(relational_compare_op).collect();
+                    Node {
+                        data: Expression::Compare(operands, compare_ops),
+                        span,
+                    }
                 };
             }
             Token::In => {
@@ -675,24 +697,38 @@ pub fn parse_equality(tokens: &mut TokenStream) -> Result<ExprNode, String> {
     while !tokens.is_empty() {
         let span = tokens.peek_span()?;
         match tokens.peek()? {
-            Token::DEqual => {
-                tokens.advance()?;
-                expr = Node {
-                    data: Expression::BinaryOp(BinaryOp::Equal(
-                        Box::new(expr),
-                        Box::new(parse_comparison(tokens)?),
-                    )),
-                    span,
-                };
-            }
-            Token::BangEqual => {
-                tokens.advance()?;
-                expr = Node {
-                    data: Expression::BinaryOp(BinaryOp::NotEqual(
-                        Box::new(expr),
-                        Box::new(parse_comparison(tokens)?),
-                    )),
-                    span,
+            Token::DEqual | Token::BangEqual => {
+                // Collect a run of equality operators so that `a == b == c`
+                // becomes a single chained comparison evaluated left to right.
+                let mut operands = vec![expr];
+                let mut ops: Vec<Token> = Vec::new();
+                while matches!(tokens.peek()?, Token::DEqual | Token::BangEqual) {
+                    ops.push(tokens.pop()?);
+                    operands.push(parse_comparison(tokens)?);
+                }
+
+                expr = if ops.len() == 1 {
+                    let b = operands.pop().unwrap();
+                    let a = operands.pop().unwrap();
+                    let data = match ops[0] {
+                        Token::DEqual => {
+                            Expression::BinaryOp(BinaryOp::Equal(Box::new(a), Box::new(b)))
+                        }
+                        _ => Expression::BinaryOp(BinaryOp::NotEqual(Box::new(a), Box::new(b))),
+                    };
+                    Node { data, span }
+                } else {
+                    let compare_ops = ops
+                        .iter()
+                        .map(|op| match op {
+                            Token::DEqual => CompareOp::Eq,
+                            _ => CompareOp::Ne,
+                        })
+                        .collect();
+                    Node {
+                        data: Expression::Compare(operands, compare_ops),
+                        span,
+                    }
                 };
             }
             _ => return Ok(expr),

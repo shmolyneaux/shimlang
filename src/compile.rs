@@ -1,4 +1,5 @@
 use crate::lex::debug_u8s;
+use crate::lex::format_script_err;
 use crate::parse::*;
 use crate::runtime::ShimValue;
 use crate::runtime::format_float;
@@ -72,6 +73,8 @@ pub(crate) enum ByteCode {
     JmpZ,
     JmpInitArg,
     Range,
+    /// Swap the top two values on the stack.
+    Swap,
 }
 
 pub struct Program {
@@ -80,7 +83,155 @@ pub struct Program {
     pub(crate) script: Vec<u8>,
 }
 
+/// Validate that `break`/`continue` only appear inside a loop body. Returns a
+/// formatted error pointing at the offending statement otherwise. A function
+/// boundary resets the loop context: `break`/`continue` cannot cross it.
+fn validate_loop_control(block: &Block, in_loop: bool, script: &[u8]) -> Result<(), String> {
+    for stmt in block.stmts.iter() {
+        validate_stmt_loop_control(stmt, in_loop, script)?;
+    }
+    if let Some(expr) = &block.last_expr {
+        validate_expr_loop_control(expr, in_loop, script)?;
+    }
+    Ok(())
+}
+
+fn validate_fn_loop_control(func: &Fn, script: &[u8]) -> Result<(), String> {
+    for (_, e) in func.pos_args_optional.iter() {
+        // Default argument expressions are evaluated at the call site, outside
+        // the function's own body and outside any enclosing loop.
+        validate_expr_loop_control(e, false, script)?;
+    }
+    validate_loop_control(&func.body, false, script)
+}
+
+fn validate_stmt_loop_control(
+    stmt: &StatementNode,
+    in_loop: bool,
+    script: &[u8],
+) -> Result<(), String> {
+    match &stmt.data {
+        Statement::Break => {
+            if !in_loop {
+                return Err(format_script_err(stmt.span, script, "`break` outside of a loop"));
+            }
+        }
+        Statement::Continue => {
+            if !in_loop {
+                return Err(format_script_err(
+                    stmt.span,
+                    script,
+                    "`continue` outside of a loop",
+                ));
+            }
+        }
+        Statement::Let(_, e)
+        | Statement::Assignment(_, e)
+        | Statement::CompoundAssignment(_, _, e)
+        | Statement::Expression(e) => validate_expr_loop_control(e, in_loop, script)?,
+        Statement::Return(opt) => {
+            if let Some(e) = opt {
+                validate_expr_loop_control(e, in_loop, script)?;
+            }
+        }
+        Statement::AttributeAssignment(a, _, b)
+        | Statement::CompoundAttributeAssignment(a, _, _, b) => {
+            validate_expr_loop_control(a, in_loop, script)?;
+            validate_expr_loop_control(b, in_loop, script)?;
+        }
+        Statement::IndexAssignment(a, b, c)
+        | Statement::CompoundIndexAssignment(a, b, _, c) => {
+            validate_expr_loop_control(a, in_loop, script)?;
+            validate_expr_loop_control(b, in_loop, script)?;
+            validate_expr_loop_control(c, in_loop, script)?;
+        }
+        Statement::If(cond, if_body, else_body) => {
+            validate_expr_loop_control(cond, in_loop, script)?;
+            validate_loop_control(if_body, in_loop, script)?;
+            validate_loop_control(else_body, in_loop, script)?;
+        }
+        Statement::While(cond, body) => {
+            validate_expr_loop_control(cond, in_loop, script)?;
+            validate_loop_control(body, true, script)?;
+        }
+        Statement::For(_, iter, body) => {
+            validate_expr_loop_control(iter, in_loop, script)?;
+            validate_loop_control(body, true, script)?;
+        }
+        Statement::Fn(func) => validate_fn_loop_control(func, script)?,
+        Statement::Struct(s) => {
+            for (_, e) in s.members_optional.iter() {
+                validate_expr_loop_control(e, false, script)?;
+            }
+            for method in s.methods.iter() {
+                validate_fn_loop_control(method, script)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_expr_loop_control(
+    expr: &ExprNode,
+    in_loop: bool,
+    script: &[u8],
+) -> Result<(), String> {
+    match &expr.data {
+        Expression::Primary(p) => match p {
+            Primary::List(items) | Primary::Tuple(items) => {
+                for e in items.iter() {
+                    validate_expr_loop_control(e, in_loop, script)?;
+                }
+            }
+            Primary::Expression(e) => validate_expr_loop_control(e, in_loop, script)?,
+            _ => {}
+        },
+        Expression::BooleanOp(op) => {
+            let (a, b) = op.exprs();
+            validate_expr_loop_control(a, in_loop, script)?;
+            validate_expr_loop_control(b, in_loop, script)?;
+        }
+        Expression::BinaryOp(op) => {
+            let (a, b) = op.exprs();
+            validate_expr_loop_control(a, in_loop, script)?;
+            validate_expr_loop_control(b, in_loop, script)?;
+        }
+        Expression::Compare(operands, _) => {
+            for e in operands.iter() {
+                validate_expr_loop_control(e, in_loop, script)?;
+            }
+        }
+        Expression::UnaryOp(op) => {
+            let (UnaryOp::Not(e) | UnaryOp::Negate(e)) = op;
+            validate_expr_loop_control(e, in_loop, script)?;
+        }
+        Expression::Call(callee, args, kwargs) => {
+            validate_expr_loop_control(callee, in_loop, script)?;
+            for e in args.iter() {
+                validate_expr_loop_control(e, in_loop, script)?;
+            }
+            for (_, e) in kwargs.iter() {
+                validate_expr_loop_control(e, in_loop, script)?;
+            }
+        }
+        Expression::Index(a, b) => {
+            validate_expr_loop_control(a, in_loop, script)?;
+            validate_expr_loop_control(b, in_loop, script)?;
+        }
+        Expression::Attribute(e, _) => validate_expr_loop_control(e, in_loop, script)?,
+        Expression::Block(block) => validate_loop_control(block, in_loop, script)?,
+        Expression::If(cond, if_body, else_body) => {
+            validate_expr_loop_control(cond, in_loop, script)?;
+            validate_loop_control(if_body, in_loop, script)?;
+            validate_loop_control(else_body, in_loop, script)?;
+        }
+        Expression::Fn(func) => validate_fn_loop_control(func, script)?,
+    }
+    Ok(())
+}
+
 pub fn compile_ast(ast: &Ast) -> Result<Program, String> {
+    validate_loop_control(&ast.block, false, &ast.script)?;
     let mut program = Vec::new();
     let ast_span = Span {
         start: 0,
@@ -789,6 +940,9 @@ pub fn expression_captures_env(input_expr: &Expression) -> bool {
             let exprs = op.exprs();
             expression_captures_env(&exprs.0.data) || expression_captures_env(&exprs.1.data)
         }
+        Expression::Compare(operands, _) => {
+            operands.iter().any(|e| expression_captures_env(&e.data))
+        }
         Expression::UnaryOp(op) => match op {
             UnaryOp::Not(expr) => expression_captures_env(&expr.data),
             UnaryOp::Negate(expr) => expression_captures_env(&expr.data),
@@ -1077,6 +1231,80 @@ pub fn compile_expression(expr: &ExprNode) -> Result<Vec<(u8, Span)>, String> {
             res.extend(compile_expression(b)?);
             res.push((opcode as u8, expr.span));
             Ok(res)
+        }
+        Expression::Compare(operands, ops) => {
+            // A chained comparison `e0 OP0 e1 OP1 e2 ...`. Each operand is
+            // evaluated at most once, and evaluation short-circuits to `false`
+            // as soon as a comparison fails. The previous operand is kept on
+            // top of the stack between steps so the next comparison can reuse
+            // it without re-evaluating its subexpression.
+            let mut asm = compile_expression(&operands[0])?;
+            let mut false_jump_idxs: Vec<usize> = Vec::new();
+
+            for (i, op) in ops.iter().enumerate() {
+                asm.extend(compile_expression(&operands[i + 1])?);
+                // Duplicate the two operands so the comparison consumes copies
+                // and leaves the originals in place.
+                asm.push((ByteCode::CopyFrom as u8, span));
+                asm.push((1, span));
+                asm.push((ByteCode::CopyFrom as u8, span));
+                asm.push((1, span));
+
+                let opcode = match op {
+                    CompareOp::Eq => ByteCode::Equal,
+                    CompareOp::Ne => ByteCode::NotEqual,
+                    CompareOp::Gt => ByteCode::GT,
+                    CompareOp::Gte => ByteCode::Gte,
+                    CompareOp::Lt => ByteCode::LT,
+                    CompareOp::Lte => ByteCode::Lte,
+                };
+                asm.push((opcode as u8, span));
+
+                // If this comparison failed, short-circuit to the false block.
+                let jmpz_idx = asm.len();
+                asm.push((ByteCode::JmpZ as u8, span));
+                asm.push((0, span));
+                asm.push((0, span));
+                false_jump_idxs.push(jmpz_idx);
+
+                // Comparison held: drop the previous operand, keep the current
+                // one on top for the next step.
+                asm.push((ByteCode::Swap as u8, span));
+                asm.push((ByteCode::Pop as u8, span));
+            }
+
+            // All comparisons held: drop the final operand and produce `true`.
+            asm.push((ByteCode::Pop as u8, span));
+            asm.push((ByteCode::LiteralShimValue as u8, span));
+            for b in ShimValue::Bool(true).to_bytes().into_iter() {
+                asm.push((b, span));
+            }
+            let end_jump_idx = asm.len();
+            asm.push((ByteCode::Jmp as u8, span));
+            asm.push((0, span));
+            asm.push((0, span));
+
+            // False block: each failing comparison lands here with its two
+            // operands still on the stack.
+            let false_idx = asm.len();
+            asm.push((ByteCode::Pop as u8, span));
+            asm.push((ByteCode::Pop as u8, span));
+            asm.push((ByteCode::LiteralShimValue as u8, span));
+            for b in ShimValue::Bool(false).to_bytes().into_iter() {
+                asm.push((b, span));
+            }
+            let end_idx = asm.len();
+
+            for jmpz_idx in false_jump_idxs {
+                let offset = u16_to_u8s((false_idx - jmpz_idx) as u16);
+                asm[jmpz_idx + 1].0 = offset[0];
+                asm[jmpz_idx + 2].0 = offset[1];
+            }
+            let end_offset = u16_to_u8s((end_idx - end_jump_idx) as u16);
+            asm[end_jump_idx + 1].0 = end_offset[0];
+            asm[end_jump_idx + 2].0 = end_offset[1];
+
+            Ok(asm)
         }
         Expression::UnaryOp(op) => {
             let (opcode, a) = match op {
@@ -1432,6 +1660,8 @@ pub fn format_asm(bytes: &[u8]) -> String {
             idx += 2;
         } else if *b == ByteCode::Copy as u8 {
             out.push_str("Copy");
+        } else if *b == ByteCode::Swap as u8 {
+            out.push_str("Swap");
         } else if *b == ByteCode::CopyFrom as u8 {
             let offset = bytes[idx + 1];
             out.push_str(&format!("CopyFrom offset={}", offset));

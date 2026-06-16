@@ -227,6 +227,7 @@ impl Environment {
             (b"filter", shim_filter),
             (b"average", shim_average),
             (b"assert", shim_assert),
+            (b"bool", shim_bool),
             (b"str", shim_str),
             (b"int", shim_int),
             (b"float", shim_float),
@@ -365,7 +366,7 @@ impl Environment {
             current_scope_pos = parent.into();
         }
 
-        Err(format!("Key {:?} not found in environment", key))
+        Err(format!("Variable \"{}\" not found in environment", debug_u8s(key)))
     }
 
     pub fn get(&self, mem: &MMU, key: &[u8]) -> Option<ShimValue> {
@@ -558,6 +559,10 @@ const _: () = {
 };
 
 pub(crate) fn format_float(val: f32) -> String {
+    // Non-finite values render as `inf`/`-inf`/`NaN` without a trailing `.0`.
+    if !val.is_finite() {
+        return format!("{val}");
+    }
     let s = format!("{val}");
     if !s.contains('.') && !s.contains('e') {
         format!("{s}.0")
@@ -781,9 +786,11 @@ pub fn fnv1a_hash_extend(mut hash: u64, key: &[u8]) -> u64 {
 }
 
 macro_rules! numeric_op {
-    ($lhs:tt $op:tt $rhs:expr, $interpreter:expr, $method:expr) => {
+    ($lhs:tt $op:tt $rhs:expr, $interpreter:expr, $method:expr, $sat:ident) => {
         match ($lhs, $rhs) {
-            (ShimValue::Integer(a), ShimValue::Integer(b)) => Ok(ShimValue::Integer(*a $op *b)),
+            // Integer arithmetic saturates at i32::MIN/i32::MAX instead of
+            // panicking on overflow/underflow.
+            (ShimValue::Integer(a), ShimValue::Integer(b)) => Ok(ShimValue::Integer(a.$sat(*b))),
             (ShimValue::Float(a), ShimValue::Float(b)) => Ok(ShimValue::Float(*a $op *b)),
             (ShimValue::Integer(a), ShimValue::Float(b)) => Ok(ShimValue::Float((*a as f32) $op *b)),
             (ShimValue::Float(a), ShimValue::Integer(b)) => Ok(ShimValue::Float(*a $op (*b as f32))),
@@ -1483,6 +1490,15 @@ impl ShimValue {
     }
 
     pub fn to_string_mem(&self, mem: &MMU) -> String {
+        let mut visited: Vec<usize> = Vec::new();
+        self.to_string_mem_inner(mem, &mut visited)
+    }
+
+    /// Recursive worker for `to_string_mem`. `visited` holds the memory
+    /// positions of the container values currently being formatted; when a
+    /// value would be formatted again (a reference cycle), `...` is emitted
+    /// instead of recursing forever.
+    fn to_string_mem_inner(&self, mem: &MMU, visited: &mut Vec<usize>) -> String {
         match self {
             ShimValue::Uninitialized => "Uninitialized".to_string(),
             ShimValue::None => "None".to_string(),
@@ -1492,9 +1508,14 @@ impl ShimValue {
             ShimValue::Bool(true) => "true".to_string(),
             ShimValue::String(..) => String::from_utf8(self.string_from_mem(mem).unwrap().to_vec())
                 .expect("valid utf-8 string stored"),
-            ShimValue::List(_) => {
-                let lst = self.list_from_mem(mem).unwrap();
+            ShimValue::List(position) => {
+                let pos = usize::from(*position);
+                if visited.contains(&pos) {
+                    return "...".to_string();
+                }
+                visited.push(pos);
 
+                let lst = self.list_from_mem(mem).unwrap();
                 let mut out = "[".to_string();
                 for idx in 0..lst.len() {
                     if idx != 0 {
@@ -1502,15 +1523,21 @@ impl ShimValue {
                         out.push(' ');
                     }
                     let item = lst.get(mem, idx as isize).unwrap();
-                    out.push_str(&item.to_string_mem(mem));
+                    out.push_str(&item.to_string_mem_inner(mem, visited));
                 }
                 out.push(']');
 
+                visited.pop();
                 out
             }
-            ShimValue::Tuple(len, pos) => {
+            ShimValue::Tuple(len, pos_raw) => {
                 let len = usize::from(*len);
-                let pos = usize::from(*pos);
+                let pos = usize::from(*pos_raw);
+                if visited.contains(&pos) {
+                    return "...".to_string();
+                }
+                visited.push(pos);
+
                 let mut out = "(".to_string();
                 for idx in 0..len {
                     if idx != 0 {
@@ -1518,18 +1545,25 @@ impl ShimValue {
                         out.push(' ');
                     }
                     let item = unsafe { ShimValue::from_u64(mem.mem()[pos+idx]) };
-                    out.push_str(&item.to_string_mem(mem));
+                    out.push_str(&item.to_string_mem_inner(mem, visited));
                 }
                 if len == 1 {
                     out.push(',');
                 }
                 out.push(')');
 
+                visited.pop();
                 out
             }
             ShimValue::Native(_, _) => self.native_from_mem(mem).unwrap().to_string_mem(mem),
             ShimValue::Struct(def_pos, pos) => {
-                unsafe {
+                let instance_pos = usize::from(*pos);
+                if visited.contains(&instance_pos) {
+                    return "...".to_string();
+                }
+                visited.push(instance_pos);
+
+                let out = unsafe {
                     let def: &StructDef = mem.get(*def_pos);
 
                     // Get the struct name
@@ -1556,12 +1590,15 @@ impl ShimValue {
                         }
                         out.push_str(attr_name);
                         out.push('=');
-                        out.push_str(&val.to_string_mem(mem));
+                        out.push_str(&val.to_string_mem_inner(mem, visited));
                     }
 
                     out.push(')');
                     out
-                }
+                };
+
+                visited.pop();
+                out
             }
             value => format!("{:?}", value),
         }
@@ -1594,7 +1631,8 @@ impl ShimValue {
     ) -> Result<CallResult, String> {
         match (self, other) {
             (ShimValue::Integer(a), ShimValue::Integer(b)) => {
-                Ok(CallResult::ReturnValue(ShimValue::Integer(*a + *b)))
+                // Saturate at i32::MIN/i32::MAX instead of panicking on overflow.
+                Ok(CallResult::ReturnValue(ShimValue::Integer(a.saturating_add(*b))))
             }
             (ShimValue::Float(a), ShimValue::Float(b)) => {
                 Ok(CallResult::ReturnValue(ShimValue::Float(*a + *b)))
@@ -1637,7 +1675,7 @@ impl ShimValue {
     }
 
     pub fn sub(&self, interpreter: &mut Interpreter, other: &Self) -> Result<ShimValue, String> {
-        numeric_op!(self - other, interpreter, b"sub")
+        numeric_op!(self - other, interpreter, b"sub", saturating_sub)
     }
 
     pub fn equal_inner(
@@ -1760,16 +1798,49 @@ impl ShimValue {
         Ok(ShimValue::Bool(!self.equal_inner(interpreter, other)?))
     }
 
+    /// Equality used to identify dictionary keys.
+    ///
+    /// This is stricter than `equal_inner`: an integer and a float are never
+    /// the same key, so `1` and `1.0` index distinct entries even though the
+    /// `==` operator considers them equal. Tuple keys are compared
+    /// element-wise with the same rule.
+    pub fn dict_key_equal(
+        &self,
+        interpreter: &mut Interpreter,
+        other: &Self,
+    ) -> Result<bool, String> {
+        match (self, other) {
+            (ShimValue::Integer(_), ShimValue::Float(_))
+            | (ShimValue::Float(_), ShimValue::Integer(_)) => Ok(false),
+            (ShimValue::Tuple(len_a, pos_a), ShimValue::Tuple(len_b, pos_b)) => {
+                let len_a = usize::from(*len_a);
+                let len_b = usize::from(*len_b);
+                if len_a != len_b {
+                    return Ok(false);
+                }
+                let pos_a = usize::from(*pos_a);
+                let pos_b = usize::from(*pos_b);
+                for idx in 0..len_a {
+                    let item_a = unsafe { ShimValue::from_u64(interpreter.mem.mem()[pos_a + idx]) };
+                    let item_b = unsafe { ShimValue::from_u64(interpreter.mem.mem()[pos_b + idx]) };
+                    if !item_a.dict_key_equal(interpreter, &item_b)? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
+            _ => self.equal_inner(interpreter, other),
+        }
+    }
+
     pub fn mul(&self, interpreter: &mut Interpreter, other: &Self) -> Result<ShimValue, String> {
-        numeric_op!(self * other, interpreter, b"mul")
+        numeric_op!(self * other, interpreter, b"mul", saturating_mul)
     }
 
     pub fn div(&self, interpreter: &mut Interpreter, other: &Self) -> Result<ShimValue, String> {
+        // Division always produces a float; division by zero is defined to
+        // return 0.0 rather than yielding infinity/NaN or panicking.
         match (self, other) {
-            (ShimValue::Integer(a), ShimValue::Integer(b)) => Ok(ShimValue::Float((*a as f32) / (*b as f32))),
-            (ShimValue::Float(a), ShimValue::Float(b)) => Ok(ShimValue::Float(*a / *b)),
-            (ShimValue::Integer(a), ShimValue::Float(b)) => Ok(ShimValue::Float((*a as f32) / *b)),
-            (ShimValue::Float(a), ShimValue::Integer(b)) => Ok(ShimValue::Float(*a / (*b as f32))),
             (ShimValue::Struct(..), _) => {
                 if let Some(result) = self.try_struct_override(interpreter, b"div", other) {
                     result
@@ -1780,6 +1851,11 @@ impl ShimValue {
                     ))
                 }
             },
+            (_, ShimValue::Integer(0) | ShimValue::Float(0.0)) => Ok(ShimValue::Float(0.0)),
+            (ShimValue::Integer(a), ShimValue::Integer(b)) => Ok(ShimValue::Float((*a as f32) / (*b as f32))),
+            (ShimValue::Float(a), ShimValue::Float(b)) => Ok(ShimValue::Float(*a / *b)),
+            (ShimValue::Integer(a), ShimValue::Float(b)) => Ok(ShimValue::Float((*a as f32) / *b)),
+            (ShimValue::Float(a), ShimValue::Integer(b)) => Ok(ShimValue::Float(*a / (*b as f32))),
             (a, b) => Err(format!(
                 "Operation '/' not supported between {} and {}",
                 a.to_string_mem(&interpreter.mem), b.to_string_mem(&interpreter.mem)
@@ -1788,11 +1864,9 @@ impl ShimValue {
     }
 
     pub fn modulus(&self, interpreter: &mut Interpreter, other: &Self) -> Result<ShimValue, String> {
+        // Modulo by zero is defined to return 0 (of the result's type) rather
+        // than panicking (integers) or yielding NaN (floats).
         match (self, other) {
-            (ShimValue::Integer(a), ShimValue::Integer(b)) => Ok(ShimValue::Integer(a.rem_euclid(*b))),
-            (ShimValue::Float(a), ShimValue::Float(b)) => Ok(ShimValue::Float(a.rem_euclid(*b))),
-            (ShimValue::Integer(a), ShimValue::Float(b)) => Ok(ShimValue::Float((*a as f32).rem_euclid(*b))),
-            (ShimValue::Float(a), ShimValue::Integer(b)) => Ok(ShimValue::Float(a.rem_euclid(*b as f32))),
             (ShimValue::Struct(..), _) => {
                 if let Some(result) = self.try_struct_override(interpreter, b"modulus", other) {
                     result
@@ -1803,6 +1877,12 @@ impl ShimValue {
                     ))
                 }
             },
+            (ShimValue::Integer(_), ShimValue::Integer(0)) => Ok(ShimValue::Integer(0)),
+            (_, ShimValue::Integer(0) | ShimValue::Float(0.0)) => Ok(ShimValue::Float(0.0)),
+            (ShimValue::Integer(a), ShimValue::Integer(b)) => Ok(ShimValue::Integer(a.rem_euclid(*b))),
+            (ShimValue::Float(a), ShimValue::Float(b)) => Ok(ShimValue::Float(a.rem_euclid(*b))),
+            (ShimValue::Integer(a), ShimValue::Float(b)) => Ok(ShimValue::Float((*a as f32).rem_euclid(*b))),
+            (ShimValue::Float(a), ShimValue::Integer(b)) => Ok(ShimValue::Float(a.rem_euclid(*b as f32))),
             (a, b) => Err(format!(
                 "Operation '%' not supported between {} and {}",
                 a.to_string_mem(&interpreter.mem), b.to_string_mem(&interpreter.mem)
@@ -2493,6 +2573,10 @@ impl Interpreter {
                 val if val == ByteCode::Copy as u8 => {
                     stack.push(*stack.last().expect("non-empty stack"));
                 }
+                val if val == ByteCode::Swap as u8 => {
+                    let len = stack.len();
+                    stack.swap(len - 1, len - 2);
+                }
                 val if val == ByteCode::CopyFrom as u8 => {
                     let offset = bytes[*pc + 1] as usize;
                     let idx = stack.len() - 1 - offset;
@@ -2674,7 +2758,10 @@ impl Interpreter {
                         return Err(format_script_err(
                             self.program.spans[*pc],
                             &self.program.script,
-                            &format!("Identifier {:?} not found", ident),
+                            &format!(
+                                "Cannot assign to undeclared variable \"{}\" (use `let` to declare it)",
+                                debug_u8s(ident)
+                            ),
                         ));
                     }
                     env.update(&mut self.mem, ident, val)?;

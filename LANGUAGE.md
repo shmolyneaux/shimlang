@@ -129,6 +129,34 @@ Output:
 35
 ```
 
+Integer literals may use `_` as a digit separator for readability:
+
+```rust
+print(1_000_000);
+```
+
+Output:
+
+```
+1000000
+```
+
+Integer arithmetic **saturates** rather than overflowing: a `+`, `-`, `*`, or
+`pow` result that would exceed the 32-bit range is clamped to the maximum or
+minimum value instead of wrapping around or halting:
+
+```rust
+print(2147483647 + 1);
+print(100000 * 100000);
+```
+
+Output:
+
+```
+2147483647
+2147483647
+```
+
 ### Floats
 
 Floating-point numbers are 32-bit (single precision). A number with a decimal
@@ -146,6 +174,40 @@ Output:
 ```
 3.14
 -2.5
+```
+
+Float literals support `e`/`E` exponent notation, `_` digit separators, and a
+leading decimal point (the integer part may be omitted):
+
+```rust
+print(1.5e3);
+print(2.5E-2);
+print(.5);
+print(1_000.000_5);
+```
+
+Output:
+
+```
+1500.0
+0.025
+0.5
+1000.0005
+```
+
+Non-finite values are written `inf`, `-inf`, and `NaN`. They arise from
+operations such as `sqrt` of a negative number:
+
+```rust
+print((-1.0).sqrt());
+print((1.0).ln() - (0.0).ln());
+```
+
+Output:
+
+```
+NaN
+inf
 ```
 
 The `/` operator always produces a float, even for integer operands. Use
@@ -180,6 +242,12 @@ Output:
 true
 false
 ```
+
+Booleans are **not** numbers. They do not participate in arithmetic
+(`true + true` is an error), and a boolean is never equal to an integer or
+float: `1 == true` is `false`. You can still convert a boolean to a number
+explicitly with `int(...)` or `float(...)` (`int(true)` is `1`), and `bool(...)`
+converts any value's truthiness to a boolean.
 
 ### Strings
 
@@ -475,7 +543,12 @@ None
 
 ### Tuples
 
-Tuples are fixed-size, ordered, immutable sequences written with parentheses.
+Tuples are fixed-size, ordered, immutable groups of values written with
+parentheses. They are closer to a Rust tuple than a Python list: a tuple is a
+pair/triple/etc. of values that may have different types, meant for grouping and
+unpacking rather than for sequence processing. Consequently a tuple has **no
+`.len()` method**, does **not** support negative indexing, and is **not
+iterable** in a `for` loop. Access elements by their fixed position instead.
 Unlike lists, tuples are hashable, so they can be used as dictionary keys:
 
 ```rust
@@ -565,7 +638,15 @@ Output:
 
 Dictionaries are hash maps created with the `dict()` built-in. Keys can be
 hashable values: integers, floats, booleans, strings, `None`, and tuples whose
-items are also hashable:
+items are also hashable.
+
+Keys are identified by both type and value: an integer key and a float key are
+**distinct** even when they are numerically equal, so `1` and `1.0` index
+different entries (this differs from the `==` operator, where `1 == 1.0`).
+`NaN` is never equal to itself, so a `NaN` key can be stored but can never be
+looked up again.
+
+For example:
 
 ```rust
 let d = dict();
@@ -771,6 +852,22 @@ Output:
 2
 ```
 
+Division and modulus by zero are defined to return `0` rather than producing
+infinity/`NaN` or halting. Division still yields a float, so `x / 0` is `0.0`
+and `x % 0` is `0`:
+
+```rust
+print(10 / 0);
+print(10 % 0);
+```
+
+Output:
+
+```
+0.0
+0
+```
+
 ### Comparison
 
 | Operator | Description |
@@ -809,6 +906,28 @@ with each other), strings, booleans, `None`, lists, tuples, and structs that
 provide comparison overload methods. Lists and tuples compare lexicographically:
 the first unequal element determines the result, and if one sequence is a
 prefix of the other, the shorter sequence sorts first.
+
+Comparison operators can be **chained**, as in `a < b < c`. A chain
+`a OP b OP c` is equivalent to `a OP b and b OP c`, except that each operand is
+evaluated at most once and evaluation short-circuits as soon as a comparison
+fails. This makes range checks read naturally:
+
+```rust
+let x = 5;
+print(0 < x < 10);
+print(1 < 2 < 3 < 2);
+```
+
+Output:
+
+```
+true
+false
+```
+
+In `lower < value < upper`, `value` is evaluated exactly once, and `upper` is
+not evaluated at all when `lower < value` is already false. A chain evaluates to
+`true` or `false`.
 
 Equality is defined for booleans, numbers, strings, `None`, lists, tuples,
 function identity, bound method identity, struct definitions, and structs.
@@ -929,8 +1048,27 @@ Output:
 4
 ```
 
-Ranges exclude the upper bound. The `Range()` built-in supports a `.step()`
-method for custom increments:
+Ranges exclude the upper bound. The endpoints are not limited to integers — any
+values that step toward each other work, including floats, which advance by `1`
+each step by default:
+
+```rust
+for i in 0.0..3.0 {
+    print(i);
+}
+```
+
+Output:
+
+```
+0.0
+1.0
+2.0
+```
+
+A range whose start is already at or past its end is empty (a plain `..` range
+does not count downward; use `Range().step(-1)` for that). The `Range()`
+built-in supports a `.step()` method for custom increments:
 
 ```rust
 for i in Range(0, 10).step(3) {
@@ -1200,6 +1338,28 @@ Hello, Alice!
 
 Required parameters cannot appear after default parameters.
 
+Because the default expression runs anew on every call that omits the argument,
+a mutable default such as a list is **not** shared between calls — each call
+gets a fresh value:
+
+```rust
+fn collect(item, into=[]) {
+    into.append(item);
+    into
+}
+print(collect(1));
+print(collect(2));
+```
+
+Output:
+
+```
+[1]
+[2]
+```
+
+A default expression may also reference parameters listed before it.
+
 ### Keyword Arguments
 
 Arguments can be passed by name, allowing you to skip positional order:
@@ -1283,6 +1443,28 @@ Output:
 ```
 8
 13
+```
+
+A `for` loop creates a fresh binding of the loop variable on each iteration, so
+closures created inside the loop each capture their own value rather than all
+sharing the final one:
+
+```rust
+let callbacks = [];
+for i in 0..3 {
+    callbacks.append(fn() { i });
+}
+print(callbacks[0]());
+print(callbacks[1]());
+print(callbacks[2]());
+```
+
+Output:
+
+```
+0
+1
+2
 ```
 
 ## Structs
@@ -1441,7 +1623,16 @@ names:
 | `contains` | `in` |
 
 Each method takes `self` and the right-hand operand as arguments and returns the
-result:
+result. A few details:
+
+- Dispatch is on the **left** operand only. `vec + other` calls `vec.add(other)`;
+  there is no reflected form, so `other + vec` does not call a method on `vec`.
+  Operator overloads are intended to be used between values of the same type.
+- Each operator is independent — defining `lt` does not automatically provide
+  `gt`, and so on. Define each operator you need. (`!=` is the exception: it is
+  derived from `eq`.)
+- For comparison operators, the value returned by the overload is interpreted by
+  its **truthiness**, so returning any truthy value counts as `true`.
 
 ```rust
 struct Vec2 {
@@ -1731,6 +1922,7 @@ Output:
 |----------|-------------|
 | `print(args...)` | Prints arguments separated by spaces, followed by a newline |
 | `assert(condition)` | Panics if `condition` is falsy |
+| `assert(condition, message)` | Panics with `message` if `condition` is falsy |
 | `panic(message)` | Immediately halts execution with an error message |
 | `dict()` | Creates a new empty dictionary |
 | `dict(key=value, ...)` | Creates a dictionary with string keys from keyword names |
@@ -1813,6 +2005,9 @@ The built-in `panic` function and `assert` halt execution immediately:
 ```rust
 assert(1 == 1);   // passes silently
 assert(1 == 2);   // halts with an error
+
+// An optional second argument supplies the failure message:
+assert(1 == 2, "values should match");
 
 panic("something went wrong");  // always halts
 ```
