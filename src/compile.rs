@@ -45,6 +45,7 @@ pub(crate) enum ByteCode {
     LiteralShimValue,
     LiteralString,
     LiteralNone,
+    LiteralStopIteration,
     CreateFn,
     CreateList,
     CreateStruct,
@@ -718,12 +719,13 @@ pub fn compile_statement(stmt_node: &StatementNode) -> Result<Vec<(u8, Span)>, S
             asm.push((0, expr.span));
             asm.push((0, expr.span));
 
-            // Copy the result of .next() so we can check if it's None
+            // Copy the result of .next() so we can check if it's the
+            // StopIteration sentinel
             asm.push((ByteCode::Copy as u8, expr.span));
-            asm.push((ByteCode::LiteralNone as u8, expr.span));
+            asm.push((ByteCode::LiteralStopIteration as u8, expr.span));
             asm.push((ByteCode::Equal as u8, expr.span));
 
-            // Jump to `LoopEnd` if calling .next() returns None
+            // Jump to `LoopEnd` if calling .next() returns StopIteration
             let none_check_idx = asm.len();
             asm.push((ByteCode::JmpNZ as u8, stmt_span));
             asm.push((0, stmt_span));
@@ -768,10 +770,10 @@ pub fn compile_statement(stmt_node: &StatementNode) -> Result<Vec<(u8, Span)>, S
 
             // This is the offset from none_check_idx that will get us
             // out of the loop. JmpNZ lands on a Pop that discards the
-            // leftover None left on the stack by the iterator check
-            // (Copy/None/Equal consumed only the duplicate). `break`
-            // jumps to LoopEnd below instead, where that None is not
-            // on the stack.
+            // leftover StopIteration left on the stack by the iterator
+            // check (Copy/StopIteration/Equal consumed only the
+            // duplicate). `break` jumps to LoopEnd below instead, where
+            // that sentinel is not on the stack.
             let pc_offset = u16_to_u8s(asm.len() as u16 - none_check_idx as u16);
             asm[none_check_idx + 1].0 = pc_offset[0];
             asm[none_check_idx + 2].0 = pc_offset[1];
@@ -1656,6 +1658,8 @@ pub fn format_asm(bytes: &[u8]) -> String {
             idx += len + 1;
         } else if *b == ByteCode::LiteralNone as u8 {
             out.push_str("None");
+        } else if *b == ByteCode::LiteralStopIteration as u8 {
+            out.push_str("StopIteration");
         } else if *b == ByteCode::CreateList as u8 {
             let list_size = ((bytes[idx + 1] as usize) << 8) + bytes[idx + 2] as usize;
             out.push_str(&format!("CreateList size={}", list_size));

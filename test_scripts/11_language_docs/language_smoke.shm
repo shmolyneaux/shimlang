@@ -185,7 +185,7 @@ struct Counter {
 
     fn next(self) {
         if self.current >= self.max {
-            return None;
+            return StopIteration;
         }
         let val = self.current;
         self.current += 1;

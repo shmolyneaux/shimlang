@@ -11,7 +11,7 @@
   58:  Copy
   59:  call args=0  kwargs=0
   62:  Copy
-  63:  None
+  63:  StopIteration
   64:  equal
   65:  JMPNZ -> 118
   68:  start_captured_scope

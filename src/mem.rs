@@ -836,6 +836,7 @@ impl<'a> GC<'a> {
                     | ShimValue::Bool(_)
                     | ShimValue::Unit
                     | ShimValue::None
+                    | ShimValue::StopIteration
                     | ShimValue::Uninitialized => (),
                     ShimValue::Fn(fn_pos) => {
                         let pos: usize = fn_pos.into();

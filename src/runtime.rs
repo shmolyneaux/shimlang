@@ -242,6 +242,10 @@ impl Environment {
             env.insert_native_fn(mem, name, *func);
         }
 
+        // Sentinel value used by iterators to signal the end of iteration.
+        env.insert_new(mem, b"StopIteration".to_vec(), ShimValue::StopIteration)
+            .expect("out of memory registering StopIteration");
+
         env
     }
 
@@ -484,6 +488,10 @@ pub enum ShimValue {
     Uninitialized,
     Unit,
     None,
+    // Sentinel returned by iterators to signal that iteration has finished.
+    // This is distinct from `None` so that `None` can be a legitimate value
+    // produced by an iterator.
+    StopIteration,
     Integer(i32),
     Float(f32),
     Bool(bool),
@@ -878,6 +886,10 @@ impl ShimValue {
 
     pub fn is_none(&self) -> bool {
         matches!(self, ShimValue::None)
+    }
+
+    pub fn is_stop_iteration(&self) -> bool {
+        matches!(self, ShimValue::StopIteration)
     }
 
     pub fn hash(&self, interpreter: &mut Interpreter) -> Result<u32, String> {
@@ -1512,6 +1524,7 @@ impl ShimValue {
         match self {
             ShimValue::Uninitialized => "Uninitialized".to_string(),
             ShimValue::None => "None".to_string(),
+            ShimValue::StopIteration => "StopIteration".to_string(),
             ShimValue::Integer(i) => i.to_string(),
             ShimValue::Float(f) => format_float(*f),
             ShimValue::Bool(false) => "false".to_string(),
@@ -1705,6 +1718,7 @@ impl ShimValue {
                 Ok(a == b)
             }
             (ShimValue::None, ShimValue::None) => Ok(true),
+            (ShimValue::StopIteration, ShimValue::StopIteration) => Ok(true),
             (a @ ShimValue::List(_), b @ ShimValue::List(_)) => {
                 let a = a.list(interpreter)?;
                 let b = b.list(interpreter)?;
@@ -2604,6 +2618,9 @@ impl Interpreter {
                 }
                 val if val == ByteCode::LiteralNone as u8 => {
                     stack.push(ShimValue::None);
+                }
+                val if val == ByteCode::LiteralStopIteration as u8 => {
+                    stack.push(ShimValue::StopIteration);
                 }
                 val if val == ByteCode::Copy as u8 => {
                     stack.push(*stack.last().expect("non-empty stack"));

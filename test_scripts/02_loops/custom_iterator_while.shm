@@ -11,7 +11,7 @@ struct RangeIterator {
 
     fn next(self) {
         if self.idx == self.obj.stop {
-            return None;
+            return StopIteration;
         }
         let val = self.idx;
         self.idx = self.idx + 1;
@@ -32,7 +32,7 @@ let obj = Range(2, 8);
 let itr = obj.iter();
 while true {
     let val = itr.next();
-    if val == None {
+    if val == StopIteration {
         break;
     }
     print("Val:", val);

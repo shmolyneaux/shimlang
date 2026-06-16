@@ -28,7 +28,7 @@ impl ShimNative for ListIterator {
                 let itr: &mut ListIterator = args.args[0].as_native(interpreter)?;
                 let lst = itr.lst.list(interpreter)?;
                 if itr.idx >= lst.len() {
-                    Ok(ShimValue::None)
+                    Ok(ShimValue::StopIteration)
                 } else {
                     let result = lst.get(&interpreter.mem, itr.idx as isize)?;
                     itr.idx += 1;
@@ -152,8 +152,8 @@ impl ShimNative for EnumeratorIterator {
                     }
                 };
 
-                if matches!(val, ShimValue::None) {
-                    return Ok(ShimValue::None);
+                if val.is_stop_iteration() {
+                    return Ok(ShimValue::StopIteration);
                 }
 
                 let itr: &mut EnumeratorIterator = args.args[0].as_native(interpreter)?;
@@ -197,7 +197,7 @@ impl ShimNative for StringIterator {
                 let b = {
                     let s = itr.str_val.string(interpreter)?;
                     if itr.idx >= s.len() {
-                        return Ok(ShimValue::None);
+                        return Ok(ShimValue::StopIteration);
                     }
                     s[itr.idx]
                 };
@@ -250,7 +250,7 @@ impl ShimNative for DictKeysIterator {
                     itr.idx += 1;
                 }
 
-                Ok(ShimValue::None)
+                Ok(ShimValue::StopIteration)
             }
 
             Ok(interpreter
@@ -318,7 +318,7 @@ impl ShimNative for DictValuesIterator {
                     itr.idx += 1;
                 }
 
-                Ok(ShimValue::None)
+                Ok(ShimValue::StopIteration)
             }
 
             Ok(interpreter
@@ -387,7 +387,7 @@ impl ShimNative for DictItemsIterator {
                     itr.idx += 1;
                 }
 
-                Ok(ShimValue::None)
+                Ok(ShimValue::StopIteration)
             }
 
             Ok(interpreter
@@ -561,7 +561,7 @@ impl ShimNative for RangeIterator {
                 };
 
                 if !has_more {
-                    Ok(ShimValue::None)
+                    Ok(ShimValue::StopIteration)
                 } else {
                     let result = itr.current;
                     // current = current + step
@@ -1442,7 +1442,7 @@ pub(crate) fn shim_average(
                 )?
             }
         };
-        if val.is_none() {
+        if val.is_stop_iteration() {
             break;
         }
         acc = match acc {
@@ -1809,7 +1809,7 @@ fn filter_iterable(
             }
         };
 
-        if input.is_none() {
+        if input.is_stop_iteration() {
             break;
         }
 
@@ -1995,8 +1995,8 @@ pub(crate) fn shim_list_extend(
             }
         };
 
-        // Break if we get None (end of iteration)
-        if result.is_none() {
+        // Break if we get StopIteration (end of iteration)
+        if result.is_stop_iteration() {
             break;
         }
 
@@ -2544,7 +2544,7 @@ pub(crate) fn shim_str_join(
                 interpreter.execute_bytecode_extended(&mut (pc as usize), next_args, &mut new_env)?
             }
         };
-        if item.is_none() {
+        if item.is_stop_iteration() {
             break;
         }
         if !first {
@@ -2836,6 +2836,7 @@ pub(crate) fn get_type_name(value: &ShimValue) -> &'static str {
         ShimValue::Uninitialized => "uninitialized",
         ShimValue::Unit => "unit",
         ShimValue::None => "none",
+        ShimValue::StopIteration => "stop_iteration",
         ShimValue::Integer(_) => "int",
         ShimValue::Float(_) => "float",
         ShimValue::Bool(_) => "bool",

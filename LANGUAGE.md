@@ -1960,11 +1960,31 @@ Output:
 
 An iterable is any value with an `iter` method. Calling `.iter()` returns an
 iterator object, and that iterator exposes a `next` method. `for` loops call
-`.iter()` for you and repeatedly call `.next()` until it returns `None`.
+`.iter()` for you and repeatedly call `.next()` until it returns the
+`StopIteration` sentinel.
+
+`StopIteration` is a built-in value, available in the global environment, that
+iterators return to signal that there are no more values. It is distinct from
+`None`, which means an iterator can legitimately yield `None` as one of its
+values without ending iteration early:
+
+```rust
+for value in [1, None, 3] {
+    print(value);
+}
+```
+
+Output:
+
+```
+1
+None
+3
+```
 
 Any struct that implements an `iter` method returning an iterator object can be
-used in `for` loops. The `next` method should return `None` to signal the end
-of iteration:
+used in `for` loops. The `next` method should return `StopIteration` to signal
+the end of iteration:
 
 ```rust
 struct Counter {
@@ -1977,7 +1997,7 @@ struct Counter {
 
     fn next(self) {
         if self.current >= self.max {
-            return None;
+            return StopIteration;
         }
         let val = self.current;
         self.current = self.current + 1;
