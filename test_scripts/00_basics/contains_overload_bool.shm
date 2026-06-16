@@ -1,0 +1,4 @@
+struct Bag {
+    fn contains(self, item) { 7 }
+}
+print(3 in Bag());

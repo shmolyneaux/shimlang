@@ -48,7 +48,11 @@ pub enum Token {
     LCurly,
     RCurly,
     None,
-    Integer(i32),
+    // Integer literals are lexed as i64 so that a magnitude one past
+    // i32::MAX (2147483648) can be carried through to the parser, where a
+    // leading minus folds it into i32::MIN. Bare out-of-range literals are
+    // saturated to the i32 range at compile time.
+    Integer(i64),
     Float(f32),
     Bool(bool),
     Identifier(Vec<u8>),
@@ -416,9 +420,20 @@ fn parse_number_token(digits: &[u8], is_float: bool) -> Result<Token, String> {
             format!("Could not tokenize number '{}' {:?}", string_slice, e)
         })?))
     } else {
-        Ok(Token::Integer(string_slice.parse().map_err(|e| {
+        let value: i64 = string_slice.parse().map_err(|e| {
             format!("Could not tokenize number '{}' {:?}", string_slice, e)
-        })?))
+        })?;
+        // The largest-magnitude valid integer literal is 2147483648, which is
+        // only valid as i32::MIN and only when preceded by a unary minus. Any
+        // larger magnitude cannot name an i32 regardless of sign, so reject it
+        // here as a parse error rather than silently saturating.
+        if value > -(i32::MIN as i64) {
+            return Err(format!(
+                "Integer literal '{}' is out of range for a 32-bit integer",
+                string_slice
+            ));
+        }
+        Ok(Token::Integer(value))
     }
 }
 

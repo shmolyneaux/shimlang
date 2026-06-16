@@ -1,0 +1,6 @@
+// Unbounded recursion exhausts the heap. This must surface as a clean
+// Shimlang error (not a Rust panic / abort).
+fn recurse(n) {
+    recurse(n + 1)
+}
+recurse(0);

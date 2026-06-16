@@ -34,7 +34,9 @@ pub type Ident = Vec<u8>;
 #[derive(Debug)]
 pub enum Primary {
     None,
-    Integer(i32),
+    // Carried as i64 so a leading-minus fold can represent i32::MIN; it is
+    // saturated to the i32 range during compilation.
+    Integer(i64),
     Float(f32),
     Identifier(Vec<u8>),
     Bool(bool),
@@ -782,10 +784,20 @@ pub fn parse_unary(tokens: &mut TokenStream) -> Result<ExprNode, String> {
         Token::Minus => {
             tokens.advance()?;
             let expr = parse_unary(tokens)?;
-            Ok(Node {
-                data: Expression::UnaryOp(UnaryOp::Negate(Box::new(expr))),
-                span,
-            })
+            // Fold a minus applied directly to an integer literal into the
+            // literal itself. This is what lets `-2147483648` (i32::MIN) be
+            // written, since its magnitude does not fit in an i32 on its own.
+            if let Expression::Primary(Primary::Integer(v)) = expr.data {
+                Ok(Node {
+                    data: Expression::Primary(Primary::Integer(-v)),
+                    span,
+                })
+            } else {
+                Ok(Node {
+                    data: Expression::UnaryOp(UnaryOp::Negate(Box::new(expr))),
+                    span,
+                })
+            }
         }
         _ => parse_call(tokens),
     }
@@ -1158,6 +1170,11 @@ pub fn parse_block_inner(tokens: &mut TokenStream) -> Result<Block, String> {
                 break;
             }
 
+            // A bare block expression used as a statement does not require a
+            // trailing semicolon, mirroring if/while/for statements.
+            let espan = expr.span;
+            let is_block_expr = matches!(expr.data, Expression::Block(_));
+
             match tokens.peek()? {
                 Token::RCurly => {
                     last_expr = Some(Box::new(expr));
@@ -1279,15 +1296,22 @@ pub fn parse_block_inner(tokens: &mut TokenStream) -> Result<Block, String> {
                     }
                 }
                 token => {
-                    let next_span = tokens.peek_span()?;
-                    return Err(format_script_err(
-                        expr.span + next_span,
-                        &tokens.script,
-                        &format!(
-                            "Expected semicolon after expression statement, found {:?}",
-                            token
-                        ),
-                    ));
+                    if is_block_expr {
+                        StatementNode {
+                            data: Statement::Expression(expr),
+                            span: start_span + espan,
+                        }
+                    } else {
+                        let next_span = tokens.peek_span()?;
+                        return Err(format_script_err(
+                            expr.span + next_span,
+                            &tokens.script,
+                            &format!(
+                                "Expected semicolon after expression statement, found {:?}",
+                                token
+                            ),
+                        ));
+                    }
                 }
             }
         };

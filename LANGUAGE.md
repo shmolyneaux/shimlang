@@ -85,6 +85,19 @@ Output:
 The answer is 42
 ```
 
+The separator between arguments and the trailing string can be customized with
+the `sep` and `end` keyword arguments (which default to a space and a newline):
+
+```rust
+print("a", "b", "c", sep="-", end="!\n");
+```
+
+Output:
+
+```
+a-b-c!
+```
+
 ## Variables
 
 Variables are declared with `let` and can hold any type. Reassignment uses `=`
@@ -140,6 +153,11 @@ Output:
 ```
 1000000
 ```
+
+An integer literal must name a value within the 32-bit signed range,
+`-2147483648` to `2147483647`. A literal outside that range (for example a bare
+`2147483648`, which is only valid as the negative `-2147483648`) is rejected at
+parse time rather than being silently saturated or wrapped.
 
 Integer arithmetic **saturates** rather than overflowing: a `+`, `-`, `*`, or
 `pow` result that would exceed the 32-bit range is clamped to the maximum or
@@ -210,6 +228,11 @@ NaN
 inf
 ```
 
+All non-finite floats are **truthy**: `inf`, `-inf`, and `NaN` are all truthy,
+because only a numeric value of exactly zero is falsy. `NaN` also follows the
+usual IEEE rule of never comparing equal to anything, including itself
+(`NaN == NaN` is `false`).
+
 The `/` operator always produces a float, even for integer operands. Use
 `.trunc()` or `int(...)` if you need a truncated integer result:
 
@@ -226,6 +249,11 @@ Output:
 3.3333333
 3
 ```
+
+Converting a non-finite float to an integer with `int(...)` saturates instead of
+failing: `int(inf)` is the maximum integer, `int(-inf)` is the minimum integer,
+and `int(NaN)` is `0`. (A finite float out of integer range likewise saturates,
+matching the saturating behavior of integer arithmetic.)
 
 ### Booleans
 
@@ -259,6 +287,7 @@ let name = "Shimlang";
 print(name);
 print(name.len());
 print(name[0]);
+print(name[-1]);
 print("Hello" + " " + "World");
 ```
 
@@ -268,11 +297,16 @@ Output:
 Shimlang
 8
 S
+g
 Hello World
 ```
 
-Supported escape sequences include `\n` (newline), `\t` (tab), `\"` (double
-quote), and `\\` (backslash):
+The complete set of supported escape sequences is `\n` (newline), `\t` (tab),
+`\"` (double quote), and `\\` (backslash). No others are recognized — in
+particular `\r`, `\0`, and `\x..`/`\u..` hex/unicode escapes are **not**
+supported and cause a parse error. (Note that `.split_lines()` still splits on
+`\r`/`\r\n` line endings when those bytes arrive from outside the source, even
+though a `\r` cannot be written in a string literal.)
 
 ```rust
 print("line one\nline two");
@@ -289,7 +323,9 @@ a "quoted" word
 
 Strings are byte-oriented and currently intended for ASCII text. `.len()`
 returns the number of bytes, indexing returns a one-byte string, and iteration
-yields each ASCII character byte as a one-character string:
+yields each ASCII character byte as a one-character string. Like lists, strings
+support **negative indices**, which count back from the end (`s[-1]` is the last
+byte); an index outside the valid range is an error:
 
 ```rust
 for ch in "abc" {
@@ -361,6 +397,10 @@ a,b,c
 ```
 
 `replace(old, new)` requires `old` to be non-empty.
+
+A single string may hold at most 65,535 bytes (the `u16` maximum). An operation
+that would produce a longer string — for example repeated concatenation — fails
+with an error rather than truncating or wrapping.
 
 ### None
 
@@ -440,6 +480,8 @@ Lists have a rich set of methods:
 | `.join(sep)` | Joins the string representations of items in the list with the string `sep` as the separator |
 | `.enumerate()` | Returns an iterable yielding `(index, element)` tuples |
 | `.average()` | Returns the arithmetic average of the elements, or `0` for an empty list |
+
+Calling `.pop()` on an empty list returns `None` rather than raising an error.
 
 Examples:
 
@@ -539,6 +581,22 @@ Output:
 (0, a)
 (1, b)
 None
+```
+
+A container that refers to itself (directly or indirectly) is still safe to
+print: the cycle is detected and the repeated reference is shown as `...` rather
+than recursing forever.
+
+```rust
+let lst = [1];
+lst.append(lst);
+print(lst);
+```
+
+Output:
+
+```
+[1, ...]
 ```
 
 ### Tuples
@@ -817,7 +875,7 @@ true
 | `-` | Subtraction |
 | `*` | Multiplication |
 | `/` | Division (always produces a float) |
-| `%` | Modulus (Euclidean: result has the sign of the divisor) |
+| `%` | Modulus (Euclidean remainder: always non-negative) |
 
 ```rust
 print(10 + 3);
@@ -837,18 +895,23 @@ Output:
 1
 ```
 
-Modulus uses Euclidean remainder, so the result always has the same sign as the
-divisor. With a positive divisor the result is non-negative:
+Modulus uses the Euclidean remainder, which is **always non-negative**
+regardless of the signs of the operands (the remainder `r` always satisfies
+`0 <= r < abs(divisor)`):
 
 ```rust
 print(-1 % 5);
 print(-7 % 3);
+print(7 % -3);
+print(-7 % -3);
 ```
 
 Output:
 
 ```
 4
+2
+1
 2
 ```
 
@@ -1631,8 +1694,9 @@ result. A few details:
 - Each operator is independent — defining `lt` does not automatically provide
   `gt`, and so on. Define each operator you need. (`!=` is the exception: it is
   derived from `eq`.)
-- For comparison operators, the value returned by the overload is interpreted by
-  its **truthiness**, so returning any truthy value counts as `true`.
+- For the comparison operators (`==`, `<`, `>`, `<=`, `>=`) and `in`, the value
+  returned by the overload is interpreted by its **truthiness** and coerced to a
+  boolean, so returning any truthy value counts as `true`.
 
 ```rust
 struct Vec2 {
@@ -1836,7 +1900,25 @@ big
 `let` declarations, `return <expr>`, `break`, `continue`, assignments,
 compound assignments, and expression statements require semicolons. Function,
 struct, `if`, `while`, and `for` declarations/statements do not use a trailing
-semicolon after their closing brace.
+semicolon after their closing brace. A bare block (`{ ... }`) used as a
+statement likewise needs no trailing semicolon; it introduces a nested scope, so
+`let` bindings inside it do not leak out:
+
+```rust
+let x = 1;
+{
+    let x = 2;
+    print(x);
+}
+print(x);
+```
+
+Output:
+
+```
+2
+1
+```
 
 A final expression in a block may omit the semicolon; that expression becomes
 the block's value. Adding a semicolon makes it an expression statement instead.
@@ -1921,6 +2003,7 @@ Output:
 | Function | Description |
 |----------|-------------|
 | `print(args...)` | Prints arguments separated by spaces, followed by a newline |
+| `print(args..., sep=s, end=e)` | As above, but joins arguments with `sep` and appends `end` instead of the defaults (`" "` and `"\n"`) |
 | `assert(condition)` | Panics if `condition` is falsy |
 | `assert(condition, message)` | Panics with `message` if `condition` is falsy |
 | `panic(message)` | Immediately halts execution with an error message |
