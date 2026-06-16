@@ -361,13 +361,15 @@ Lists have a rich set of methods:
 | `.index(val)` | Returns the index of `val`, or `None` |
 | `.index(val, default)` | Returns the index of `val`, or `default` |
 | `.sort()` | Sorts the list in place |
-| `.sort(key_fn)` | Sorts in place using a key function |
+| `.sort(key_fn)` | Sorts in place using a key function for sorting |
 | `.sorted()` | Returns a new sorted list |
+| `.sorted(key_fn)` | Returns a new sorted list using a key function for sorting |
 | `.reverse()` | Reverses the list in place |
 | `.reversed()` | Returns a new reversed list |
 | `.map(fn)` | Returns a new list with `fn` applied to each element |
 | `.filter()` | Returns a new list of truthy elements |
 | `.filter(fn)` | Returns a new list of elements where `fn` returns truthy |
+| `.join(sep)` | Joins the string representations of items in the list with the string `sep` as the separator |
 | `.enumerate()` | Returns an iterable yielding `(index, element)` tuples |
 | `.average()` | Returns the arithmetic average of the elements, or `0` for an empty list |
 

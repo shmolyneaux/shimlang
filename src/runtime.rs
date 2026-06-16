@@ -1076,6 +1076,7 @@ impl ShimValue {
                 let func = match ident {
                     b"map" => shim_list_map,
                     b"filter" => shim_list_filter,
+                    b"join" => shim_list_join,
                     b"len" => shim_list_len,
                     b"iter" => shim_list_iter,
                     b"enumerate" => shim_enumerate,

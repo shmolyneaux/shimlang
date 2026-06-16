@@ -1847,6 +1847,23 @@ pub(crate) fn shim_list_map(
     Ok(new_lst_val)
 }
 
+pub(crate) fn shim_list_join(
+    interpreter: &mut Interpreter,
+    args: &ArgBundle,
+) -> Result<ShimValue, String> {
+    let mut unpacker = ArgUnpacker::new(args);
+    let obj = unpacker.required(b"obj")?;
+    let s = unpacker.required(b"s")?;
+    unpacker.end()?;
+
+    let args = ArgBundle {
+        args: vec![s, obj],
+        kwargs: Vec::new(),
+    };
+
+    shim_str_join(interpreter, &args)
+}
+
 pub(crate) fn shim_list_len(
     interpreter: &mut Interpreter,
     args: &ArgBundle,
