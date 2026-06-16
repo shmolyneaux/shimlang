@@ -50,6 +50,7 @@ with methods, and a growing standard library of built-in types and functions.
   - [Struct Introspection](#struct-introspection)
 - [String Interpolation](#string-interpolation)
 - [Block Expressions](#block-expressions)
+- [Statement Terminators](#statement-terminators)
 - [Comments](#comments)
 - [Custom Iterators](#custom-iterators)
 - [Built-in Functions](#built-in-functions)
@@ -218,8 +219,9 @@ line two
 a "quoted" word
 ```
 
-Strings are iterable. Iteration yields each character as a one-character
-string:
+Strings are byte-oriented and currently intended for ASCII text. `.len()`
+returns the number of bytes, indexing returns a one-byte string, and iteration
+yields each ASCII character byte as a one-character string:
 
 ```rust
 for ch in "abc" {
@@ -251,6 +253,46 @@ Output:
 true
 false
 ```
+
+Strings expose these methods:
+
+| Method | Description |
+|--------|-------------|
+| `.len()` | Returns the byte length |
+| `.split()` | Splits on ASCII whitespace and omits empty fields |
+| `.join(iterable)` | Joins the string representations of `iterable` with this string as the separator |
+| `.upper()` | Returns an ASCII-uppercase copy |
+| `.lower()` | Returns an ASCII-lowercase copy |
+| `.strip()` | Trims ASCII whitespace from both ends |
+| `.lstrip()` | Trims ASCII whitespace from the left |
+| `.rstrip()` | Trims ASCII whitespace from the right |
+| `.remove_prefix(prefix)` | Removes `prefix` if present |
+| `.remove_suffix(suffix)` | Removes `suffix` if present |
+| `.split_lines()` | Splits on `\n`, `\r\n`, or `\r` line endings |
+| `.contains(needle)` | Returns whether `needle` appears in the string |
+| `.starts_with(prefix)` | Returns whether the string starts with `prefix` |
+| `.ends_with(suffix)` | Returns whether the string ends with `suffix` |
+| `.find(needle)` | Returns the byte index of `needle`, or `None` |
+| `.replace(old, new)` | Replaces all occurrences of `old` with `new` |
+
+```rust
+let text = "  hello world  ";
+print(text.strip());
+print(text.contains("world"));
+print(",".join(["a", "b", "c"]));
+print("one\ntwo".split_lines());
+```
+
+Output:
+
+```
+hello world
+true
+a,b,c
+[one, two]
+```
+
+`replace(old, new)` requires `old` to be non-empty.
 
 ### None
 
@@ -324,8 +366,10 @@ Lists have a rich set of methods:
 | `.reverse()` | Reverses the list in place |
 | `.reversed()` | Returns a new reversed list |
 | `.map(fn)` | Returns a new list with `fn` applied to each element |
+| `.filter()` | Returns a new list of truthy elements |
 | `.filter(fn)` | Returns a new list of elements where `fn` returns truthy |
-| `.enumerate()` | Returns an iterator yielding `(index, element)` tuples |
+| `.enumerate()` | Returns an iterable yielding `(index, element)` tuples |
+| `.average()` | Returns the arithmetic average of the elements, or `0` for an empty list |
 
 Examples:
 
@@ -342,6 +386,9 @@ print(doubled);
 
 let big = lst.filter(fn(x) { x > 3 });
 print(big);
+
+let truthy = [0, 1, "", "ok"].filter();
+print(truthy);
 ```
 
 Output:
@@ -351,6 +398,7 @@ Output:
 [1, 1, 3, 4, 5, 9]
 [2, 2, 6, 8, 10, 18]
 [4, 5, 9]
+[1, ok]
 ```
 
 The `sorted()` method returns a copy without modifying the original:
@@ -369,7 +417,9 @@ Output:
 [1, 2, 5, 8]
 ```
 
-The `sort` method accepts an optional key function:
+The `sort` method accepts an optional key function. Sorting is stable: elements
+with equal keys keep their original relative order. If two sort keys cannot be
+compared, those elements keep their original relative order.
 
 ```rust
 let lst = [5, 2, 8, 1, 9, 3];
@@ -383,8 +433,9 @@ Output:
 [9, 8, 5, 3, 2, 1]
 ```
 
-The `enumerate()` method pairs each element with its index. It is typically
-consumed by a `for` loop using tuple unpacking (see [Tuples](#tuples)):
+The `enumerate()` method pairs each element with its index. It returns an
+iterable value, so it is typically consumed by a `for` loop using tuple
+unpacking (see [Tuples](#tuples)):
 
 ```rust
 let names = ["a", "b", "c"];
@@ -399,6 +450,25 @@ Output:
 0 a
 1 b
 2 c
+```
+
+To advance it manually, call `.iter()` first and then call `.next()` on the
+returned iterator:
+
+```rust
+let enumerated = ["a", "b"].enumerate();
+let iter = enumerated.iter();
+print(iter.next());
+print(iter.next());
+print(iter.next());
+```
+
+Output:
+
+```
+(0, a)
+(1, b)
+None
 ```
 
 ### Tuples
@@ -492,7 +562,8 @@ Output:
 ### Dictionaries
 
 Dictionaries are hash maps created with the `dict()` built-in. Keys can be
-strings or integers:
+hashable values: integers, floats, booleans, strings, `None`, and tuples whose
+items are also hashable:
 
 ```rust
 let d = dict();
@@ -525,6 +596,19 @@ Output:
 value
 ```
 
+`dict()` also accepts keyword arguments. Keyword names become string keys:
+
+```rust
+let d = dict(name="Alice", age=30);
+print(d["name"], d["age"]);
+```
+
+Output:
+
+```
+Alice 30
+```
+
 Dictionary methods:
 
 | Method | Description |
@@ -532,13 +616,15 @@ Dictionary methods:
 | `.len()` | Returns the number of entries |
 | `.get(key)` | Returns the value for `key`, or `None` if missing |
 | `.get(key, default)` | Returns the value for `key`, or `default` if missing |
+| `.get(key, default=val)` | Returns the value for `key`, or `val` if missing |
 | `.set(key, val)` | Sets `key` to `val` |
 | `.has(key)` | Returns `true` if `key` exists |
 | `.pop(key)` | Removes `key` and returns its value |
 | `.pop(key, default)` | Removes `key` or returns `default` |
-| `.keys()` | Returns an iterator over keys |
-| `.values()` | Returns an iterator over values |
-| `.items()` | Returns a tuple iterator of (key, value) pairs |
+| `.keys()` | Returns an iterable over keys |
+| `.values()` | Returns an iterable over values |
+| `.items()` | Returns an iterable of `(key, value)` pairs |
+| `.shrink_to_fit()` | Rebuilds internal storage to fit the current entries |
 
 Iterating over a dictionary yields its keys. Use `.items()` for key-value pairs:
 
@@ -595,7 +681,7 @@ Available methods on both `int` and `float`:
 | Category | Methods |
 |----------|---------|
 | Conversion | `bool`, `int`, `float` |
-| Sign / range | `abs`, `signum`, `min`, `max`, `clamp` |
+| Sign / range | `abs`, `signum`, `min`, `max`, `clamp`, `in_range` |
 | Rounding | `round`, `ceil`, `floor`, `trunc`, `frac` |
 | Power / root | `sqrt`, `pow(exp)`, `recip` |
 | Logs / exp | `ln`, `log(base)`, `log2`, `log10` |
@@ -618,6 +704,24 @@ Output:
 1024
 3.0
 0.7853982
+```
+
+`min`, `max`, `clamp`, and `in_range` take range or bound operands:
+
+```rust
+print((10).min(3));
+print((10).max(3));
+print((10).clamp(0, 5));
+print((3.5).in_range(0.0, 5.0));
+```
+
+Output:
+
+```
+3
+10
+5
+true
 ```
 
 ## Operators
@@ -698,6 +802,17 @@ true
 false
 ```
 
+Ordering comparisons are defined for numbers (integers and floats compare
+with each other), strings, booleans, `None`, lists, tuples, and structs that
+provide comparison overload methods. Lists and tuples compare lexicographically:
+the first unequal element determines the result, and if one sequence is a
+prefix of the other, the shorter sequence sorts first.
+
+Equality is defined for booleans, numbers, strings, `None`, lists, tuples,
+function identity, bound method identity, struct definitions, and structs.
+Struct equality uses an `eq(self, other)` method when present; without it,
+distinct struct instances compare unequal.
+
 ### Membership
 
 The `in` operator tests containment in dictionaries, lists, and strings:
@@ -766,18 +881,28 @@ false
 true
 ```
 
+Truthiness is used by `if`, `while`, `and`, `or`, `!`, `assert`, `.filter()`,
+and similar predicates. The falsy values are `None`, `false`, numeric zero,
+empty strings, empty lists, empty dictionaries, and the empty tuple `()`. Other
+values are truthy.
+
 ### Negation
 
-The `!` operator negates a boolean value:
+The `!` operator returns the boolean negation of a value's truthiness:
 
 ```rust
-let a = !true;
-print(a);
+print(!true);
+print(!0);
+print(!"");
+print(![1]);
 ```
 
 Output:
 
 ```
+false
+true
+true
 false
 ```
 
@@ -1071,6 +1196,8 @@ Hello, World!
 Hello, Alice!
 ```
 
+Required parameters cannot appear after default parameters.
+
 ### Keyword Arguments
 
 Arguments can be passed by name, allowing you to skip positional order:
@@ -1087,6 +1214,9 @@ Output:
 ```
 Alice is 30 from NYC
 ```
+
+Positional arguments cannot appear after keyword arguments. Function calls and
+literal lists/tuples allow trailing commas.
 
 ### Anonymous Functions
 
@@ -1284,6 +1414,10 @@ Output:
 false false
 true false
 ```
+
+Required fields cannot appear after fields with default values. Struct
+constructors accept positional and keyword arguments, using field names for
+keywords.
 
 ### Operator Overloading
 
@@ -1504,6 +1638,16 @@ Output:
 big
 ```
 
+## Statement Terminators
+
+`let` declarations, `return <expr>`, `break`, `continue`, assignments,
+compound assignments, and expression statements require semicolons. Function,
+struct, `if`, `while`, and `for` declarations/statements do not use a trailing
+semicolon after their closing brace.
+
+A final expression in a block may omit the semicolon; that expression becomes
+the block's value. Adding a semicolon makes it an expression statement instead.
+
 ## Comments
 
 Single-line comments start with `//`:
@@ -1539,9 +1683,13 @@ Output:
 
 ## Custom Iterators
 
-Any struct that implements an `iter` method returning an object with a `next`
-method can be used in `for` loops. The `next` method should return `None` to
-signal the end of iteration:
+An iterable is any value with an `iter` method. Calling `.iter()` returns an
+iterator object, and that iterator exposes a `next` method. `for` loops call
+`.iter()` for you and repeatedly call `.next()` until it returns `None`.
+
+Any struct that implements an `iter` method returning an iterator object can be
+used in `for` loops. The `next` method should return `None` to signal the end
+of iteration:
 
 ```rust
 struct Counter {
@@ -1583,7 +1731,13 @@ Output:
 | `assert(condition)` | Panics if `condition` is falsy |
 | `panic(message)` | Immediately halts execution with an error message |
 | `dict()` | Creates a new empty dictionary |
+| `dict(key=value, ...)` | Creates a dictionary with string keys from keyword names |
 | `Range(start, end)` | Creates a range from `start` (inclusive) to `end` (exclusive) |
+| `enumerate(iterable)` | Returns an iterable yielding `(index, value)` tuples |
+| `filter(iterable)` | Returns a list of truthy values from any iterable |
+| `filter(iterable, fn)` | Returns a list of values where `fn(value)` is truthy |
+| `average(iterable)` | Returns the arithmetic average, or `0` for an empty iterable |
+| `bool(value)` | Converts a value's truthiness to a boolean |
 | `str(value)` | Converts a value to a string |
 | `int(value)` | Converts a value to an integer (panics on failure) |
 | `float(value)` | Converts a value to a float (panics on failure) |
@@ -1620,6 +1774,29 @@ Output:
 ```
 42
 None
+```
+
+Generic iterable helpers work with lists, ranges, strings, dictionaries, and
+custom iterators:
+
+```rust
+for i, value in enumerate(["a", "b"]) {
+    print(i, value);
+}
+
+print(filter([0, 1, "", "ok"]));
+print(average([2, 4, 6]));
+print(average([]));
+```
+
+Output:
+
+```
+0 a
+1 b
+[1, ok]
+4.0
+0
 ```
 
 ## Error Handling Philosophy
@@ -1678,8 +1855,8 @@ The following changes would improve the Shimlang experience for users:
 - **Variadic arguments (`*args`, `**kwargs`):** Functions cannot currently
   accept a variable number of positional or keyword arguments.
 - **Standard library expansion:** Built-in support for file I/O and additional
-  string manipulation methods (e.g., `join`, `trim`, `upper`, `lower`) would
-  greatly increase the language's utility.
+  collection, path, and text-processing helpers would greatly increase the
+  language's utility.
 - **REPL improvements:** The interactive REPL could benefit from line editing,
   history, and multi-line input support.
 - **Better error messages:** While error messages include source location,

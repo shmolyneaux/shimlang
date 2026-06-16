@@ -224,6 +224,7 @@ impl Environment {
             (b"dict", shim_dict),
             (b"Range", shim_range),
             (b"enumerate", shim_enumerate),
+            (b"filter", shim_filter),
             (b"average", shim_average),
             (b"assert", shim_assert),
             (b"str", shim_str),
@@ -1052,6 +1053,20 @@ impl ShimValue {
                 let func = match ident {
                     b"len" => shim_str_len,
                     b"split" => shim_str_split,
+                    b"join" => shim_str_join,
+                    b"upper" => shim_str_upper,
+                    b"lower" => shim_str_lower,
+                    b"strip" => shim_str_strip,
+                    b"remove_prefix" => shim_str_remove_prefix,
+                    b"remove_suffix" => shim_str_remove_suffix,
+                    b"split_lines" => shim_str_split_lines,
+                    b"contains" => shim_str_contains,
+                    b"ends_with" => shim_str_ends_with,
+                    b"starts_with" => shim_str_starts_with,
+                    b"find" => shim_str_find,
+                    b"lstrip" => shim_str_lstrip,
+                    b"rstrip" => shim_str_rstrip,
+                    b"replace" => shim_str_replace,
                     b"iter" => shim_str_iter,
                     _ => return Err(format!("No ident {:?} on str", debug_u8s(ident))),
                 };
@@ -1169,6 +1184,7 @@ impl ShimValue {
                     b"min" => shim_min,
                     b"max" => shim_max,
                     b"clamp" => shim_clamp,
+                    b"in_range" => shim_in_range,
                     b"sqrt" => shim_sqrt,
                     b"pow" => shim_pow,
                     b"round" => shim_round,
@@ -1563,6 +1579,8 @@ impl ShimValue {
             ShimValue::Bool(true) => Ok(true),
             ShimValue::String(..) => Ok(!self.expect_string(interpreter).is_empty()),
             ShimValue::List(_) => Ok(!self.list(interpreter)?.is_empty()),
+            ShimValue::Dict(_) => Ok(self.dict(interpreter)?.len() != 0),
+            ShimValue::Tuple(len, _) => Ok(usize::from(*len) != 0),
             _ => Ok(true),
         }
     }
@@ -1886,14 +1904,7 @@ impl ShimValue {
     }
 
     pub fn not(&self, interpreter: &mut Interpreter) -> Result<ShimValue, String> {
-        match self {
-            ShimValue::Bool(a) => Ok(ShimValue::Bool(!a)),
-            ShimValue::Float(a) => Ok(ShimValue::Bool(*a == 0.0)),
-            ShimValue::Integer(a) => Ok(ShimValue::Bool(*a == 0)),
-            ShimValue::None => Ok(ShimValue::Bool(true)),
-            ShimValue::List(_) => Ok(ShimValue::Bool(!self.is_truthy(interpreter)?)),
-            _ => Ok(ShimValue::Bool(false)),
-        }
+        Ok(ShimValue::Bool(!self.is_truthy(interpreter)?))
     }
 
     pub fn neg(&self, interpreter: &mut Interpreter) -> Result<ShimValue, String> {

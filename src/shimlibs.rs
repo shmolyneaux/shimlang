@@ -1462,7 +1462,25 @@ pub(crate) fn shim_average(
         count += 1;
     }
 
-    acc.unwrap_or(ShimValue::Float(0.0)).div(interpreter, &ShimValue::Integer(count))
+    match acc {
+        Some(total) => total.div(interpreter, &ShimValue::Integer(count)),
+        None => Ok(ShimValue::Integer(0)),
+    }
+}
+
+pub(crate) fn shim_filter(
+    interpreter: &mut Interpreter,
+    args: &ArgBundle,
+) -> Result<ShimValue, String> {
+    let mut unpacker = ArgUnpacker::new(args);
+    let obj = unpacker.required(b"obj")?;
+    let predicate = match unpacker.optional(b"predicate") {
+        Some(v) => Some(v),
+        None => unpacker.optional(b"key"),
+    };
+    unpacker.end()?;
+
+    filter_iterable(interpreter, obj, predicate)
 }
 
 pub(crate) fn shim_range(
@@ -1728,16 +1746,46 @@ pub(crate) fn shim_list_filter(
 ) -> Result<ShimValue, String> {
     let mut unpacker = ArgUnpacker::new(args);
     let obj = unpacker.required(b"obj")?;
-    let lst = obj.list(interpreter)?;
-    let key = unpacker.optional(b"key");
+    let predicate = match unpacker.optional(b"predicate") {
+        Some(v) => Some(v),
+        None => unpacker.optional(b"key"),
+    };
     unpacker.end()?;
 
-    let new_lst_val = interpreter.mem.alloc_list();
-    let new_lst = new_lst_val.list_mut(interpreter)?;
+    filter_iterable(interpreter, obj, predicate)
+}
 
-    for idx in 0..lst.len() {
-        let input = lst.get(&interpreter.mem, idx as isize)?;
-        let result = if let Some(key) = key {
+fn filter_iterable(
+    interpreter: &mut Interpreter,
+    obj: ShimValue,
+    predicate: Option<ShimValue>,
+) -> Result<ShimValue, String> {
+    let new_lst_val = interpreter.mem.alloc_list();
+
+    let mut iter_args = ArgBundle::new();
+    let iterator = match obj.attr_call(b"iter", interpreter, &mut iter_args)? {
+        CallResult::ReturnValue(val) => val,
+        CallResult::PC(pc, captured_scope) => {
+            let mut new_env = Environment::with_scope(captured_scope);
+            interpreter.execute_bytecode_extended(&mut (pc as usize), iter_args, &mut new_env)?
+        }
+    };
+
+    loop {
+        let mut next_args = ArgBundle::new();
+        let input = match iterator.attr_call(b"next", interpreter, &mut next_args)? {
+            CallResult::ReturnValue(val) => val,
+            CallResult::PC(pc, captured_scope) => {
+                let mut new_env = Environment::with_scope(captured_scope);
+                interpreter.execute_bytecode_extended(&mut (pc as usize), next_args, &mut new_env)?
+            }
+        };
+
+        if input.is_none() {
+            break;
+        }
+
+        let result = if let Some(key) = predicate {
             let mut args = ArgBundle::new();
             args.args.push(input);
             match key.call(interpreter, &mut args)? {
@@ -1756,6 +1804,7 @@ pub(crate) fn shim_list_filter(
             input
         };
         if result.is_truthy(interpreter)? {
+            let new_lst = new_lst_val.list_mut(interpreter)?;
             new_lst.push(&mut interpreter.mem, input);
         }
     }
@@ -2177,7 +2226,7 @@ pub(crate) fn shim_dict_index_get_default(
     let binding = unpacker.required(b"obj")?;
     let dict = binding.dict_mut(interpreter)?;
     let key = unpacker.required(b"key")?;
-    let default = unpacker.optional(b"key").unwrap_or(ShimValue::None);
+    let default = unpacker.optional(b"default").unwrap_or(ShimValue::None);
     unpacker.end()?;
 
     Ok(dict.get(interpreter, key).unwrap_or(default))
@@ -2395,39 +2444,26 @@ pub(crate) fn shim_str_split(
 ) -> Result<ShimValue, String> {
     let mut unpacker = ArgUnpacker::new(args);
     let binding = unpacker.required(b"obj")?;
-    let s = binding.string(interpreter)?;
-    // TODO: Support a string seperator or list of string seperators
-    // let sep = unpacker.optional(b"sep");
-    // TODO: Return only upto a specified of fields
-    // let max_split = unpacker.optional(b"maxsplit");
+    let s = binding.string(interpreter)?.to_vec();
     unpacker.end()?;
 
-    let pos = match binding {
-        ShimValue::String(_, _, pos) => pos,
-        _ => panic!("unreachable"),
-    };
-
     let len = s.len();
-
     let out_val = interpreter.mem.alloc_list();
     let out = out_val.list_mut(interpreter)?;
-    let mut start_range = 0;
     let mut idx: usize = 0;
     while idx < len {
-        while idx < len && !matches!(s[idx], b'\n' | b' ' | b'\t' | b'\r') {
+        while idx < len && s[idx].is_ascii_whitespace() {
             idx += 1;
         }
-        let val = ShimValue::String(
-            (idx - start_range) as u16, // len
-            (start_range % 8) as u8,    // byte offset within the 8-byte aligned word
-            (usize::from(pos) + start_range / 8).into(),
-        );
+        if idx >= len {
+            break;
+        }
+        let start = idx;
+        while idx < len && !s[idx].is_ascii_whitespace() {
+            idx += 1;
+        }
+        let val = interpreter.mem.alloc_str(&s[start..idx]);
         out.push(&mut interpreter.mem, val);
-
-        while idx < len && matches!(s[idx], b'\n' | b' ' | b'\t' | b'\r') {
-            idx += 1;
-        }
-        start_range = idx;
     }
 
     Ok(out_val)
@@ -2439,11 +2475,41 @@ pub(crate) fn shim_str_join(
 ) -> Result<ShimValue, String> {
     let mut unpacker = ArgUnpacker::new(args);
     let binding = unpacker.required(b"obj")?;
-    let _s = binding.string(interpreter)?;
-    // Fill in here
+    let sep = binding.string(interpreter)?.to_vec();
+    let iterable = unpacker.required(b"iterable")?;
     unpacker.end()?;
 
-    todo!();
+    let mut iter_args = ArgBundle::new();
+    let iterator = match iterable.attr_call(b"iter", interpreter, &mut iter_args)? {
+        CallResult::ReturnValue(val) => val,
+        CallResult::PC(pc, captured_scope) => {
+            let mut new_env = Environment::with_scope(captured_scope);
+            interpreter.execute_bytecode_extended(&mut (pc as usize), iter_args, &mut new_env)?
+        }
+    };
+
+    let mut out = Vec::new();
+    let mut first = true;
+    loop {
+        let mut next_args = ArgBundle::new();
+        let item = match iterator.attr_call(b"next", interpreter, &mut next_args)? {
+            CallResult::ReturnValue(val) => val,
+            CallResult::PC(pc, captured_scope) => {
+                let mut new_env = Environment::with_scope(captured_scope);
+                interpreter.execute_bytecode_extended(&mut (pc as usize), next_args, &mut new_env)?
+            }
+        };
+        if item.is_none() {
+            break;
+        }
+        if !first {
+            out.extend_from_slice(&sep);
+        }
+        first = false;
+        out.extend_from_slice(item.to_string_mem(&interpreter.mem).as_bytes());
+    }
+
+    Ok(interpreter.mem.alloc_str(&out))
 }
 
 pub(crate) fn shim_str_upper(
@@ -2452,11 +2518,15 @@ pub(crate) fn shim_str_upper(
 ) -> Result<ShimValue, String> {
     let mut unpacker = ArgUnpacker::new(args);
     let binding = unpacker.required(b"obj")?;
-    let _s = binding.string(interpreter)?;
-    // Fill in here
+    let s = binding.string(interpreter)?;
+    let out = s.to_ascii_uppercase();
     unpacker.end()?;
 
-    todo!();
+    if out == s {
+        Ok(binding)
+    } else {
+        Ok(interpreter.mem.alloc_str(&out))
+    }
 }
 
 pub(crate) fn shim_str_lower(
@@ -2465,11 +2535,15 @@ pub(crate) fn shim_str_lower(
 ) -> Result<ShimValue, String> {
     let mut unpacker = ArgUnpacker::new(args);
     let binding = unpacker.required(b"obj")?;
-    let _s = binding.string(interpreter)?;
-    // Fill in here
+    let s = binding.string(interpreter)?;
+    let out = s.to_ascii_lowercase();
     unpacker.end()?;
 
-    todo!();
+    if out == s {
+        Ok(binding)
+    } else {
+        Ok(interpreter.mem.alloc_str(&out))
+    }
 }
 
 pub(crate) fn shim_str_strip(
@@ -2478,11 +2552,19 @@ pub(crate) fn shim_str_strip(
 ) -> Result<ShimValue, String> {
     let mut unpacker = ArgUnpacker::new(args);
     let binding = unpacker.required(b"obj")?;
-    let _s = binding.string(interpreter)?;
-    // Fill in here
+    let s = binding.string(interpreter)?;
+    let trimmed = trim_bytes(s);
+    let out = if trimmed.len() == s.len() {
+        None
+    } else {
+        Some(trimmed.to_vec())
+    };
     unpacker.end()?;
 
-    todo!();
+    match out {
+        Some(bytes) => Ok(interpreter.mem.alloc_str(&bytes)),
+        None => Ok(binding),
+    }
 }
 
 pub(crate) fn shim_str_remove_prefix(
@@ -2491,11 +2573,20 @@ pub(crate) fn shim_str_remove_prefix(
 ) -> Result<ShimValue, String> {
     let mut unpacker = ArgUnpacker::new(args);
     let binding = unpacker.required(b"obj")?;
-    let _s = binding.string(interpreter)?;
-    // Fill in here
+    let s = binding.string(interpreter)?;
+    let prefix_val = unpacker.required(b"prefix")?;
+    let prefix = prefix_val.string(interpreter)?;
+    let out = if !prefix.is_empty() && s.starts_with(prefix) {
+        Some(s[prefix.len()..].to_vec())
+    } else {
+        None
+    };
     unpacker.end()?;
 
-    todo!();
+    match out {
+        Some(bytes) => Ok(interpreter.mem.alloc_str(&bytes)),
+        None => Ok(binding),
+    }
 }
 
 pub(crate) fn shim_str_remove_suffix(
@@ -2504,11 +2595,20 @@ pub(crate) fn shim_str_remove_suffix(
 ) -> Result<ShimValue, String> {
     let mut unpacker = ArgUnpacker::new(args);
     let binding = unpacker.required(b"obj")?;
-    let _s = binding.string(interpreter)?;
-    // Fill in here
+    let s = binding.string(interpreter)?;
+    let suffix_val = unpacker.required(b"suffix")?;
+    let suffix = suffix_val.string(interpreter)?;
+    let out = if !suffix.is_empty() && s.ends_with(suffix) {
+        Some(s[..s.len() - suffix.len()].to_vec())
+    } else {
+        None
+    };
     unpacker.end()?;
 
-    todo!();
+    match out {
+        Some(bytes) => Ok(interpreter.mem.alloc_str(&bytes)),
+        None => Ok(binding),
+    }
 }
 
 pub(crate) fn shim_str_split_lines(
@@ -2517,11 +2617,38 @@ pub(crate) fn shim_str_split_lines(
 ) -> Result<ShimValue, String> {
     let mut unpacker = ArgUnpacker::new(args);
     let binding = unpacker.required(b"obj")?;
-    let _s = binding.string(interpreter)?;
-    // Fill in here
+    let s = binding.string(interpreter)?.to_vec();
     unpacker.end()?;
 
-    todo!();
+    let out_val = interpreter.mem.alloc_list();
+    let out = out_val.list_mut(interpreter)?;
+    let mut start = 0usize;
+    let mut idx = 0usize;
+    while idx < s.len() {
+        if s[idx] == b'\n' {
+            let end = if idx > start && s[idx - 1] == b'\r' { idx - 1 } else { idx };
+            let val = interpreter.mem.alloc_str(&s[start..end]);
+            out.push(&mut interpreter.mem, val);
+            idx += 1;
+            start = idx;
+        } else if s[idx] == b'\r' {
+            let val = interpreter.mem.alloc_str(&s[start..idx]);
+            out.push(&mut interpreter.mem, val);
+            idx += 1;
+            if idx < s.len() && s[idx] == b'\n' {
+                idx += 1;
+            }
+            start = idx;
+        } else {
+            idx += 1;
+        }
+    }
+    if start < s.len() {
+        let val = interpreter.mem.alloc_str(&s[start..]);
+        out.push(&mut interpreter.mem, val);
+    }
+
+    Ok(out_val)
 }
 
 pub(crate) fn shim_str_contains(
@@ -2530,11 +2657,12 @@ pub(crate) fn shim_str_contains(
 ) -> Result<ShimValue, String> {
     let mut unpacker = ArgUnpacker::new(args);
     let binding = unpacker.required(b"obj")?;
-    let _s = binding.string(interpreter)?;
-    // Fill in here
+    let s = binding.string(interpreter)?.to_vec();
+    let needle_val = unpacker.required(b"needle")?;
+    let needle = needle_val.string(interpreter)?.to_vec();
     unpacker.end()?;
 
-    todo!();
+    Ok(ShimValue::Bool(find_subslice(&s, &needle).is_some()))
 }
 
 pub(crate) fn shim_str_ends_with(
@@ -2543,11 +2671,12 @@ pub(crate) fn shim_str_ends_with(
 ) -> Result<ShimValue, String> {
     let mut unpacker = ArgUnpacker::new(args);
     let binding = unpacker.required(b"obj")?;
-    let _s = binding.string(interpreter)?;
-    // Fill in here
+    let s = binding.string(interpreter)?.to_vec();
+    let suffix_val = unpacker.required(b"suffix")?;
+    let suffix = suffix_val.string(interpreter)?.to_vec();
     unpacker.end()?;
 
-    todo!();
+    Ok(ShimValue::Bool(s.ends_with(&suffix)))
 }
 
 pub(crate) fn shim_str_starts_with(
@@ -2556,11 +2685,12 @@ pub(crate) fn shim_str_starts_with(
 ) -> Result<ShimValue, String> {
     let mut unpacker = ArgUnpacker::new(args);
     let binding = unpacker.required(b"obj")?;
-    let _s = binding.string(interpreter)?;
-    // Fill in here
+    let s = binding.string(interpreter)?.to_vec();
+    let prefix_val = unpacker.required(b"prefix")?;
+    let prefix = prefix_val.string(interpreter)?.to_vec();
     unpacker.end()?;
 
-    todo!();
+    Ok(ShimValue::Bool(s.starts_with(&prefix)))
 }
 
 pub(crate) fn shim_str_find(
@@ -2569,11 +2699,15 @@ pub(crate) fn shim_str_find(
 ) -> Result<ShimValue, String> {
     let mut unpacker = ArgUnpacker::new(args);
     let binding = unpacker.required(b"obj")?;
-    let _s = binding.string(interpreter)?;
-    // Fill in here
+    let s = binding.string(interpreter)?.to_vec();
+    let needle_val = unpacker.required(b"needle")?;
+    let needle = needle_val.string(interpreter)?.to_vec();
     unpacker.end()?;
 
-    todo!();
+    Ok(match find_subslice(&s, &needle) {
+        Some(idx) => ShimValue::Integer(idx as i32),
+        None => ShimValue::None,
+    })
 }
 
 pub(crate) fn shim_str_lstrip(
@@ -2582,11 +2716,15 @@ pub(crate) fn shim_str_lstrip(
 ) -> Result<ShimValue, String> {
     let mut unpacker = ArgUnpacker::new(args);
     let binding = unpacker.required(b"obj")?;
-    let _s = binding.string(interpreter)?;
-    // Fill in here
+    let s = binding.string(interpreter)?;
+    let start = s.iter().position(|b| !b.is_ascii_whitespace()).unwrap_or(s.len());
+    let out = if start == 0 { None } else { Some(s[start..].to_vec()) };
     unpacker.end()?;
 
-    todo!();
+    match out {
+        Some(bytes) => Ok(interpreter.mem.alloc_str(&bytes)),
+        None => Ok(binding),
+    }
 }
 
 pub(crate) fn shim_str_rstrip(
@@ -2595,11 +2733,15 @@ pub(crate) fn shim_str_rstrip(
 ) -> Result<ShimValue, String> {
     let mut unpacker = ArgUnpacker::new(args);
     let binding = unpacker.required(b"obj")?;
-    let _s = binding.string(interpreter)?;
-    // Fill in here
+    let s = binding.string(interpreter)?;
+    let end = s.iter().rposition(|b| !b.is_ascii_whitespace()).map(|i| i + 1).unwrap_or(0);
+    let out = if end == s.len() { None } else { Some(s[..end].to_vec()) };
     unpacker.end()?;
 
-    todo!();
+    match out {
+        Some(bytes) => Ok(interpreter.mem.alloc_str(&bytes)),
+        None => Ok(binding),
+    }
 }
 
 pub(crate) fn shim_str_replace(
@@ -2608,11 +2750,40 @@ pub(crate) fn shim_str_replace(
 ) -> Result<ShimValue, String> {
     let mut unpacker = ArgUnpacker::new(args);
     let binding = unpacker.required(b"obj")?;
-    let _s = binding.string(interpreter)?;
-    // Fill in here
+    let s = binding.string(interpreter)?.to_vec();
+    let old_val = unpacker.required(b"old")?;
+    let old = old_val.string(interpreter)?.to_vec();
+    let new_val = unpacker.required(b"new")?;
+    let new = new_val.string(interpreter)?.to_vec();
     unpacker.end()?;
 
-    todo!();
+    if old.is_empty() {
+        return Err("replace: old must not be empty".to_string());
+    }
+    if find_subslice(&s, &old).is_none() {
+        return Ok(binding);
+    }
+
+    let mut out = Vec::new();
+    let mut idx = 0usize;
+    while idx < s.len() {
+        if s[idx..].starts_with(&old) {
+            out.extend_from_slice(&new);
+            idx += old.len();
+        } else {
+            out.push(s[idx]);
+            idx += 1;
+        }
+    }
+
+    Ok(interpreter.mem.alloc_str(&out))
+}
+
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() {
+        return Some(0);
+    }
+    haystack.windows(needle.len()).position(|window| window == needle)
 }
 
 pub(crate) fn get_type_name(value: &ShimValue) -> &'static str {
