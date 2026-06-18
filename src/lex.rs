@@ -503,7 +503,7 @@ pub fn lex_multiline_comment_end_idx(text: &[u8]) -> Result<usize, String> {
     let mut depth = 1;
     let mut idx = 2;
 
-    while text.len() - idx > (depth * 2) {
+    while idx + 1 < text.len() {
         if text[idx] == b'/' && text[idx + 1] == b'*' {
             depth += 1;
             idx += 2;

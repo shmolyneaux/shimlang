@@ -1,0 +1,4 @@
+print("before comment");
+/* this multiline comment
+   ends the file with no trailing newline,
+   and includes a /* nested */ comment */
