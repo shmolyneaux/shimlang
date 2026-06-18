@@ -1,0 +1,2 @@
+print("before comment");
+// this line comment ends the file with no trailing newline

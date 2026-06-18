@@ -708,8 +708,8 @@ pub fn lex(text: &[u8]) -> Result<TokenStream, String> {
                     tokens.push(Token::Percent);
                 }
             }
-            b'/' => match text[1] {
-                b'/' => {
+            b'/' => match text.get(1).copied() {
+                Some(b'/') => {
                     loop {
                         text = &text[1..];
                         if text.is_empty() {
@@ -719,11 +719,11 @@ pub fn lex(text: &[u8]) -> Result<TokenStream, String> {
                     }
                     // NOTE: no token to push since this is a comment
                 }
-                b'*' => {
+                Some(b'*') => {
                     let idx = lex_multiline_comment_end_idx(text)?;
                     text = &text[(idx - 1)..];
                 }
-                b'=' => {
+                Some(b'=') => {
                     text = &text[1..];
                     tokens.push(Token::SlashEqual);
                 }
@@ -737,22 +737,22 @@ pub fn lex(text: &[u8]) -> Result<TokenStream, String> {
                     tokens.push(Token::Minus);
                 }
             }
-            b'=' => match text[1] {
-                b'=' => {
+            b'=' => match text.get(1).copied() {
+                Some(b'=') => {
                     text = &text[1..];
                     tokens.push(Token::DEqual);
                 }
                 _ => tokens.push(Token::Equal),
             },
-            b'>' => match text[1] {
-                b'=' => {
+            b'>' => match text.get(1).copied() {
+                Some(b'=') => {
                     text = &text[1..];
                     tokens.push(Token::Gte);
                 }
                 _ => tokens.push(Token::GT),
             },
-            b'<' => match text[1] {
-                b'=' => {
+            b'<' => match text.get(1).copied() {
+                Some(b'=') => {
                     text = &text[1..];
                     tokens.push(Token::Lte);
                 }
@@ -784,7 +784,11 @@ pub fn lex(text: &[u8]) -> Result<TokenStream, String> {
             b' ' => (),
             _ => return Err(format!("Unknown character '{}'", printable_byte(c))),
         }
-        text = &text[1..];
+        // A line comment that runs to the end of input leaves `text` empty, so
+        // only advance when there is a byte remaining to consume.
+        if !text.is_empty() {
+            text = &text[1..];
+        }
         let token_end_len = text.len();
         while tokens.len() > spans.len() {
             spans.push(Span {
