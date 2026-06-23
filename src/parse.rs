@@ -165,9 +165,15 @@ pub enum CompoundOp {
 }
 
 #[derive(Debug)]
+pub enum Target {
+    Ident(Vec<u8>),
+    Tuple(Vec<Vec<u8>>),
+}
+
+#[derive(Debug)]
 pub enum Statement {
-    Let(Vec<u8>, ExprNode),
-    Assignment(Vec<u8>, ExprNode),
+    Let(Target, ExprNode),
+    Assignment(Target, ExprNode),
     AttributeAssignment(ExprNode, Vec<u8>, ExprNode),
     IndexAssignment(ExprNode, ExprNode, ExprNode),
     CompoundAssignment(Vec<u8>, CompoundOp, ExprNode),
@@ -970,7 +976,7 @@ pub fn parse_block_inner(tokens: &mut TokenStream) -> Result<Block, String> {
             }
 
             StatementNode {
-                data: Statement::Let(ident, expr),
+                data: Statement::Let(Target::Ident(ident), expr),
                 span: start_span + end_span,
             }
         } else if *tokens.peek()? == Token::Fn {
@@ -1196,7 +1202,7 @@ pub fn parse_block_inner(tokens: &mut TokenStream) -> Result<Block, String> {
                             let end_span = tokens.peek_span()?;
                             tokens.consume(Token::Semicolon)?;
                             StatementNode {
-                                data: Statement::Assignment(ident.clone(), expr_to_assign),
+                                data: Statement::Assignment(Target::Ident(ident.clone()), expr_to_assign),
                                 span: start_span + end_span,
                             }
                         }

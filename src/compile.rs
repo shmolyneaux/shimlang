@@ -427,7 +427,7 @@ fn compound_op_bytecode(op: &CompoundOp) -> u8 {
 pub fn compile_statement(stmt_node: &StatementNode) -> Result<Vec<(u8, Span)>, String> {
     let stmt_span = stmt_node.span;
     match &stmt_node.data {
-        Statement::Let(ident, expr) => {
+        Statement::Let(Target::Ident(ident), expr) => {
             // Expression evaluates to a value that's on the top of the stack
             let mut expr_asm = compile_expression(expr)?;
             // When getting VariableDeclaration the next byte is the length of
@@ -443,7 +443,31 @@ pub fn compile_statement(stmt_node: &StatementNode) -> Result<Vec<(u8, Span)>, S
 
             Ok(expr_asm)
         }
-        Statement::Assignment(ident, expr) => {
+        Statement::Let(Target::Tuple(idents), expr) => {
+            let mut expr_asm = compile_expression(expr)?;
+
+            let tuple_size_u8s = u16_to_u8s(idents.len() as u16);
+            expr_asm.push((ByteCode::UnpackTuple as u8, stmt_span));
+            expr_asm.push((tuple_size_u8s[0], stmt_span));
+            expr_asm.push((tuple_size_u8s[1], stmt_span));
+
+            for ident in idents {
+                expr_asm.push((ByteCode::VariableDeclaration as u8, stmt_span));
+                expr_asm.push((
+                    ident
+                        .len()
+                        .try_into()
+                        .expect("For loop ident len should into u8"),
+                    stmt_span,
+                ));
+                for b in ident {
+                    expr_asm.push((*b, stmt_span));
+                }
+            }
+
+            Ok(expr_asm)
+        }
+        Statement::Assignment(Target::Ident(ident), expr) => {
             let mut expr_asm = compile_expression(expr)?;
             expr_asm.push((ByteCode::Assignment as u8, expr.span));
             expr_asm.push((
@@ -452,6 +476,30 @@ pub fn compile_statement(stmt_node: &StatementNode) -> Result<Vec<(u8, Span)>, S
             ));
             for b in ident.iter() {
                 expr_asm.push((*b, expr.span));
+            }
+
+            Ok(expr_asm)
+        }
+        Statement::Assignment(Target::Tuple(idents), expr) => {
+            let mut expr_asm = compile_expression(expr)?;
+
+            let tuple_size_u8s = u16_to_u8s(idents.len() as u16);
+            expr_asm.push((ByteCode::UnpackTuple as u8, stmt_span));
+            expr_asm.push((tuple_size_u8s[0], stmt_span));
+            expr_asm.push((tuple_size_u8s[1], stmt_span));
+
+            for ident in idents {
+                expr_asm.push((ByteCode::Assignment as u8, stmt_span));
+                expr_asm.push((
+                    ident
+                        .len()
+                        .try_into()
+                        .expect("For loop ident len should into u8"),
+                    stmt_span,
+                ));
+                for b in ident {
+                    expr_asm.push((*b, stmt_span));
+                }
             }
 
             Ok(expr_asm)
