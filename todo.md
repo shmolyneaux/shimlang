@@ -1,32 +1,19 @@
+# ISSUES
+- Update alloc to use proper data structure
+- Closure not capturing shadowed variable
+- Remove mandatory semicolons
+- Last expression for a block can't be a closure
+
 # MAJOR
 - Type annotations
 - AOT compilation
 
 # MINOR
-- Tuple
-- Tuple unpacking
-- String methods
-  - join
-  - upper
-  - lower
-  - strip
-  - remove_prefix
-  - remove_suffix
-  - split_lines
-  - contains
-  - ends_with
-  - starts_with
-  - find
-  - lstrip
-  - rstrip
-  - replace
 - `*args`, and `**kwargs`
-- Numeric literals with underscores
-- Hex literals (for colors)
 - Type annotations
 - Runtime type checking
 - Static type checking
-- Add value type for strings 6 bytes or less
+- Add value type for strings 6 bytes or less?
 - How do we time-travel resources provided by external systems?
   - Examples
     - Models
@@ -63,5 +50,4 @@
   - Memory fragmentation summary
 - Assemby viewer
 - Stack viewer
-- Spans for statements
 - Adding ident cache to Fn bytecode

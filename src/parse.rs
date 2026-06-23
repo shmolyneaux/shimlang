@@ -942,8 +942,26 @@ pub fn parse_block_inner(tokens: &mut TokenStream) -> Result<Block, String> {
                     "No token found after let",
                 ));
             }
-            let ident = match tokens.pop()? {
-                Token::Identifier(ident) => ident.clone(),
+            let target = match tokens.pop()? {
+                Token::Identifier(ident) => Target::Ident(ident.clone()),
+                Token::LBracket => {
+                    let mut idents = Vec::new();
+                    while *tokens.peek()? != Token::RBracket {
+                        let token = tokens.pop()?;
+                        if let Token::Identifier(ident) = token {
+                            idents.push(ident);
+                        } else {
+                            return Err(tokens
+                                .format_peek_err(&format!("Expected ident in let tuple, found {:?}", token)));
+                        }
+                        if *tokens.peek()? == Token::Comma {
+                            tokens.advance()?;
+                            continue;
+                        }
+                    }
+                    tokens.consume(Token::RBracket)?;
+                    Target::Tuple(idents)
+                }
                 token => {
                     tokens.unadvance()?;
                     return Err(tokens
@@ -976,7 +994,7 @@ pub fn parse_block_inner(tokens: &mut TokenStream) -> Result<Block, String> {
             }
 
             StatementNode {
-                data: Statement::Let(Target::Ident(ident), expr),
+                data: Statement::Let(target, expr),
                 span: start_span + end_span,
             }
         } else if *tokens.peek()? == Token::Fn {
@@ -1203,6 +1221,28 @@ pub fn parse_block_inner(tokens: &mut TokenStream) -> Result<Block, String> {
                             tokens.consume(Token::Semicolon)?;
                             StatementNode {
                                 data: Statement::Assignment(Target::Ident(ident.clone()), expr_to_assign),
+                                span: start_span + end_span,
+                            }
+                        }
+                        Expression::Primary(Primary::Tuple(maybe_idents)) => {
+                            let mut idents = Vec::new();
+                            for maybe_ident in maybe_idents.into_iter() {
+                                match maybe_ident.data {
+                                    Expression::Primary(Primary::Identifier(ident)) => idents.push(ident),
+                                    tuple_item => {
+                                        return Err(format_script_err(
+                                            maybe_ident.span,
+                                            &tokens.script,
+                                            &format!("Can't unpack tuple to non-ident {:?}", tuple_item),
+                                        ));
+                                    }
+                                }
+                            }
+                            let expr_to_assign = parse_expression(tokens)?;
+                            let end_span = tokens.peek_span()?;
+                            tokens.consume(Token::Semicolon)?;
+                            StatementNode {
+                                data: Statement::Assignment(Target::Tuple(idents), expr_to_assign),
                                 span: start_span + end_span,
                             }
                         }

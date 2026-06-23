@@ -642,9 +642,7 @@ Output:
 ()
 ```
 
-Tuples can be unpacked in `for` loops by listing multiple variables before `in`.
-This is the primary way to destructure tuples — there is no `let (x, y) = ...`
-form:
+Tuples can be unpacked in `for` loops by listing multiple variables before `in`:
 
 ```rust
 let points = [(1, 2), (3, 4), (5, 6)];
@@ -659,6 +657,21 @@ Output:
 1 + 2 = 3
 3 + 4 = 7
 5 + 6 = 11
+```
+
+Tuples can also be unpacked:
+
+```rust
+let ab = (1, 2);
+let (a, b) = ab;
+print(a);
+print(b);
+```
+
+Output:
+```
+1
+2
 ```
 
 Tuples are hashable and may be used as dictionary keys:
@@ -2149,9 +2162,6 @@ The following changes would improve the Shimlang experience for users:
   set of `try_` variants for operations that can fail with user-supplied data.
 - **Module / import system:** All code lives in a single file. An import
   system would allow organizing projects into reusable modules.
-- **Let-binding destructuring:** Tuples currently destructure only in `for`
-  loops. A `let (x, y) = point;` form would make working with multiple return
-  values more ergonomic.
 - **Variadic arguments (`*args`, `**kwargs`):** Functions cannot currently
   accept a variable number of positional or keyword arguments.
 - **Standard library expansion:** Built-in support for file I/O and additional
