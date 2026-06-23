@@ -3,5 +3,6 @@ Error: Key missing not in dict
    |
  2 | / d[
  3 | |     "missing"
- 4 | | ];
+ 4 | | ]
    | |_^
+

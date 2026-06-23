@@ -1,4 +1,4 @@
- 1 | panic("test panic");
+ 1 | panic("test panic")
      ^^^^^^^^^^^^^^^^^^^
 Error: test panic
 

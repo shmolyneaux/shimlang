@@ -14,18 +14,18 @@ struct Bar {
     fn tock() {}
 }
 
-let a = Foo(None);
+let a = Foo(None)
 
-assert(a.tick == a.tick);
+assert(a.tick == a.tick)
 
-assert(a.tick != a.tock);
+assert(a.tick != a.tock)
 
-let m = a.tick;
-assert(a.tick == m);
+let m = a.tick
+assert(a.tick == m)
 
-let b = Foo(None);
-assert(a == b);
-assert(a.tick != b.tick);
+let b = Foo(None)
+assert(a == b)
+assert(a.tick != b.tick)
 
-let c = Bar(None);
-assert(a.tick != c.tick);
+let c = Bar(None)
+assert(a.tick != c.tick)

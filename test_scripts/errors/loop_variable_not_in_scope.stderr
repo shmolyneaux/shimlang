@@ -1,5 +1,5 @@
- 1 | let lst = ["foo", "bar", "baz"];
+ 1 | let lst = ["foo", "bar", "baz"]
  2 | for item in lst {}
- 3 | print(item);
+ 3 | print(item)
            ^^^^
 Error: Unknown identifier "item"

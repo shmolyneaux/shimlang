@@ -1,2 +1,2 @@
-let a = ();
-assert(str(a) == "()");
+let a = ()
+assert(str(a) == "()")

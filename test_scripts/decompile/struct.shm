@@ -7,5 +7,5 @@ struct Point {
     }
 }
 
-let p = Point(3, 4);
-print(p.distance());
+let p = Point(3, 4)
+print(p.distance())

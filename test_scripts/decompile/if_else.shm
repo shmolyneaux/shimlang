@@ -1,5 +1,5 @@
 if 0 {
-    print("not taken");
+    print("not taken")
 } else {
-    print("taken");
+    print("taken")
 }

@@ -1,24 +1,24 @@
 // If path taken
-let path = None;
+let path = None
 if true {
-    path = "if";
+    path = "if"
 } else if false {
-    path = "else if";
+    path = "else if"
 } else {
-    path = "else";
+    path = "else"
 }
-assert(path == "if");
+assert(path == "if")
 
 // Else path taken
-let b = 2;
+let b = 2
 let path2 = if b == 1 {
     "if"
 } else if b == 3 {
     "else if"
 } else {
     "else" 
-};
-assert(path2 == "else");
+}
+assert(path2 == "else")
 
 // Second else-if path taken
 assert(
@@ -31,4 +31,4 @@ assert(
     } else {
         false
     }
-);
+)

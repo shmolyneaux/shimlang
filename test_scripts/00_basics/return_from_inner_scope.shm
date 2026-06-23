@@ -1,9 +1,9 @@
 fn test() {
     if true {
-        return "is true";
+        return "is true"
     } else {
-        return "is false";
+        return "is false"
     }
 }
 
-print(test());
+print(test())

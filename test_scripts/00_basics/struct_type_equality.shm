@@ -1,2 +1,2 @@
 struct Foo {}
-assert(Foo == Foo);
+assert(Foo == Foo)

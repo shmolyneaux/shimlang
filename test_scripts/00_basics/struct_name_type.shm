@@ -7,11 +7,11 @@ struct Plant {
     species
 }
 
-print(Animal.__name__);
-print(Plant.__name__);
+print(Animal.__name__)
+print(Plant.__name__)
 
-let dog = Animal("Buddy", 5);
-let tree = Plant("Oak");
+let dog = Animal("Buddy", 5)
+let tree = Plant("Oak")
 
-print(dog.__type__.__name__);
-print(tree.__type__.__name__);
+print(dog.__type__.__name__)
+print(tree.__type__.__name__)

@@ -63,7 +63,7 @@ The simplest Shimlang program prints a message to the console using the built-in
 `print` function:
 
 ```rust
-print("Hello, World!");
+print("Hello, World!")
 ```
 
 Output:
@@ -76,7 +76,7 @@ Hello, World!
 space-separated:
 
 ```rust
-print("The answer is", 42);
+print("The answer is", 42)
 ```
 
 Output:
@@ -89,7 +89,7 @@ The separator between arguments and the trailing string can be customized with
 the `sep` and `end` keyword arguments (which default to a space and a newline):
 
 ```rust
-print("a", "b", "c", sep="-", end="!\n");
+print("a", "b", "c", sep="-", end="!\n")
 ```
 
 Output:
@@ -104,13 +104,13 @@ Variables are declared with `let` and can hold any type. Reassignment uses `=`
 without the `let` keyword:
 
 ```rust
-let greeting = "Hello";
-let year = 2024;
-print(greeting, year);
+let greeting = "Hello"
+let year = 2024
+print(greeting, year)
 
-let x = 10;
-x = 20;
-print(x);
+let x = 10
+x = 20
+print(x)
 ```
 
 Output:
@@ -127,11 +127,11 @@ Hello 2024
 Integers are 32-bit signed values. They support standard arithmetic operations:
 
 ```rust
-let a = 42;
-let b = -7;
-print(a);
-print(b);
-print(a + b);
+let a = 42
+let b = -7
+print(a)
+print(b)
+print(a + b)
 ```
 
 Output:
@@ -145,7 +145,7 @@ Output:
 Integer literals may use `_` as a digit separator for readability:
 
 ```rust
-print(1_000_000);
+print(1_000_000)
 ```
 
 Output:
@@ -164,8 +164,8 @@ Integer arithmetic **saturates** rather than overflowing: a `+`, `-`, `*`, or
 minimum value instead of wrapping around or halting:
 
 ```rust
-print(2147483647 + 1);
-print(100000 * 100000);
+print(2147483647 + 1)
+print(100000 * 100000)
 ```
 
 Output:
@@ -181,10 +181,10 @@ Floating-point numbers are 32-bit (single precision). A number with a decimal
 point is treated as a float:
 
 ```rust
-let pi = 3.14;
-let neg = -2.5;
-print(pi);
-print(neg);
+let pi = 3.14
+let neg = -2.5
+print(pi)
+print(neg)
 ```
 
 Output:
@@ -198,10 +198,10 @@ Float literals support `e`/`E` exponent notation, `_` digit separators, and a
 leading decimal point (the integer part may be omitted):
 
 ```rust
-print(1.5e3);
-print(2.5E-2);
-print(.5);
-print(1_000.000_5);
+print(1.5e3)
+print(2.5E-2)
+print(.5)
+print(1_000.000_5)
 ```
 
 Output:
@@ -217,8 +217,8 @@ Non-finite values are written `inf`, `-inf`, and `NaN`. They arise from
 operations such as `sqrt` of a negative number:
 
 ```rust
-print((-1.0).sqrt());
-print((1.0).ln() - (0.0).ln());
+print((-1.0).sqrt())
+print((1.0).ln() - (0.0).ln())
 ```
 
 Output:
@@ -237,9 +237,9 @@ The `/` operator always produces a float, even for integer operands. Use
 `.trunc()` or `int(...)` if you need a truncated integer result:
 
 ```rust
-print(10 / 3);
-print(10.0 / 3.0);
-print(int(10 / 3));
+print(10 / 3)
+print(10.0 / 3.0)
+print(int(10 / 3))
 ```
 
 Output:
@@ -260,8 +260,8 @@ matching the saturating behavior of integer arithmetic.)
 The two boolean literals are `true` and `false`:
 
 ```rust
-print(true);
-print(false);
+print(true)
+print(false)
 ```
 
 Output:
@@ -283,12 +283,12 @@ Strings are created with double quotes. They support indexing, length, escape
 sequences, and concatenation with `+`:
 
 ```rust
-let name = "Shimlang";
-print(name);
-print(name.len());
-print(name[0]);
-print(name[-1]);
-print("Hello" + " " + "World");
+let name = "Shimlang"
+print(name)
+print(name.len())
+print(name[0])
+print(name[-1])
+print("Hello" + " " + "World")
 ```
 
 Output:
@@ -309,8 +309,8 @@ supported and cause a parse error. (Note that `.split_lines()` still splits on
 though a `\r` cannot be written in a string literal.)
 
 ```rust
-print("line one\nline two");
-print("a \"quoted\" word");
+print("line one\nline two")
+print("a \"quoted\" word")
 ```
 
 Output:
@@ -329,7 +329,7 @@ byte); an index outside the valid range is an error:
 
 ```rust
 for ch in "abc" {
-    print(ch);
+    print(ch)
 }
 ```
 
@@ -344,11 +344,11 @@ c
 Strings can be compared for equality:
 
 ```rust
-let a = "test";
-let b = "test";
-let c = "other";
-print(a == b);
-print(a == c);
+let a = "test"
+let b = "test"
+let c = "other"
+print(a == b)
+print(a == c)
 ```
 
 Output:
@@ -380,11 +380,11 @@ Strings expose these methods:
 | `.replace(old, new)` | Replaces all occurrences of `old` with `new` |
 
 ```rust
-let text = "  hello world  ";
-print(text.strip());
-print(text.contains("world"));
-print(",".join(["a", "b", "c"]));
-print("one\ntwo".split_lines());
+let text = "  hello world  "
+print(text.strip())
+print(text.contains("world"))
+print(",".join(["a", "b", "c"]))
+print("one\ntwo".split_lines())
 ```
 
 Output:
@@ -408,8 +408,8 @@ with an error rather than truncating or wrapping.
 return a value return `None`:
 
 ```rust
-let x = None;
-print(x);
+let x = None
+print(x)
 ```
 
 Output:
@@ -423,11 +423,11 @@ None
 Lists are ordered, mutable collections that can hold values of any type:
 
 ```rust
-let numbers = [1, 2, 3, 4, 5];
-print(numbers);
-print(numbers[0]);
-print(numbers[-1]);
-print(numbers.len());
+let numbers = [1, 2, 3, 4, 5]
+print(numbers)
+print(numbers[0])
+print(numbers[-1])
+print(numbers.len())
 ```
 
 Output:
@@ -443,10 +443,10 @@ Negative indices count from the end of the list. List elements can be reassigned
 by index:
 
 ```rust
-let lst = ["a", "b", "c"];
-lst[0] = "x";
-lst[-1] = "z";
-print(lst);
+let lst = ["a", "b", "c"]
+lst[0] = "x"
+lst[-1] = "z"
+print(lst)
 ```
 
 Output:
@@ -486,21 +486,21 @@ Calling `.pop()` on an empty list returns `None` rather than raising an error.
 Examples:
 
 ```rust
-let lst = [3, 1, 4, 1, 5];
-lst.append(9);
-print(lst);
+let lst = [3, 1, 4, 1, 5]
+lst.append(9)
+print(lst)
 
-lst.sort();
-print(lst);
+lst.sort()
+print(lst)
 
-let doubled = lst.map(fn(x) { x * 2 });
-print(doubled);
+let doubled = lst.map(fn(x) { x * 2 })
+print(doubled)
 
-let big = lst.filter(fn(x) { x > 3 });
-print(big);
+let big = lst.filter(fn(x) { x > 3 })
+print(big)
 
-let truthy = [0, 1, "", "ok"].filter();
-print(truthy);
+let truthy = [0, 1, "", "ok"].filter()
+print(truthy)
 ```
 
 Output:
@@ -516,10 +516,10 @@ Output:
 The `sorted()` method returns a copy without modifying the original:
 
 ```rust
-let lst = [5, 2, 8, 1];
-let sorted_copy = lst.sorted();
-print(lst);
-print(sorted_copy);
+let lst = [5, 2, 8, 1]
+let sorted_copy = lst.sorted()
+print(lst)
+print(sorted_copy)
 ```
 
 Output:
@@ -534,9 +534,9 @@ with equal keys keep their original relative order. If two sort keys cannot be
 compared, those elements keep their original relative order.
 
 ```rust
-let lst = [5, 2, 8, 1, 9, 3];
-lst.sort(fn(x) { 0 - x });
-print(lst);
+let lst = [5, 2, 8, 1, 9, 3]
+lst.sort(fn(x) { 0 - x })
+print(lst)
 ```
 
 Output:
@@ -550,9 +550,9 @@ iterable value, so it is typically consumed by a `for` loop using tuple
 unpacking (see [Tuples](#tuples)):
 
 ```rust
-let names = ["a", "b", "c"];
+let names = ["a", "b", "c"]
 for i, name in names.enumerate() {
-    print(i, name);
+    print(i, name)
 }
 ```
 
@@ -568,11 +568,11 @@ To advance it manually, call `.iter()` first and then call `.next()` on the
 returned iterator:
 
 ```rust
-let enumerated = ["a", "b"].enumerate();
-let iter = enumerated.iter();
-print(iter.next());
-print(iter.next());
-print(iter.next());
+let enumerated = ["a", "b"].enumerate()
+let iter = enumerated.iter()
+print(iter.next())
+print(iter.next())
+print(iter.next())
 ```
 
 Output:
@@ -588,9 +588,9 @@ print: the cycle is detected and the repeated reference is shown as `...` rather
 than recursing forever.
 
 ```rust
-let lst = [1];
-lst.append(lst);
-print(lst);
+let lst = [1]
+lst.append(lst)
+print(lst)
 ```
 
 Output:
@@ -610,11 +610,11 @@ iterable** in a `for` loop. Access elements by their fixed position instead.
 Unlike lists, tuples are hashable, so they can be used as dictionary keys:
 
 ```rust
-let pair = (1, 2);
-let triple = (1, "two", 3.0);
-print(pair);
-print(triple);
-print(pair[0], pair[1]);
+let pair = (1, 2)
+let triple = (1, "two", 3.0)
+print(pair)
+print(triple)
+print(pair[0], pair[1])
 ```
 
 Output:
@@ -629,10 +629,10 @@ A single-element tuple requires a trailing comma to distinguish it from a
 parenthesized expression. The empty tuple is written `()`:
 
 ```rust
-let one = (1,);
-let empty = ();
-print(one);
-print(empty);
+let one = (1,)
+let empty = ()
+print(one)
+print(empty)
 ```
 
 Output:
@@ -645,9 +645,9 @@ Output:
 Tuples can be unpacked in `for` loops by listing multiple variables before `in`:
 
 ```rust
-let points = [(1, 2), (3, 4), (5, 6)];
+let points = [(1, 2), (3, 4), (5, 6)]
 for x, y in points {
-    print("\(x) + \(y) = \(x + y)");
+    print("\(x) + \(y) = \(x + y)")
 }
 ```
 
@@ -662,10 +662,10 @@ Output:
 Tuples can also be unpacked:
 
 ```rust
-let ab = (1, 2);
-let (a, b) = ab;
-print(a);
-print(b);
+let ab = (1, 2)
+let (a, b) = ab
+print(a)
+print(b)
 ```
 
 Output:
@@ -677,11 +677,11 @@ Output:
 Tuples are hashable and may be used as dictionary keys:
 
 ```rust
-let d = dict();
-d[(0, 0)] = "origin";
-d[(1, 2)] = "point";
-print(d[(0, 0)]);
-print((1, 2) in d);
+let d = dict()
+d[(0, 0)] = "origin"
+d[(1, 2)] = "point"
+print(d[(0, 0)])
+print((1, 2) in d)
 ```
 
 Output:
@@ -695,8 +695,8 @@ Tuples compare lexicographically. If one tuple is a prefix of another, the
 shorter one sorts first:
 
 ```rust
-let lst = [(2, 1), (1, 2), (1, 1)];
-print(lst.sorted());
+let lst = [(2, 1), (1, 2), (1, 1)]
+print(lst.sorted())
 ```
 
 Output:
@@ -720,12 +720,12 @@ looked up again.
 For example:
 
 ```rust
-let d = dict();
-d["name"] = "Alice";
-d["age"] = 30;
-print(d["name"]);
-print(d["age"]);
-print(d.len());
+let d = dict()
+d["name"] = "Alice"
+d["age"] = 30
+print(d["name"])
+print(d["age"])
+print(d.len())
 ```
 
 Output:
@@ -739,9 +739,9 @@ Alice
 You can also use the `.set()` and `.get()` methods:
 
 ```rust
-let d = dict();
-d.set("key", "value");
-print(d.get("key"));
+let d = dict()
+d.set("key", "value")
+print(d.get("key"))
 ```
 
 Output:
@@ -753,8 +753,8 @@ value
 `dict()` also accepts keyword arguments. Keyword names become string keys:
 
 ```rust
-let d = dict(name="Alice", age=30);
-print(d["name"], d["age"]);
+let d = dict(name="Alice", age=30)
+print(d["name"], d["age"])
 ```
 
 Output:
@@ -783,17 +783,17 @@ Dictionary methods:
 Iterating over a dictionary yields its keys. Use `.items()` for key-value pairs:
 
 ```rust
-let d = dict();
-d["a"] = 1;
-d["b"] = 2;
-d["c"] = 3;
+let d = dict()
+d["a"] = 1
+d["b"] = 2
+d["c"] = 3
 
 for key in d {
-    print(key);
+    print(key)
 }
 
 for key, value in d.items() {
-    print(key, "=>", value);
+    print(key, "=>", value)
 }
 ```
 
@@ -814,9 +814,9 @@ Both integers and floats expose the same set of math methods. Methods that
 produce fractional results return floats even when called on an integer:
 
 ```rust
-print((9).sqrt());
-print((-3).abs());
-print((2.5).round());
+print((9).sqrt())
+print((-3).abs())
+print((2.5).round())
 ```
 
 Output:
@@ -847,9 +847,9 @@ Available methods on both `int` and `float`:
 positionally or as a keyword argument (`exp`, `base`, `other`):
 
 ```rust
-print((2).pow(10));
-print((1000.0).log(base=10));
-print((1.0).atan2(1.0));
+print((2).pow(10))
+print((1000.0).log(base=10))
+print((1.0).atan2(1.0))
 ```
 
 Output:
@@ -863,10 +863,10 @@ Output:
 `min`, `max`, `clamp`, and `in_range` take range or bound operands:
 
 ```rust
-print((10).min(3));
-print((10).max(3));
-print((10).clamp(0, 5));
-print((3.5).in_range(0.0, 5.0));
+print((10).min(3))
+print((10).max(3))
+print((10).clamp(0, 5))
+print((3.5).in_range(0.0, 5.0))
 ```
 
 Output:
@@ -891,11 +891,11 @@ true
 | `%` | Modulus (Euclidean remainder: always non-negative) |
 
 ```rust
-print(10 + 3);
-print(10 - 3);
-print(10 * 3);
-print(10 / 3);
-print(10 % 3);
+print(10 + 3)
+print(10 - 3)
+print(10 * 3)
+print(10 / 3)
+print(10 % 3)
 ```
 
 Output:
@@ -913,10 +913,10 @@ regardless of the signs of the operands (the remainder `r` always satisfies
 `0 <= r < abs(divisor)`):
 
 ```rust
-print(-1 % 5);
-print(-7 % 3);
-print(7 % -3);
-print(-7 % -3);
+print(-1 % 5)
+print(-7 % 3)
+print(7 % -3)
+print(-7 % -3)
 ```
 
 Output:
@@ -933,8 +933,8 @@ infinity/`NaN` or halting. Division still yields a float, so `x / 0` is `0.0`
 and `x % 0` is `0`:
 
 ```rust
-print(10 / 0);
-print(10 % 0);
+print(10 / 0)
+print(10 % 0)
 ```
 
 Output:
@@ -956,13 +956,13 @@ Output:
 | `>=` | Greater than or equal |
 
 ```rust
-print(1 < 2);
-print(2 > 1);
-print(1 <= 1);
-print(1 >= 2);
-print(1 == 1);
-print(1 != 2);
-print(1 != 1);
+print(1 < 2)
+print(2 > 1)
+print(1 <= 1)
+print(1 >= 2)
+print(1 == 1)
+print(1 != 2)
+print(1 != 1)
 ```
 
 Output:
@@ -989,9 +989,9 @@ evaluated at most once and evaluation short-circuits as soon as a comparison
 fails. This makes range checks read naturally:
 
 ```rust
-let x = 5;
-print(0 < x < 10);
-print(1 < 2 < 3 < 2);
+let x = 5
+print(0 < x < 10)
+print(1 < 2 < 3 < 2)
 ```
 
 Output:
@@ -1015,17 +1015,17 @@ distinct struct instances compare unequal.
 The `in` operator tests containment in dictionaries, lists, and strings:
 
 ```rust
-let d = dict();
-d["x"] = 1;
-print("x" in d);
-print("y" in d);
+let d = dict()
+d["x"] = 1
+print("x" in d)
+print("y" in d)
 
-let lst = [1, 2, 3];
-print(2 in lst);
-print(5 in lst);
+let lst = [1, 2, 3]
+print(2 in lst)
+print(5 in lst)
 
-print("ell" in "hello");
-print("xyz" in "hello");
+print("ell" in "hello")
+print("xyz" in "hello")
 ```
 
 Output:
@@ -1045,14 +1045,14 @@ The `and` and `or` operators use short-circuit evaluation. They return the value
 that determined the result, not necessarily `true` or `false`:
 
 ```rust
-let a = true and false;
-print(a);
+let a = true and false
+print(a)
 
-let b = true or false;
-print(b);
+let b = true or false
+print(b)
 
-let c = false or "fallback";
-print(c);
+let c = false or "fallback"
+print(c)
 ```
 
 Output:
@@ -1067,8 +1067,8 @@ Because of short-circuiting, the right-hand side is not evaluated when the
 result is already determined:
 
 ```rust
-print(false and panic("not reached"));
-print(true or panic("not reached"));
+print(false and panic("not reached"))
+print(true or panic("not reached"))
 ```
 
 Output:
@@ -1088,10 +1088,10 @@ values are truthy.
 The `!` operator returns the boolean negation of a value's truthiness:
 
 ```rust
-print(!true);
-print(!0);
-print(!"");
-print(![1]);
+print(!true)
+print(!0)
+print(!"")
+print(![1])
 ```
 
 Output:
@@ -1110,7 +1110,7 @@ including custom step values:
 
 ```rust
 for i in 0..5 {
-    print(i);
+    print(i)
 }
 ```
 
@@ -1130,7 +1130,7 @@ each step by default:
 
 ```rust
 for i in 0.0..3.0 {
-    print(i);
+    print(i)
 }
 ```
 
@@ -1148,7 +1148,7 @@ built-in supports a `.step()` method for custom increments:
 
 ```rust
 for i in Range(0, 10).step(3) {
-    print(i);
+    print(i)
 }
 ```
 
@@ -1165,7 +1165,7 @@ Negative steps count downward:
 
 ```rust
 for i in Range(5, 0).step(-1) {
-    print(i);
+    print(i)
 }
 ```
 
@@ -1193,13 +1193,13 @@ They modify a variable, struct field, or list element in place:
 | `%=` | `x = x % value` |
 
 ```rust
-let count = 0;
-count += 5;
-count -= 2;
-count *= 4;
-count /= 3;
-count %= 3;
-print(count);
+let count = 0
+count += 5
+count -= 2
+count *= 4
+count /= 3
+count %= 3
+print(count)
 ```
 
 Output:
@@ -1212,13 +1212,13 @@ These operators also work on struct fields and list elements:
 
 ```rust
 struct Point { x, y }
-let p = Point(1, 2);
-p.x += 10;
-print(p.x);
+let p = Point(1, 2)
+p.x += 10
+print(p.x)
 
-let lst = [10, 20, 30];
-lst[0] += 5;
-print(lst[0]);
+let lst = [10, 20, 30]
+lst[0] += 5
+print(lst[0])
 ```
 
 Output:
@@ -1236,11 +1236,11 @@ Conditionals use `if` and `else` with curly braces. Chains of conditions use
 `else if`:
 
 ```rust
-let x = 10;
+let x = 10
 if x > 5 {
-    print("big");
+    print("big")
 } else {
-    print("small");
+    print("small")
 }
 ```
 
@@ -1253,15 +1253,15 @@ big
 `else if` flattens conditional chains without nesting:
 
 ```rust
-let x = 3;
+let x = 3
 if x == 1 {
-    print("one");
+    print("one")
 } else if x == 2 {
-    print("two");
+    print("two")
 } else if x == 3 {
-    print("three");
+    print("three")
 } else {
-    print("other");
+    print("other")
 }
 ```
 
@@ -1277,10 +1277,10 @@ three
 ### While Loops
 
 ```rust
-let i = 0;
+let i = 0
 while i < 3 {
-    print(i);
-    i = i + 1;
+    print(i)
+    i = i + 1
 }
 ```
 
@@ -1298,9 +1298,9 @@ Output:
 keys, and custom iterators:
 
 ```rust
-let fruits = ["apple", "banana", "cherry"];
+let fruits = ["apple", "banana", "cherry"]
 for fruit in fruits {
-    print(fruit);
+    print(fruit)
 }
 ```
 
@@ -1314,7 +1314,7 @@ cherry
 
 ```rust
 for i in 0..5 {
-    print(i);
+    print(i)
 }
 ```
 
@@ -1333,17 +1333,17 @@ Output:
 `break` exits a loop early. `continue` skips to the next iteration:
 
 ```rust
-let i = 0;
+let i = 0
 while true {
     if i == 2 {
-        i = i + 1;
-        continue;
+        i = i + 1
+        continue
     }
     if i == 4 {
-        break;
+        break
     }
-    print(i);
-    i = i + 1;
+    print(i)
+    i = i + 1
 }
 ```
 
@@ -1363,9 +1363,9 @@ Functions are defined with the `fn` keyword:
 
 ```rust
 fn add(a, b) {
-    return a + b;
+    return a + b
 }
-print(add(3, 4));
+print(add(3, 4))
 ```
 
 Output:
@@ -1383,7 +1383,7 @@ The last expression in a function body is its return value when no explicit
 fn double(x) {
     x * 2
 }
-print(double(5));
+print(double(5))
 ```
 
 Output:
@@ -1399,10 +1399,10 @@ the function is called with that argument omitted:
 
 ```rust
 fn greet(name="World") {
-    print("Hello, " + name + "!");
+    print("Hello, " + name + "!")
 }
-greet();
-greet("Alice");
+greet()
+greet("Alice")
 ```
 
 Output:
@@ -1420,11 +1420,11 @@ gets a fresh value:
 
 ```rust
 fn collect(item, into=[]) {
-    into.append(item);
+    into.append(item)
     into
 }
-print(collect(1));
-print(collect(2));
+print(collect(1))
+print(collect(2))
 ```
 
 Output:
@@ -1442,9 +1442,9 @@ Arguments can be passed by name, allowing you to skip positional order:
 
 ```rust
 fn describe(name, age, city) {
-    print(name, "is", age, "from", city);
+    print(name, "is", age, "from", city)
 }
-describe("Alice", "NYC", age=30);
+describe("Alice", "NYC", age=30)
 ```
 
 Output:
@@ -1462,8 +1462,8 @@ Anonymous functions are created with `fn` without a name. They are commonly used
 as callbacks:
 
 ```rust
-let square = fn(x) { x * x };
-print(square(5));
+let square = fn(x) { x * x }
+print(square(5))
 ```
 
 Output:
@@ -1478,18 +1478,18 @@ Functions capture variables from their enclosing scope, forming closures:
 
 ```rust
 fn make_counter(start) {
-    let count = start;
+    let count = start
     fn increment() {
-        count = count + 1;
+        count = count + 1
         count
     }
     increment
 }
 
-let counter = make_counter(0);
-print(counter());
-print(counter());
-print(counter());
+let counter = make_counter(0)
+print(counter())
+print(counter())
+print(counter())
 ```
 
 Output:
@@ -1504,14 +1504,14 @@ Closures work with anonymous functions as well:
 
 ```rust
 fn make_adder(n) {
-    let adder = fn(val) { n + val };
+    let adder = fn(val) { n + val }
     adder
 }
 
-let add_5 = make_adder(5);
-let add_10 = make_adder(10);
-print(add_5(3));
-print(add_10(3));
+let add_5 = make_adder(5)
+let add_10 = make_adder(10)
+print(add_5(3))
+print(add_10(3))
 ```
 
 Output:
@@ -1526,13 +1526,13 @@ closures created inside the loop each capture their own value rather than all
 sharing the final one:
 
 ```rust
-let callbacks = [];
+let callbacks = []
 for i in 0..3 {
-    callbacks.append(fn() { i });
+    callbacks.append(fn() { i })
 }
-print(callbacks[0]());
-print(callbacks[1]());
-print(callbacks[2]());
+print(callbacks[0]())
+print(callbacks[1]())
+print(callbacks[2]())
 ```
 
 Output:
@@ -1556,8 +1556,8 @@ struct Point {
     y
 }
 
-let p = Point(1, 2);
-print(p.x, p.y);
+let p = Point(1, 2)
+print(p.x, p.y)
 ```
 
 Output:
@@ -1572,8 +1572,8 @@ Structs print with a readable representation:
 struct Color {
     r, g, b
 }
-let c = Color(255, 128, 0);
-print(c);
+let c = Color(255, 128, 0)
+print(c)
 ```
 
 Output:
@@ -1597,10 +1597,10 @@ struct Point {
     }
 }
 
-let a = Point(1, 2);
-let b = Point(3, 4);
-let c = a.add(b);
-print(c.x, c.y);
+let a = Point(1, 2)
+let b = Point(3, 4)
+let c = a.add(b)
+print(c.x, c.y)
 ```
 
 Output:
@@ -1616,9 +1616,9 @@ struct Point {
     x, y
 }
 
-let p = Point(2, 3);
-p.x = p.x + 1;
-print(p.x);
+let p = Point(2, 3)
+p.x = p.x + 1
+print(p.x)
 ```
 
 Output:
@@ -1641,8 +1641,8 @@ struct Point {
     }
 }
 
-let p = Point.origin();
-print(p.x, p.y);
+let p = Point.origin()
+print(p.x, p.y)
 ```
 
 Output:
@@ -1661,11 +1661,11 @@ struct Config {
     verbose = false
 }
 
-let cfg = Config();
-print(cfg.debug, cfg.verbose);
+let cfg = Config()
+print(cfg.debug, cfg.verbose)
 
-let cfg2 = Config(debug=true);
-print(cfg2.debug, cfg2.verbose);
+let cfg2 = Config(debug=true)
+print(cfg2.debug, cfg2.verbose)
 ```
 
 Output:
@@ -1724,12 +1724,12 @@ struct Vec2 {
     }
 }
 
-let a = Vec2(1, 2);
-let b = Vec2(3, 4);
-let c = a + b;
-print(c.x, c.y);
-print(a == b);
-print(a == Vec2(1, 2));
+let a = Vec2(1, 2)
+let b = Vec2(3, 4)
+let c = a + b
+print(c.x, c.y)
+print(a == b)
+print(a == Vec2(1, 2))
 ```
 
 Output:
@@ -1751,10 +1751,10 @@ struct Animal {
     age
 }
 
-print(Animal.__name__);
+print(Animal.__name__)
 
-let dog = Animal("Buddy", 5);
-print(dog.__type__.__name__);
+let dog = Animal("Buddy", 5)
+print(dog.__type__.__name__)
 ```
 
 Output:
@@ -1769,9 +1769,9 @@ Animal
 Expressions can be embedded in strings using `\(expr)` syntax:
 
 ```rust
-let name = "World";
-let msg = "Hello, \(name)!";
-print(msg);
+let name = "World"
+let msg = "Hello, \(name)!"
+print(msg)
 ```
 
 Output:
@@ -1784,8 +1784,8 @@ Arbitrary expressions are supported, including function calls and nested
 interpolation:
 
 ```rust
-let result = "2 + 3 = \(2 + 3)";
-print(result);
+let result = "2 + 3 = \(2 + 3)"
+print(result)
 ```
 
 Output:
@@ -1798,7 +1798,7 @@ Output:
 fn greet(name) {
     "hello \(name)"
 }
-print("You say: '\(greet("Alice"))' to me");
+print("You say: '\(greet("Alice"))' to me")
 ```
 
 Output:
@@ -1834,9 +1834,9 @@ struct Point {
     }
 }
 
-let p = Point(1, 2);
-print("\(p)");
-print("\(p, pretty=true)");
+let p = Point(1, 2)
+print("\(p)")
+print("\(p, pretty=true)")
 ```
 
 Output:
@@ -1859,10 +1859,10 @@ can be supplied as positional or keyword arguments:
 - `notation`: `"e"` or `"E"` to force scientific notation
 
 ```rust
-print("\(3.14159, precision=2)");
-print("\(3.14, width=8, fill="0")");
-print("\(3.14, force_sign=true)");
-print("\(1234.5, notation="e")");
+print("\(3.14159, precision=2)")
+print("\(3.14, width=8, fill="0")")
+print("\(3.14, force_sign=true)")
+print("\(1234.5, notation="e")")
 ```
 
 Output:
@@ -1881,11 +1881,11 @@ block becomes the block's value:
 
 ```rust
 let result = {
-    let a = 10;
-    let b = 20;
+    let a = 10
+    let b = 20
     a + b
-};
-print(result);
+}
+print(result)
 ```
 
 Output:
@@ -1897,9 +1897,9 @@ Output:
 This works with `if`/`else` to create conditional expressions:
 
 ```rust
-let x = 10;
-let label = if x > 5 { "big" } else { "small" };
-print(label);
+let x = 10
+let label = if x > 5 { "big" } else { "small" }
+print(label)
 ```
 
 Output:
@@ -1910,20 +1910,20 @@ big
 
 ## Statement Terminators
 
-`let` declarations, `return <expr>`, `break`, `continue`, assignments,
-compound assignments, and expression statements require semicolons. Function,
-struct, `if`, `while`, and `for` declarations/statements do not use a trailing
-semicolon after their closing brace. A bare block (`{ ... }`) used as a
-statement likewise needs no trailing semicolon; it introduces a nested scope, so
-`let` bindings inside it do not leak out:
+A newline ends a statement. `let` declarations, `return <expr>`, `break`,
+`continue`, assignments, compound assignments, and expression statements are
+terminated by the end of the line they appear on — no trailing semicolon is
+needed. Function, struct, `if`, `while`, and `for` declarations/statements end
+at their closing brace as before. A bare block (`{ ... }`) used as a statement
+introduces a nested scope, so `let` bindings inside it do not leak out:
 
 ```rust
-let x = 1;
+let x = 1
 {
-    let x = 2;
-    print(x);
+    let x = 2
+    print(x)
 }
-print(x);
+print(x)
 ```
 
 Output:
@@ -1932,6 +1932,49 @@ Output:
 2
 1
 ```
+
+A semicolon is only needed to place **multiple** statements on the same line:
+
+```rust
+let a = 1; let b = 2; print(a + b)
+```
+
+### Line continuation and ambiguous line starts
+
+Expressions are *greedy*: a binary operator keeps binding across a newline, and
+call/index argument lists may span multiple lines, so an expression can be
+split freely:
+
+```rust
+let total = 1 +
+    2 +
+    3
+print(
+    "a",
+    "b",
+)
+```
+
+Two line starts are disambiguated specially so a newline can reliably end a
+statement:
+
+- A line beginning with `(` or `[` starts a **new statement** (a parenthesized
+  expression or a list literal). It is *not* read as a call or index on the
+  previous line's value. Keep the `(`/`[` on the same line to call or index:
+
+  ```rust
+  foo()          // a call
+  (1 + 2)        // a separate statement, NOT foo()(1 + 2)
+  ```
+
+- A line beginning with `.` **does** continue the previous line's value, so
+  attribute access and method chains may span multiple lines:
+
+  ```rust
+  let result = nums
+      .sorted()
+      .reversed()
+  ```
 
 A final expression in a block may omit the semicolon; that expression becomes
 the block's value. Adding a semicolon makes it an expression statement instead.
@@ -1942,8 +1985,8 @@ Single-line comments start with `//`:
 
 ```rust
 // This is a comment
-let x = 42;
-print(x);
+let x = 42
+print(x)
 ```
 
 Output:
@@ -1957,10 +2000,10 @@ Multi-line comments use `/* */` and can be nested:
 ```rust
 /* This is a
    multi-line comment */
-let x = 42;
+let x = 42
 
 /* outer /* inner comment */ still a comment */
-print(x);
+print(x)
 ```
 
 Output:
@@ -1983,7 +2026,7 @@ values without ending iteration early:
 
 ```rust
 for value in [1, None, 3] {
-    print(value);
+    print(value)
 }
 ```
 
@@ -2010,16 +2053,16 @@ struct Counter {
 
     fn next(self) {
         if self.current >= self.max {
-            return StopIteration;
+            return StopIteration
         }
-        let val = self.current;
-        self.current = self.current + 1;
-        return val;
+        let val = self.current
+        self.current = self.current + 1
+        return val
     }
 }
 
 for i in Counter(0, 3) {
-    print(i);
+    print(i)
 }
 ```
 
@@ -2057,9 +2100,9 @@ Output:
 Type conversion examples:
 
 ```rust
-print(int("42"));
-print(float("3.14"));
-print(str(123));
+print(int("42"))
+print(float("3.14"))
+print(str(123))
 ```
 
 Output:
@@ -2073,10 +2116,10 @@ Output:
 The `try_` variants return `None` instead of panicking on invalid input:
 
 ```rust
-let good = try_int("42");
-print(good);
-let bad = try_int("hello");
-print(bad);
+let good = try_int("42")
+print(good)
+let bad = try_int("hello")
+print(bad)
 ```
 
 Output:
@@ -2091,12 +2134,12 @@ custom iterators:
 
 ```rust
 for i, value in enumerate(["a", "b"]) {
-    print(i, value);
+    print(i, value)
 }
 
-print(filter([0, 1, "", "ok"]));
-print(average([2, 4, 6]));
-print(average([]));
+print(filter([0, 1, "", "ok"]))
+print(average([2, 4, 6]))
+print(average([]))
 ```
 
 Output:
@@ -2119,22 +2162,22 @@ represents programmer error, not a recoverable condition.
 The built-in `panic` function and `assert` halt execution immediately:
 
 ```rust
-assert(1 == 1);   // passes silently
-assert(1 == 2);   // halts with an error
+assert(1 == 1)   // passes silently
+assert(1 == 2)   // halts with an error
 
 // An optional second argument supplies the failure message:
-assert(1 == 2, "values should match");
+assert(1 == 2, "values should match")
 
-panic("something went wrong");  // always halts
+panic("something went wrong")  // always halts
 ```
 
 For operations that might legitimately fail with user-supplied data, Shimlang
 provides `try_` variants that return `None` instead of panicking:
 
 ```rust
-let n = try_int("not a number");
+let n = try_int("not a number")
 if n == None {
-    print("invalid input");
+    print("invalid input")
 }
 ```
 

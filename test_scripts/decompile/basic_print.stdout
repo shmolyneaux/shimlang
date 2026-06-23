@@ -1,6 +1,4 @@
    0:  load "print"
    7:  String "Hello"
   14:  call args=1  kwargs=0
-  17:  pop
-  18:  None
 

@@ -7,10 +7,10 @@ struct Foo {
     age = get_age() + 1
 }
 
-let obj = Foo("test");
-assert(obj.position == "test");
-assert(obj.age == 31);
+let obj = Foo("test")
+assert(obj.position == "test")
+assert(obj.age == 31)
 
-let obj2 = Foo(age=50, position="test2");
-assert(obj2.position == "test2");
-assert(obj2.age == 50);
+let obj2 = Foo(age=50, position="test2")
+assert(obj2.position == "test2")
+assert(obj2.age == 50)

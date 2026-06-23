@@ -3,9 +3,9 @@ struct Node {
     label,
 }
 
-let n1 = Node(1, "first");
-let n2 = Node(2, "second");
-let n3 = Node(n1, "wrapper");
-print(n3.value.value);
-print(n3.label);
-print(n2.label);
+let n1 = Node(1, "first")
+let n2 = Node(2, "second")
+let n3 = Node(n1, "wrapper")
+print(n3.value.value)
+print(n3.label)
+print(n2.label)

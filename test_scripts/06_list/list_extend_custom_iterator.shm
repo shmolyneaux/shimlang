@@ -11,25 +11,25 @@ struct Counter {
 
     fn next(self) {
         if self.current >= self.max {
-            return StopIteration;
+            return StopIteration
         }
-        let val = self.current;
-        self.current = self.current + 1;
-        return val;
+        let val = self.current
+        self.current = self.current + 1
+        return val
     }
 }
 
-let lst = [10, 20, 30];
-let counter = Counter(current=0, max=3);
+let lst = [10, 20, 30]
+let counter = Counter(current=0, max=3)
 
-lst.extend(counter);
+lst.extend(counter)
 
-assert(lst.len() == 6);
-assert(lst[0] == 10);
-assert(lst[1] == 20);
-assert(lst[2] == 30);
-assert(lst[3] == 0);
-assert(lst[4] == 1);
-assert(lst[5] == 2);
+assert(lst.len() == 6)
+assert(lst[0] == 10)
+assert(lst[1] == 20)
+assert(lst[2] == 30)
+assert(lst[3] == 0)
+assert(lst[4] == 1)
+assert(lst[5] == 2)
 
-print("List extend with custom iterator passed");
+print("List extend with custom iterator passed")

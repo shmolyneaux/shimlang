@@ -1,5 +1,5 @@
 Parse Error:
- 1 | let x = 5
-             ^
-Error: Expected semicolon after `let <ident> = <expr>`, found EOF
+ 1 | let x = 5 let y = 6
+               ^^^
+Error: Expected `;` or newline to end statement, found Let
 Failed to parse script

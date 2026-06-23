@@ -11,11 +11,11 @@ struct RangeIterator {
 
     fn next(self) {
         if self.idx == self.obj.stop {
-            return StopIteration;
+            return StopIteration
         }
-        let val = self.idx;
-        self.idx = self.idx + 1;
-        return val;
+        let val = self.idx
+        self.idx = self.idx + 1
+        return val
     }
 }
 
@@ -29,5 +29,5 @@ struct Range {
 }
 
 for val in Range(2, 8) {
-    print("Val:", val);
+    print("Val:", val)
 }

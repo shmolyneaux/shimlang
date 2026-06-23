@@ -1,1 +1,1 @@
-print("should print this" or panic());
+print("should print this" or panic())

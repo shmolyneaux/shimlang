@@ -1,9 +1,9 @@
-let count = 0;
+let count = 0
 while true {
-    print("Count:", count);
-    count = count + 1;
+    print("Count:", count)
+    count = count + 1
     if count == 5 {
-        break;
+        break
     }
 }
-print("done");
+print("done")

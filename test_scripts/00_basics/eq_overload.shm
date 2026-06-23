@@ -48,46 +48,46 @@ struct Vec3 {
     }
 }
 
-let a = Vec3(1, 2, 3);
-let b = Vec3(1, 2, 3);
-let c = Vec3(4, 5, 6);
+let a = Vec3(1, 2, 3)
+let b = Vec3(1, 2, 3)
+let c = Vec3(4, 5, 6)
 
 // Test eq
-print(a == b);
-print(a == c);
+print(a == b)
+print(a == c)
 
 // Test add
-let d = a + c;
-print(d.x, d.y, d.z);
+let d = a + c
+print(d.x, d.y, d.z)
 
 // Test sub
-let e = c - a;
-print(e.x, e.y, e.z);
+let e = c - a
+print(e.x, e.y, e.z)
 
 // Test mul
-let f = a * c;
-print(f.x, f.y, f.z);
+let f = a * c
+print(f.x, f.y, f.z)
 
 // Test div
-let g = c / Vec3(2, 5, 3);
-print(g.x, g.y, g.z);
+let g = c / Vec3(2, 5, 3)
+print(g.x, g.y, g.z)
 
 // Test modulus
-let h = c % Vec3(3, 3, 4);
-print(h.x, h.y, h.z);
+let h = c % Vec3(3, 3, 4)
+print(h.x, h.y, h.z)
 
 // Test gt
-print(c > a);
+print(c > a)
 
 // Test lt
-print(a < c);
+print(a < c)
 
 // Test gte
-print(a >= b);
+print(a >= b)
 
 // Test lte
-print(a <= b);
+print(a <= b)
 
 // Test contains (in)
-print(2 in a);
-print(5 in a);
+print(2 in a)
+print(5 in a)

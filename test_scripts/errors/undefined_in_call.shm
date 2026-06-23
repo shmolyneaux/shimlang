@@ -1,5 +1,5 @@
 fn greet(name) {
-    print(name);
+    print(name)
 }
 
-greet(unknown);
+greet(unknown)

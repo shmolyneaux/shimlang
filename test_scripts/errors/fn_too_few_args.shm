@@ -1,2 +1,2 @@
 fn test(a, b) { a + b; }
-test();
+test()

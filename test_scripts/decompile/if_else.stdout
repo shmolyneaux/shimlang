@@ -1,16 +1,13 @@
    0:  ShimValue 0
-   9:  JMPZ -> 39
+   9:  JMPZ -> 37
   12:  load "print"
   19:  String "not taken"
   30:  call args=1  kwargs=0
   33:  pop
-  34:  None
-  35:  pop
-  36:  JMP -> 59
-  39:  load "print"
-  46:  String "taken"
-  53:  call args=1  kwargs=0
-  56:  pop
-  57:  None
-  58:  pop
-  59:  None
+  34:  JMP -> 55
+  37:  load "print"
+  44:  String "taken"
+  51:  call args=1  kwargs=0
+  54:  pop
+  55:  None
+

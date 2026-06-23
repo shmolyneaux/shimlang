@@ -30,6 +30,4 @@
  156:  load "p"
  159:  attr_call .distance args=0  kwargs=0
  171:  call args=1  kwargs=0
- 174:  pop
- 175:  None
 

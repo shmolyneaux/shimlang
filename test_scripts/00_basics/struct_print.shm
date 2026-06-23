@@ -3,8 +3,8 @@ struct Point {
     y
 }
 
-let p = Point(2.0, 3.0);
-print(p);
+let p = Point(2.0, 3.0)
+print(p)
 
 struct Person {
     name,
@@ -12,8 +12,8 @@ struct Person {
     city
 }
 
-let person = Person("Alice", 30, "NYC");
-print(person);
+let person = Person("Alice", 30, "NYC")
+print(person)
 
 // Test with integer values
 struct Vec2 {
@@ -21,13 +21,13 @@ struct Vec2 {
     y
 }
 
-let v = Vec2(5, 10);
-print(v);
+let v = Vec2(5, 10)
+print(v)
 
 // Empty struct
 struct Empty {}
-let e = Empty();
-print(e);
+let e = Empty()
+print(e)
 
 // Test with nested struct
 struct Rectangle {
@@ -35,8 +35,8 @@ struct Rectangle {
     bottom_right
 }
 
-let rect = Rectangle(Point(1.0, 2.0), Point(3.0, 4.0));
-print(rect);
+let rect = Rectangle(Point(1.0, 2.0), Point(3.0, 4.0))
+print(rect)
 
 // Test with bool and list
 struct Config {
@@ -44,5 +44,5 @@ struct Config {
     values
 }
 
-let cfg = Config(true, [1, 2, 3]);
-print(cfg);
+let cfg = Config(true, [1, 2, 3])
+print(cfg)

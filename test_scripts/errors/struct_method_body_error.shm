@@ -1,8 +1,8 @@
 struct Foo {
     x
     fn bad(self) {
-        self.x + "string";
+        self.x + "string"
     }
 }
-let f = Foo(1);
-f.bad();
+let f = Foo(1)
+f.bad()

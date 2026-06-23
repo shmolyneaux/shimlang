@@ -244,6 +244,20 @@ impl TokenStream {
         }
     }
 
+    /// Does the token at the cursor begin a new source line? True when a
+    /// '\n' byte lies in the original script between the previous token's end
+    /// and this token's start. Also true at the very first token and at
+    /// end-of-stream. Used to let a newline terminate a statement and to stop
+    /// a call/index chain when a line starts with `(` or `[`.
+    pub(crate) fn peek_starts_new_line(&self) -> bool {
+        if self.idx == 0 || self.idx >= self.tokens.len() {
+            return true;
+        }
+        let prev_end = self.token_spans[self.idx - 1].end as usize;
+        let cur_start = self.token_spans[self.idx].start as usize;
+        self.script[prev_end..cur_start].contains(&b'\n')
+    }
+
     pub(crate) fn peek_span(&self) -> Result<Span, String> {
         if self.is_empty() {
             Ok(self.token_spans[self.token_spans.len() - 1])

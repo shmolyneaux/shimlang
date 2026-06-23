@@ -1,5 +1,5 @@
 fn test(a) {
-    print(a);
+    print(a)
 }
 
-test("test", b="test", fizz="buzz");
+test("test", b="test", fizz="buzz")

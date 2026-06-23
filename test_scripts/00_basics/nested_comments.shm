@@ -8,4 +8,4 @@ Inner comment
 // This shouldn't execute
 assert(false)
 */
-assert(true);
+assert(true)

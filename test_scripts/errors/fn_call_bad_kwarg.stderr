@@ -1,7 +1,7 @@
 Parse Error:
  3 | }
  4 | 
- 5 | foo(13+1="foo");
+ 5 | foo(13+1="foo")
              ^
 Error: Expected ident before `=` in fn args
 Failed to parse script

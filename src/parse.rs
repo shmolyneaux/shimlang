@@ -483,8 +483,12 @@ pub fn parse_call(tokens: &mut TokenStream) -> Result<ExprNode, String> {
     let mut expr = parse_primary(tokens)?;
     while !tokens.is_empty() {
         let span = tokens.peek_span()?;
+        // A `(` or `[` at the start of a new line begins a fresh statement
+        // (a parenthesized expression or list literal); it must not be read as
+        // a call/index on the previous line's value. A leading `.` always
+        // continues the chain so method chains can span multiple lines.
         match *tokens.peek()? {
-            Token::LBracket => {
+            Token::LBracket if !tokens.peek_starts_new_line() => {
                 tokens.advance()?;
                 let args = parse_fn_arguments(tokens, Token::RBracket)?;
                 let end_span = tokens.previous_span()?;
@@ -493,7 +497,7 @@ pub fn parse_call(tokens: &mut TokenStream) -> Result<ExprNode, String> {
                     data: Expression::Call(Box::new(expr), args.0, args.1),
                 };
             }
-            Token::LSquare => {
+            Token::LSquare if !tokens.peek_starts_new_line() => {
                 tokens.advance()?;
                 let index_expr = parse_expression(tokens)?;
                 tokens.consume(Token::RSquare)?;
@@ -927,6 +931,25 @@ pub fn parse_function(tokens: &mut TokenStream) -> Result<Fn, String> {
     })
 }
 
+/// Consume a statement terminator. An explicit `;` is consumed; otherwise a
+/// statement is terminated implicitly by the next token starting a new line, a
+/// closing `}`, or end of input. A `;` is still required to separate multiple
+/// statements on the same line.
+fn consume_statement_terminator(tokens: &mut TokenStream) -> Result<(), String> {
+    match tokens.peek()? {
+        Token::Semicolon => {
+            tokens.pop()?;
+            Ok(())
+        }
+        Token::RCurly | Token::EOF => Ok(()),
+        _ if tokens.is_empty() || tokens.peek_starts_new_line() => Ok(()),
+        token => Err(tokens.format_peek_err(&format!(
+            "Expected `;` or newline to end statement, found {:?}",
+            token
+        ))),
+    }
+}
+
 pub fn parse_block_inner(tokens: &mut TokenStream) -> Result<Block, String> {
     let mut stmts = Vec::new();
     let mut last_expr: Option<Box<ExprNode>> = None;
@@ -981,17 +1004,8 @@ pub fn parse_block_inner(tokens: &mut TokenStream) -> Result<Block, String> {
             }
 
             let expr = parse_expression(tokens)?;
-            let end_span = tokens.peek_span()?;
-            match tokens.pop()? {
-                Token::Semicolon => (),
-                token => {
-                    tokens.unadvance()?;
-                    return Err(tokens.format_peek_err(&format!(
-                        "Expected semicolon after `let <ident> = <expr>`, found {:?}",
-                        token
-                    )));
-                }
-            }
+            let end_span = tokens.previous_span()?;
+            consume_statement_terminator(tokens)?;
 
             StatementNode {
                 data: Statement::Let(target, expr),
@@ -1064,16 +1078,16 @@ pub fn parse_block_inner(tokens: &mut TokenStream) -> Result<Block, String> {
             }
         } else if *tokens.peek()? == Token::Break {
             tokens.advance()?;
-            let end_span = tokens.peek_span()?;
-            tokens.consume(Token::Semicolon)?;
+            let end_span = tokens.previous_span()?;
+            consume_statement_terminator(tokens)?;
             StatementNode {
                 data: Statement::Break,
                 span: start_span + end_span,
             }
         } else if *tokens.peek()? == Token::Continue {
             tokens.advance()?;
-            let end_span = tokens.peek_span()?;
-            tokens.consume(Token::Semicolon)?;
+            let end_span = tokens.previous_span()?;
+            consume_statement_terminator(tokens)?;
             StatementNode {
                 data: Statement::Continue,
                 span: start_span + end_span,
@@ -1158,30 +1172,23 @@ pub fn parse_block_inner(tokens: &mut TokenStream) -> Result<Block, String> {
             }
         } else if *tokens.peek()? == Token::Return {
             tokens.advance()?;
-            if *tokens.peek()? == Token::Semicolon {
-                let end_span = tokens.peek_span()?;
-                tokens.advance()?;
+            // A bare `return` has no value when followed by a statement
+            // terminator (`;`, a newline, `}`, or end of input); otherwise the
+            // value expression must begin on the same line.
+            let is_bare = matches!(tokens.peek()?, Token::Semicolon | Token::RCurly)
+                || tokens.is_empty()
+                || tokens.peek_starts_new_line();
+            if is_bare {
+                let end_span = tokens.previous_span()?;
+                consume_statement_terminator(tokens)?;
                 StatementNode {
                     data: Statement::Return(None),
                     span: start_span + end_span,
                 }
             } else {
                 let expr = parse_expression(tokens)?;
-                let end_span = tokens.peek_span()?;
-                match tokens.pop()? {
-                    Token::Semicolon => (),
-                    token => {
-                        tokens.unadvance()?;
-                        return Err(format_script_err(
-                            start_span + expr.span,
-                            &tokens.script,
-                            &format!(
-                                "Expected semicolon after `return <expr>`, found {:?}",
-                                token
-                            ),
-                        ));
-                    }
-                }
+                let end_span = tokens.previous_span()?;
+                consume_statement_terminator(tokens)?;
                 StatementNode {
                     data: Statement::Return(Some(expr)),
                     span: start_span + end_span,
@@ -1217,8 +1224,8 @@ pub fn parse_block_inner(tokens: &mut TokenStream) -> Result<Block, String> {
                     match expr.data {
                         Expression::Primary(Primary::Identifier(ident)) => {
                             let expr_to_assign = parse_expression(tokens)?;
-                            let end_span = tokens.peek_span()?;
-                            tokens.consume(Token::Semicolon)?;
+                            let end_span = tokens.previous_span()?;
+                            consume_statement_terminator(tokens)?;
                             StatementNode {
                                 data: Statement::Assignment(Target::Ident(ident.clone()), expr_to_assign),
                                 span: start_span + end_span,
@@ -1239,8 +1246,8 @@ pub fn parse_block_inner(tokens: &mut TokenStream) -> Result<Block, String> {
                                 }
                             }
                             let expr_to_assign = parse_expression(tokens)?;
-                            let end_span = tokens.peek_span()?;
-                            tokens.consume(Token::Semicolon)?;
+                            let end_span = tokens.previous_span()?;
+                            consume_statement_terminator(tokens)?;
                             StatementNode {
                                 data: Statement::Assignment(Target::Tuple(idents), expr_to_assign),
                                 span: start_span + end_span,
@@ -1248,8 +1255,8 @@ pub fn parse_block_inner(tokens: &mut TokenStream) -> Result<Block, String> {
                         }
                         Expression::Attribute(expr, ident) => {
                             let expr_to_assign = parse_expression(tokens)?;
-                            let end_span = tokens.peek_span()?;
-                            tokens.consume(Token::Semicolon)?;
+                            let end_span = tokens.previous_span()?;
+                            consume_statement_terminator(tokens)?;
                             StatementNode {
                                 data: Statement::AttributeAssignment(
                                     *expr,
@@ -1261,8 +1268,8 @@ pub fn parse_block_inner(tokens: &mut TokenStream) -> Result<Block, String> {
                         }
                         Expression::Index(expr, index_expr) => {
                             let expr_to_assign = parse_expression(tokens)?;
-                            let end_span = tokens.peek_span()?;
-                            tokens.consume(Token::Semicolon)?;
+                            let end_span = tokens.previous_span()?;
+                            consume_statement_terminator(tokens)?;
                             StatementNode {
                                 data: Statement::IndexAssignment(
                                     *expr,
@@ -1297,8 +1304,8 @@ pub fn parse_block_inner(tokens: &mut TokenStream) -> Result<Block, String> {
                     match expr.data {
                         Expression::Primary(Primary::Identifier(ident)) => {
                             let rhs = parse_expression(tokens)?;
-                            let end_span = tokens.peek_span()?;
-                            tokens.consume(Token::Semicolon)?;
+                            let end_span = tokens.previous_span()?;
+                            consume_statement_terminator(tokens)?;
                             StatementNode {
                                 data: Statement::CompoundAssignment(ident.clone(), op, rhs),
                                 span: start_span + end_span,
@@ -1306,8 +1313,8 @@ pub fn parse_block_inner(tokens: &mut TokenStream) -> Result<Block, String> {
                         }
                         Expression::Attribute(obj_expr, ident) => {
                             let rhs = parse_expression(tokens)?;
-                            let end_span = tokens.peek_span()?;
-                            tokens.consume(Token::Semicolon)?;
+                            let end_span = tokens.previous_span()?;
+                            consume_statement_terminator(tokens)?;
                             StatementNode {
                                 data: Statement::CompoundAttributeAssignment(
                                     *obj_expr,
@@ -1320,8 +1327,8 @@ pub fn parse_block_inner(tokens: &mut TokenStream) -> Result<Block, String> {
                         }
                         Expression::Index(obj_expr, index_expr) => {
                             let rhs = parse_expression(tokens)?;
-                            let end_span = tokens.peek_span()?;
-                            tokens.consume(Token::Semicolon)?;
+                            let end_span = tokens.previous_span()?;
+                            consume_statement_terminator(tokens)?;
                             StatementNode {
                                 data: Statement::CompoundIndexAssignment(
                                     *obj_expr,
@@ -1342,7 +1349,10 @@ pub fn parse_block_inner(tokens: &mut TokenStream) -> Result<Block, String> {
                     }
                 }
                 token => {
-                    if is_block_expr {
+                    // A newline terminates a bare expression statement, just
+                    // like a `;`. A bare block also needs no terminator. Two
+                    // expressions on the same line without a `;` is an error.
+                    if is_block_expr || tokens.peek_starts_new_line() {
                         StatementNode {
                             data: Statement::Expression(expr),
                             span: start_span + espan,
@@ -1353,7 +1363,7 @@ pub fn parse_block_inner(tokens: &mut TokenStream) -> Result<Block, String> {
                             expr.span + next_span,
                             &tokens.script,
                             &format!(
-                                "Expected semicolon after expression statement, found {:?}",
+                                "Expected `;` or newline after expression statement, found {:?}",
                                 token
                             ),
                         ));

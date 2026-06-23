@@ -1,0 +1,3 @@
+// A `;` is still required to put multiple statements on a single line.
+let a = 1; let b = 2; print(a + b)
+print("x"); print("y")

@@ -1,5 +1,5 @@
 fn foo(a, b) {
-    print(a);
+    print(a)
 }
 
-foo(13+1="foo");
+foo(13+1="foo")

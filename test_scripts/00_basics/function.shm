@@ -1,6 +1,6 @@
 fn add(a, b) {
-    let ret = a + b;
-    return ret;
+    let ret = a + b
+    return ret
 }
-let result = add(1, 2);
-print(result);
+let result = add(1, 2)
+print(result)

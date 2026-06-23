@@ -3,5 +3,5 @@ struct Point {
     y
 }
 
-let p = Point(1, 2);
-print(p.__type__.__name__);
+let p = Point(1, 2)
+print(p.__type__.__name__)

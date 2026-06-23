@@ -1,9 +1,9 @@
 fn test(n) {
     if n < 0 {
-        return;
+        return
     }
-    print(n);
-    test(n-1);
+    print(n)
+    test(n-1)
 }
 
-test(7);
+test(7)

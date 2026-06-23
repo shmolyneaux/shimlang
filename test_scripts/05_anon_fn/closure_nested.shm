@@ -9,6 +9,6 @@ fn outer(x) {
     middle
 }
 
-let f = outer(1);
-let g = f(10);
-print(g(100));
+let f = outer(1)
+let g = f(10)
+print(g(100))

@@ -1,9 +1,9 @@
 while true {
-    print("in loop");
+    print("in loop")
     if true {
-        print("early break");
-        break;
+        print("early break")
+        break
     }
-    print("should not get here");
+    print("should not get here")
 }
-print("out of loop");
+print("out of loop")

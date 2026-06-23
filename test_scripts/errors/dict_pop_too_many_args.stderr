@@ -1,5 +1,5 @@
- 2 | d["foo"] = 13;
+ 2 | d["foo"] = 13
  3 | 
- 4 | d.pop("foo", "bar", "more");
+ 4 | d.pop("foo", "bar", "more")
       ^^^^^^^^^^^^^^^^^^^^^^^^^^
 Error: Got 4 arguments, but only used 3

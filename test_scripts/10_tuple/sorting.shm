@@ -2,7 +2,7 @@ let lst = [
     (2, 1),
     (3, 1),
     (1, 1),
-];
+]
 
 assert(
     lst.sorted() == [
@@ -10,9 +10,9 @@ assert(
         (2, 1),
         (3, 1),
     ]
-);
+)
 
-assert([("foo",), ("bar",)].sorted() == [("bar",), ("foo",)]);
+assert([("foo",), ("bar",)].sorted() == [("bar",), ("foo",)])
 
 // Comparison will be based on len if one element is a prefix of the other
-assert([(1, "bar", "last"), (1, "bar")].sorted() == [(1, "bar"), (1, "bar", "last")]);
+assert([(1, "bar", "last"), (1, "bar")].sorted() == [(1, "bar"), (1, "bar", "last")])

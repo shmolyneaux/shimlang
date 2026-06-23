@@ -1,15 +1,15 @@
-let count = 0;
+let count = 0
 while true {
-    count = count + 1;
+    count = count + 1
     if count == 2 {
-        continue;
+        continue
     }
     if count == 4 {
-        continue;
+        continue
     }
     if count == 6 {
-        break;
+        break
     }
-    print("Count:", count);
+    print("Count:", count)
 }
-print("done");
+print("done")

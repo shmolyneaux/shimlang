@@ -23,6 +23,4 @@
  102:  ShimValue 3
  111:  call args=1  kwargs=0
  114:  call args=1  kwargs=0
- 117:  pop
- 118:  None
 

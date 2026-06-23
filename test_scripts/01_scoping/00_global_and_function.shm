@@ -1,9 +1,9 @@
-let foo = "global";
+let foo = "global"
 
 fn test() {
-    let foo = "function";
+    let foo = "function"
 }
 
-print(foo);
-test();
-print(foo);
+print(foo)
+test()
+print(foo)

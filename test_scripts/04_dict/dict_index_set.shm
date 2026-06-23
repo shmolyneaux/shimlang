@@ -1,5 +1,5 @@
-let d = dict();
+let d = dict()
 
-d["test"] = "foo";
+d["test"] = "foo"
 
-print(d["test"]);
+print(d["test"])

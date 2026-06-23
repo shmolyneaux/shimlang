@@ -8,5 +8,5 @@ struct Foo {
     b = a + 1,
 }
 
-let obj = Foo(1);
-assert(obj.b == 2);
+let obj = Foo(1)
+assert(obj.b == 2)

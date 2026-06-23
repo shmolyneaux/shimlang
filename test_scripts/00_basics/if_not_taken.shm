@@ -1,4 +1,4 @@
 if false {
-    print("not printed");
+    print("not printed")
 }
-print("printed");
+print("printed")

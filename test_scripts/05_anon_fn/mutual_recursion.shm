@@ -15,7 +15,7 @@ fn is_odd(n) {
     }
 }
 
-print(is_even(4));
-print(is_odd(4));
-print(is_even(7));
-print(is_odd(7));
+print(is_even(4))
+print(is_odd(4))
+print(is_even(7))
+print(is_odd(7))

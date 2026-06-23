@@ -4,5 +4,5 @@ fn make_adder(x) {
     }
     adder
 }
-let add5 = make_adder(5);
-print(add5(3));
+let add5 = make_adder(5)
+print(add5(3))

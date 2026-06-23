@@ -1,10 +1,10 @@
-let count = 0;
-let keepgoing = true;
+let count = 0
+let keepgoing = true
 
 while keepgoing {
-    print("iteration", count);
-    count = count + 1;
-    keepgoing = false;
+    print("iteration", count)
+    count = count + 1
+    keepgoing = false
 }
 
-print("done");
+print("done")

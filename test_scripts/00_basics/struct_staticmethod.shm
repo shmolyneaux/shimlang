@@ -3,9 +3,9 @@ struct Point {
     y
 
     fn default() {
-        return Point(0, 0);
+        return Point(0, 0)
     }
 }
 
-let p = Point.default();
-print(p.x, p.y);
+let p = Point.default()
+print(p.x, p.y)

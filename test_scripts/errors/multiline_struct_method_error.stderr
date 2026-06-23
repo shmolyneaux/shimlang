@@ -1,6 +1,6 @@
  2 |     value
  3 |     fn add(self, x) {
- 4 |         self.value + x;
+ 4 |         self.value + x
                         ^
  5 |     }
  6 | }

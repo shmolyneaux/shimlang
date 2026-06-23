@@ -1,5 +1,5 @@
-let myvar = "skipped loop";
+let myvar = "skipped loop"
 while false {
-    myvar = "in loop";
+    myvar = "in loop"
 }
-print(myvar);
+print(myvar)

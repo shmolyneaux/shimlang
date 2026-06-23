@@ -2,30 +2,30 @@
 // `None` values rather than stopping early: iterators now signal the end of
 // iteration with the dedicated `StopIteration` sentinel, not with `None`.
 
-let lst = [1, None, 3, None, 5];
+let lst = [1, None, 3, None, 5]
 
 // A `for` loop walks the whole list, including the `None` elements.
 for val in lst {
-    print(val);
+    print(val)
 }
 
 // Indexing returns the stored `None` directly.
-print("index:", lst[1]);
-print("len:", lst.len());
+print("index:", lst[1])
+print("len:", lst.len())
 
 // `enumerate` also surfaces the `None` elements.
 for i, val in lst.enumerate() {
-    print(i, val);
+    print(i, val)
 }
 
 // `filter` can keep `None` elements.
-let nones = filter(lst, fn(x) { x == None });
-print("filtered none count:", nones.len());
+let nones = filter(lst, fn(x) { x == None })
+print("filtered none count:", nones.len())
 
 // String joining renders `None` like any other element.
-print(",".join(lst));
+print(",".join(lst))
 
 // `extend` consumes an iterator that yields `None`.
-let target = [0];
-target.extend([None, 6]);
-print("extended:", target.len(), target[1], target[2]);
+let target = [0]
+target.extend([None, 6])
+print("extended:", target.len(), target[1], target[2])

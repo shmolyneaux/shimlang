@@ -6,10 +6,10 @@ struct Point {
         return Point(
             self.xval + other.xval,
             self.yval + other.yval,
-        );
+        )
     }
 }
 
-let p = Point(1, 2);
-print(p.xval);
-print(p.yval);
+let p = Point(1, 2)
+print(p.xval)
+print(p.yval)

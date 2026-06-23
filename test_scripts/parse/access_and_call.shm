@@ -1,1 +1,1 @@
-self.test() + other.test();
+self.test() + other.test()

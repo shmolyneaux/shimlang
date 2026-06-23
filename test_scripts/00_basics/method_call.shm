@@ -10,8 +10,8 @@ struct Point {
     }
 }
 
-let a = Point(1, 2);
-let b = Point(2, 3);
+let a = Point(1, 2)
+let b = Point(2, 3)
 
-let c = a.add(b);
-print("Point:", c.x, c.y);
+let c = a.add(b)
+print("Point:", c.x, c.y)

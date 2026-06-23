@@ -1,5 +1,5 @@
-let i = 0;
+let i = 0
 while i < 3 {
-    let x = undefined_var;
-    i = i + 1;
+    let x = undefined_var
+    i = i + 1
 }

@@ -3,4 +3,4 @@ struct Point {
     y
 }
 
-print(Point.__name__);
+print(Point.__name__)

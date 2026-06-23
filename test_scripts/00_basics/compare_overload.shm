@@ -7,9 +7,9 @@ struct Ver {
     fn gte(self, other) { self.n >= other.n }
 }
 
-let a = Ver(1);
-let b = Ver(2);
-print(a < b, b < a);
-print(b > a, a > b);
-print(a <= a, b <= a);
-print(a >= a, a >= b);
+let a = Ver(1)
+let b = Ver(2)
+print(a < b, b < a)
+print(b > a, a > b)
+print(a <= a, b <= a)
+print(a >= a, a >= b)

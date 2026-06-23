@@ -1,6 +1,6 @@
  2 |     x
  3 |     fn bad(self) {
- 4 |         self.x + "string";
+ 4 |         self.x + "string"
                     ^
  5 |     }
  6 | }

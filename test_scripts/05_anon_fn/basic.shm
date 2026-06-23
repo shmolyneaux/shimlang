@@ -1,2 +1,2 @@
-let f = fn() { print("test") };
-f();
+let f = fn() { print("test") }
+f()

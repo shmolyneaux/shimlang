@@ -1,7 +1,7 @@
 struct Foo {
     fn test(self) {
-        return "test";
+        return "test"
     }
 }
-let f = Foo();
-print(f.test());
+let f = Foo()
+print(f.test())

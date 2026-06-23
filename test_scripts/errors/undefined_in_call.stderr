@@ -1,5 +1,5 @@
  3 | }
  4 | 
- 5 | greet(unknown);
+ 5 | greet(unknown)
            ^^^^^^^
 Error: Unknown identifier "unknown"

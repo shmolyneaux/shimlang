@@ -1,2 +1,2 @@
-let f = fn() { undefined_var; };
-f();
+let f = fn() { undefined_var; }
+f()

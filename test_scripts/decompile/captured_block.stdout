@@ -7,13 +7,13 @@
   40:  get .iter
   46:  call args=0  kwargs=0
   49:  get .next
-  55:  Loop Start -> 119
+  55:  Loop Start -> 117
   58:  Copy
   59:  call args=0  kwargs=0
   62:  Copy
   63:  StopIteration
   64:  equal
-  65:  JMPNZ -> 118
+  65:  JMPNZ -> 116
   68:  start_captured_scope
   69:  let "i"
   72:  start_captured_scope
@@ -28,13 +28,11 @@
   97:  load "f"
  100:  attr_call .append args=1  kwargs=0
  110:  pop
- 111:  None
- 112:  pop
- 113:  end_scope
- 114:  end_scope
- 115:  JMPUP -> 58
+ 111:  end_scope
+ 112:  end_scope
+ 113:  JMPUP -> 58
+ 116:  pop
+ 117:  Loop End
  118:  pop
- 119:  Loop End
- 120:  pop
- 121:  None
+ 119:  None
 
