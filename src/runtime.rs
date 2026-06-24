@@ -2216,23 +2216,6 @@ impl Interpreter {
         self.debug_hook = None;
     }
 
-    pub fn print_mem(&self) {
-        let _zone = zone_scoped!("print_mem");
-        let mut count = 0;
-        let mut idx = 0;
-        for block in self.mem.free_list.iter() {
-            while idx < block.pos.into() {
-                println!("{:06}: {:016x}", idx, self.mem.mem()[idx]);
-                idx += 1;
-                count += 1
-            }
-
-            if count > 100 {
-                break;
-            }
-        }
-    }
-
     pub fn format_env(&self, env: &Environment) -> String {
         let _zone = zone_scoped!("format_env");
         let mut out = String::new();
