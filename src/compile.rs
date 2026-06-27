@@ -50,6 +50,7 @@ pub(crate) enum ByteCode {
     CreateList,
     CreateStruct,
     CreateTuple,
+    CreateDict,
     UnpackTuple,
     VariableDeclaration,
     Assignment,
@@ -227,6 +228,26 @@ fn validate_expr_loop_control(
             validate_loop_control(else_body, in_loop, script)?;
         }
         Expression::Fn(func) => validate_fn_loop_control(func, script)?,
+        Expression::Dict(pairs) => {
+            for (key, value) in pairs.iter() {
+                validate_expr_loop_control(key, in_loop, script)?;
+                validate_expr_loop_control(value, in_loop, script)?;
+            }
+        }
+        Expression::Set(items) => {
+            // Set literals parse into the AST but are not yet lowered by the
+            // compiler (there is no runtime set type). Reject them here, where
+            // the source `script` is available for a contextual error, before
+            // any bytecode is emitted.
+            for e in items.iter() {
+                validate_expr_loop_control(e, in_loop, script)?;
+            }
+            return Err(format_script_err(
+                expr.span,
+                script,
+                "set literals are not yet implemented",
+            ));
+        }
     }
     Ok(())
 }
@@ -1024,6 +1045,10 @@ pub fn expression_captures_env(input_expr: &Expression) -> bool {
                 || block_captures_env(else_block)
         }
         Expression::Fn(..) => true,
+        Expression::Dict(pairs) => pairs
+            .iter()
+            .any(|(k, v)| expression_captures_env(&k.data) || expression_captures_env(&v.data)),
+        Expression::Set(items) => items.iter().any(|e| expression_captures_env(&e.data)),
     }
 }
 
@@ -1229,6 +1254,22 @@ pub fn compile_expression(expr: &ExprNode) -> Result<Vec<(u8, Span)>, String> {
             res.push(((len >> 8) as u8, expr.span));
             res.push(((len & 0xff) as u8, expr.span));
             Ok(res)
+        }
+        Expression::Dict(pairs) => {
+            let mut res = Vec::new();
+            // Push each key then value; CreateDict pops them in pairs.
+            for (key, value) in pairs {
+                res.extend(compile_expression(key)?);
+                res.extend(compile_expression(value)?);
+            }
+            res.push((ByteCode::CreateDict as u8, expr.span));
+            let len: u16 = pairs.len().try_into().expect("Dict should fit into u16");
+            res.push(((len >> 8) as u8, expr.span));
+            res.push(((len & 0xff) as u8, expr.span));
+            Ok(res)
+        }
+        Expression::Set(_items) => {
+            Err("set literals are not yet implemented".to_string())
         }
         Expression::Primary(Primary::Expression(expr)) => compile_expression(expr),
         Expression::BooleanOp(BooleanOp::And(a, b)) => {
@@ -1715,6 +1756,10 @@ pub fn format_asm(bytes: &[u8]) -> String {
         } else if *b == ByteCode::CreateTuple as u8 {
             let list_size = ((bytes[idx + 1] as usize) << 8) + bytes[idx + 2] as usize;
             out.push_str(&format!("CreateTuple size={}", list_size));
+            idx += 2;
+        } else if *b == ByteCode::CreateDict as u8 {
+            let pair_count = ((bytes[idx + 1] as usize) << 8) + bytes[idx + 2] as usize;
+            out.push_str(&format!("CreateDict pairs={}", pair_count));
             idx += 2;
         } else if *b == ByteCode::UnpackTuple as u8 {
             let list_size = ((bytes[idx + 1] as usize) << 8) + bytes[idx + 2] as usize;

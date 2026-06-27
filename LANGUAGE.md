@@ -763,6 +763,49 @@ Output:
 Alice 30
 ```
 
+#### Dictionary literals
+
+A dictionary can also be written directly with brace-and-colon syntax,
+`{ key: value, ... }`. Both keys and values are arbitrary expressions, so —
+unlike the `dict(name=...)` keyword form, where the name becomes a string key —
+a bare identifier key is evaluated as a variable. Use a string literal for a
+string key, and any hashable expression (including integers) for other keys:
+
+```rust
+let person = { "name": "Alice", "age": 30 }
+let codes = { 200: "OK", 404: "Not Found" }
+
+let field = "name"
+let computed = { field: person["name"] }   // key is the value of `field`, "name"
+
+print(person["name"])
+print(codes[404])
+print(computed["name"])
+```
+
+Output:
+
+```
+Alice
+Not Found
+Alice
+```
+
+A trailing comma is allowed. Because a brace beginning with a statement, or
+containing no top-level colon, is a [block expression](#blocks) instead, the
+empty forms are spelled with their delimiter to stay unambiguous:
+
+| Syntax | Meaning |
+|--------|---------|
+| `{}` | empty block |
+| `{:}` | empty dictionary |
+| `{ x }` | block whose value is `x` |
+| `{ x: 1 }` | one-entry dictionary |
+
+> Set literals (`{ a, b }`, with `{,}` empty and `{ x, }` single-element,
+> mirroring tuples) parse but are not yet supported at runtime; compiling one
+> reports "set literals are not yet implemented".
+
 Dictionary methods:
 
 | Method | Description |

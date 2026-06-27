@@ -137,6 +137,12 @@ pub enum Expression {
     Block(Block),
     If(Box<ExprNode>, Block, Block),
     Fn(Fn),
+    /// A dict literal `{ key: value, ... }`. The empty dict is spelled `{:}`.
+    Dict(Vec<(ExprNode, ExprNode)>),
+    /// A set literal `{ a, b, ... }`. A single-element set requires a trailing
+    /// comma (`{ x, }`) and the empty set is spelled `{,}`, mirroring tuples.
+    /// Parsed and represented in the AST, but not yet lowered by the compiler.
+    Set(Vec<ExprNode>),
 }
 
 #[derive(Debug)]
@@ -220,6 +226,151 @@ pub fn parse_block(tokens: &mut TokenStream) -> Result<Block, String> {
     Ok(block)
 }
 
+/// What a `{`-led expression turns out to be.
+enum CurlyKind {
+    Block,
+    Dict,
+    Set,
+}
+
+/// Decide whether the brace at the cursor (the opening `{` has *already* been
+/// consumed) starts a block, a dict literal, or a set literal, without
+/// consuming any tokens.
+///
+/// The rule is purely local and backward-compatible: `:` is otherwise illegal
+/// in the grammar and a top-level comma inside braces is otherwise a parse
+/// error, so the first brace-top-level `:` means a dict and the first
+/// brace-top-level `,` means a set. Statement terminators (`;`), a statement
+/// keyword in leading position, or reaching the closing `}` first all mean a
+/// block. Nested `()`/`[]`/`{}` are skipped via depth tracking so a `:`/`,`
+/// inside them (e.g. `{ d[a:b] }`) does not misfire.
+fn classify_curly(tokens: &TokenStream) -> CurlyKind {
+    let rest = &tokens.tokens[tokens.idx..];
+
+    // A statement-only keyword in leading position is unambiguously a block;
+    // these can never begin a dict key or set element expression. (`if`/`fn`
+    // are expressions too, so they are left to the scan below.)
+    if let Some(first) = rest.first() {
+        match first {
+            Token::Let
+            | Token::While
+            | Token::For
+            | Token::Return
+            | Token::Break
+            | Token::Continue
+            | Token::Struct => return CurlyKind::Block,
+            _ => {}
+        }
+    }
+
+    let mut depth: i32 = 0;
+    for tok in rest {
+        match tok {
+            Token::LBracket | Token::LSquare | Token::LCurly => depth += 1,
+            Token::RBracket | Token::RSquare => depth -= 1,
+            Token::RCurly => {
+                if depth == 0 {
+                    // Closed our brace without seeing a top-level `:` or `,`.
+                    return CurlyKind::Block;
+                }
+                depth -= 1;
+            }
+            Token::Colon if depth == 0 => return CurlyKind::Dict,
+            Token::Comma if depth == 0 => return CurlyKind::Set,
+            Token::Semicolon if depth == 0 => return CurlyKind::Block,
+            _ => {}
+        }
+    }
+
+    CurlyKind::Block
+}
+
+/// Parse a dict literal, assuming the opening `{` has already been consumed.
+/// Consumes through the closing `}`. The empty dict is `{:}`.
+fn parse_dict_literal(tokens: &mut TokenStream) -> Result<Vec<(ExprNode, ExprNode)>, String> {
+    let mut pairs = Vec::new();
+
+    // Empty dict literal: `{:}`
+    if *tokens.peek()? == Token::Colon {
+        tokens.advance()?;
+        tokens.consume(Token::RCurly)?;
+        return Ok(pairs);
+    }
+
+    loop {
+        let key = parse_expression(tokens)?;
+        tokens.consume(Token::Colon)?;
+        let value = parse_expression(tokens)?;
+        pairs.push((key, value));
+
+        match tokens.peek()? {
+            Token::RCurly => {
+                tokens.advance()?;
+                break;
+            }
+            Token::Comma => {
+                tokens.advance()?;
+                // Allow a trailing comma before the closing brace.
+                if !tokens.is_empty() && *tokens.peek()? == Token::RCurly {
+                    tokens.advance()?;
+                    break;
+                }
+                continue;
+            }
+            token => {
+                return Err(tokens.format_peek_err(&format!(
+                    "Expected `,` or `}}` in dict literal, found {:?}",
+                    token
+                )));
+            }
+        }
+    }
+
+    Ok(pairs)
+}
+
+/// Parse a set literal, assuming the opening `{` has already been consumed.
+/// Consumes through the closing `}`. The empty set is `{,}` and a single
+/// element requires a trailing comma (`{ x, }`).
+fn parse_set_literal(tokens: &mut TokenStream) -> Result<Vec<ExprNode>, String> {
+    let mut items = Vec::new();
+
+    // Empty set literal: `{,}`
+    if *tokens.peek()? == Token::Comma {
+        tokens.advance()?;
+        tokens.consume(Token::RCurly)?;
+        return Ok(items);
+    }
+
+    loop {
+        items.push(parse_expression(tokens)?);
+
+        match tokens.peek()? {
+            Token::RCurly => {
+                tokens.advance()?;
+                break;
+            }
+            Token::Comma => {
+                tokens.advance()?;
+                // Allow a trailing comma before the closing brace.
+                if !tokens.is_empty() && *tokens.peek()? == Token::RCurly {
+                    tokens.advance()?;
+                    break;
+                }
+                continue;
+            }
+            token => {
+                return Err(tokens.format_peek_err(&format!(
+                    "Expected `,` or `}}` in set literal, found {:?}",
+                    token
+                )));
+            }
+        }
+    }
+
+    Ok(items)
+}
+
 pub fn parse_primary(tokens: &mut TokenStream) -> Result<ExprNode, String> {
     let span = tokens.peek_span()?;
     let expr: Expression = match tokens.pop()? {
@@ -295,9 +446,20 @@ pub fn parse_primary(tokens: &mut TokenStream) -> Result<ExprNode, String> {
         Token::Bool(b) => Expression::Primary(Primary::Bool(b)),
         Token::Identifier(s) => Expression::Primary(Primary::Identifier(s)),
         Token::LCurly => {
-            tokens.unadvance()?;
-            let block = parse_block(tokens)?;
-            Expression::Block(block)
+            // A leading `{` may begin a block, a dict literal, or a set
+            // literal. They are disjoint: a brace-top-level `:` means a dict, a
+            // brace-top-level `,` means a set, and anything else is a block.
+            // `classify_curly` scans ahead (the opening `{` is already
+            // consumed) to decide which without re-parsing.
+            match classify_curly(tokens) {
+                CurlyKind::Block => {
+                    tokens.unadvance()?;
+                    let block = parse_block(tokens)?;
+                    Expression::Block(block)
+                }
+                CurlyKind::Dict => Expression::Dict(parse_dict_literal(tokens)?),
+                CurlyKind::Set => Expression::Set(parse_set_literal(tokens)?),
+            }
         }
         Token::LBracket => {
             // Empty tuple: ()

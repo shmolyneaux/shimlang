@@ -3102,6 +3102,24 @@ impl Interpreter {
 
                     *pc += 2;
                 }
+                val if val == ByteCode::CreateDict as u8 => {
+                    // `len` is the number of key/value pairs; the stack holds
+                    // them as key, value, key, value, ... (bottom to top).
+                    let len = ((bytes[*pc + 1] as usize) << 8) + bytes[*pc + 2] as usize;
+
+                    let dict_val = self.mem.alloc_dict()?;
+                    let pairs: Vec<ShimValue> = stack.drain(stack.len() - 2 * len..).collect();
+                    let dict = dict_val.dict_mut(self)?;
+                    let mut it = pairs.into_iter();
+                    while let Some(key) = it.next() {
+                        let value = it.next().expect("dict literal has paired key/value");
+                        dict.set(self, key, value)?;
+                    }
+
+                    stack.push(dict_val);
+
+                    *pc += 2;
+                }
                 val if val == ByteCode::CreateFn as u8 => {
                     let instruction_offset = ((bytes[*pc + 1] as u32) << 8) + bytes[*pc + 2] as u32;
                     let fn_pc = *pc as u32 - instruction_offset;
