@@ -356,8 +356,12 @@ pub fn lex_identifier(text: &mut &[u8]) -> Result<Vec<u8>, String> {
             }
         }
     }
-    // End of string - consume all of text
-    Ok(text.to_vec())
+    // End of string - consume all of text. Leave `text` one byte before the
+    // end so the caller's `+1` advance lands just past the consumed identifier,
+    // matching the non-end case above and `lex_number`.
+    let ident = text.to_vec();
+    *text = &text[(text.len() - 1)..];
+    Ok(ident)
 }
 
 pub enum StringLexResult {
