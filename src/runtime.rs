@@ -1578,6 +1578,53 @@ impl ShimValue {
                 visited.pop();
                 out
             }
+            ShimValue::Dict(position) => {
+                let pos = usize::from(*position);
+                if visited.contains(&pos) {
+                    return "...".to_string();
+                }
+                visited.push(pos);
+
+                let out = unsafe {
+                    let dict: &ShimDict = &*(mem.mem().as_ptr().add(pos) as *const ShimDict);
+                    let entry_count = dict.entry_count as usize;
+                    let entries: &[DictEntry] = if entry_count == 0 {
+                        &[]
+                    } else {
+                        let entries_pos = usize::from(dict.entries);
+                        let u64_slice = &mem.mem()[entries_pos..entries_pos + 3 * entry_count];
+                        std::slice::from_raw_parts(
+                            u64_slice.as_ptr() as *const DictEntry,
+                            entry_count,
+                        )
+                    };
+
+                    let mut out = "{".to_string();
+                    let mut first = true;
+                    for entry in entries {
+                        if !entry.is_valid() {
+                            continue;
+                        }
+                        if first {
+                            first = false;
+                        } else {
+                            out.push_str(", ");
+                        }
+                        out.push_str(&entry.key.to_string_mem_inner(mem, visited));
+                        out.push_str(": ");
+                        out.push_str(&entry.value.to_string_mem_inner(mem, visited));
+                    }
+                    if first {
+                        // No entries were emitted: empty dict literal
+                        out.push(':');
+                    }
+                    out.push('}');
+                    out
+                };
+
+                visited.pop();
+                out
+            }
             ShimValue::Native(_, _) => self.native_from_mem(mem).unwrap().to_string_mem(mem),
             ShimValue::Struct(def_pos, pos) => {
                 let instance_pos = usize::from(*pos);

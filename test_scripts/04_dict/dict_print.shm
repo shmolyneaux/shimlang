@@ -1,0 +1,22 @@
+// Printing a dict renders the `{key: value}` literal form.
+
+// Empty dict
+let empty = {:}
+print(empty)
+
+// Single entry
+print({"a": 1})
+
+// Multiple entries (insertion order preserved)
+print({"key": "value", "another_key": "another_value"})
+
+// Integer keys and values
+print({1: 2, 3: 4})
+
+// Nested dict and list values
+print({"list": [1, 2, 3], "inner": {"x": 10}})
+
+// A dict that becomes empty after removing its only entry
+let d = {"only": 1}
+d.pop("only")
+print(d)
