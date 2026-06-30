@@ -1,4 +1,0 @@
- 1 | let s = { 1, 2, 3 }
-             ^
- 2 | print(s)
-Error: set literals are not yet implemented

@@ -2848,6 +2848,7 @@ pub(crate) fn get_type_name(value: &ShimValue) -> &'static str {
         ShimValue::Tuple(..) => "tuple",
         ShimValue::List(_) => "list",
         ShimValue::Dict(_) => "dict",
+        ShimValue::Set(_) => "set",
         ShimValue::StructDef(_) => "struct definition",
         ShimValue::Struct(..) => "struct",
         ShimValue::Native(_, _) => "native object",
@@ -3545,4 +3546,374 @@ pub(crate) fn shim_max(
         (ShimValue::Float(v), ShimValue::Float(m)) => Ok(ShimValue::Float(v.max(m))),
         _ => Err("pow: expected int or float arguments".to_string()),
     }
+}
+
+/// A set is implemented as a thin wrapper over a dictionary whose keys are the
+/// set's elements (the values are all `None`). The backing dict is allocated
+/// lazily: an empty set has `dict_pos == 0` and no dict object behind it.
+#[derive(Debug)]
+pub struct ShimSet {
+    pub(crate) dict_pos: u24
+}
+
+impl ShimSet {
+    pub fn new() -> Self{
+        Self {
+            dict_pos: u24::from(0)
+        }
+    }
+
+    /// Whether the backing dictionary has been allocated yet.
+    fn has_dict(&self) -> bool {
+        self.dict_pos != u24::from(0)
+    }
+
+    pub fn add(&mut self, interpreter: &mut Interpreter, item: ShimValue) -> Result<(), String> {
+        if !self.has_dict() {
+            self.dict_pos = interpreter.mem.alloc_dict_raw()?;
+        }
+        let binding = ShimValue::Dict(self.dict_pos);
+        let d = binding.dict_mut(interpreter)?;
+        d.set(interpreter, item, ShimValue::None)
+    }
+
+    pub fn remove(&mut self, interpreter: &mut Interpreter, item: ShimValue) -> Result<(), String> {
+        if !self.has_dict() {
+            Err(format!("Item {} not found in set", item.to_string_mem(&interpreter.mem)))
+        } else {
+            let binding = ShimValue::Dict(self.dict_pos);
+            let d = binding.dict_mut(interpreter)?;
+            // `pop` errors when the key is absent and no default is supplied.
+            match d.pop(interpreter, item, None) {
+                Ok(_) => Ok(()),
+                Err(_) => Err(format!("Item {} not found in set", item.to_string_mem(&interpreter.mem))),
+            }
+        }
+    }
+
+    /// Like `remove`, but a no-op when the item is absent.
+    pub fn discard(&mut self, interpreter: &mut Interpreter, item: ShimValue) -> Result<(), String> {
+        if !self.has_dict() {
+            return Ok(());
+        }
+        let binding = ShimValue::Dict(self.dict_pos);
+        let d = binding.dict_mut(interpreter)?;
+        let _ = d.pop(interpreter, item, Some(ShimValue::None));
+        Ok(())
+    }
+
+    pub fn contains(&mut self, interpreter: &mut Interpreter, item: ShimValue) -> Result<bool, String> {
+        if !self.has_dict() {
+            Ok(false)
+        } else {
+            let binding = ShimValue::Dict(self.dict_pos);
+            let d = binding.dict_mut(interpreter)?;
+            match d.get(interpreter, item) {
+                Ok(_) => Ok(true),
+                Err(_) => Ok(false),
+            }
+        }
+    }
+
+    pub fn len(&self, interpreter: &Interpreter) -> usize {
+        if !self.has_dict() {
+            0
+        } else {
+            let d: &ShimDict = unsafe { interpreter.mem.get(self.dict_pos) };
+            d.len()
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.dict_pos = u24::from(0);
+    }
+
+    /// Collect the set's elements into an owned vector. Used by the set
+    /// operations and equality, which need a snapshot independent of the
+    /// backing dict.
+    pub fn entries(&self, interpreter: &Interpreter) -> Vec<ShimValue> {
+        if !self.has_dict() {
+            return Vec::new();
+        }
+        let d: &ShimDict = unsafe { interpreter.mem.get(self.dict_pos) };
+        d.entries_array(interpreter)
+            .iter()
+            .filter(|e| e.is_valid())
+            .map(|e| e.key)
+            .collect()
+    }
+}
+
+/// Iterator over a set's elements, yielding each key of the backing dict.
+pub(crate) struct SetIterator {
+    pub(crate) set: ShimValue,
+    pub(crate) idx: usize,
+}
+impl ShimNative for SetIterator {
+    fn get_attr(
+        &self,
+        self_as_val: &ShimValue,
+        interpreter: &mut Interpreter,
+        ident: &[u8],
+    ) -> Result<ShimValue, String> {
+        if ident == b"next" {
+            fn shim_set_iter_next(
+                interpreter: &mut Interpreter,
+                args: &ArgBundle,
+            ) -> Result<ShimValue, String> {
+                if args.args.len() != 1 {
+                    return Err("Can't provide positional args to SetIterator.next()".to_string());
+                }
+
+                let itr: &mut SetIterator = args.args[0].as_native(interpreter)?;
+                let dict_pos = itr.set.set(interpreter)?.dict_pos;
+                if dict_pos == u24::from(0) {
+                    return Ok(ShimValue::StopIteration);
+                }
+                let dict: &ShimDict = unsafe { interpreter.mem.get(dict_pos) };
+                let entries = dict.entries_array(interpreter);
+
+                // Skip invalid entries (tombstones)
+                while itr.idx < entries.len() {
+                    if entries[itr.idx].is_valid() {
+                        let result = entries[itr.idx].key;
+                        itr.idx += 1;
+                        return Ok(result);
+                    }
+                    itr.idx += 1;
+                }
+
+                Ok(ShimValue::StopIteration)
+            }
+
+            Ok(interpreter
+                .mem
+                .alloc_bound_native_fn(self_as_val, shim_set_iter_next)?)
+        } else if ident == b"iter" {
+            fn shim_set_iter_iter(
+                _interpreter: &mut Interpreter,
+                args: &ArgBundle,
+            ) -> Result<ShimValue, String> {
+                let mut unpacker = ArgUnpacker::new(args);
+                let obj = unpacker.required(b"obj")?;
+                unpacker.end()?;
+                Ok(obj)
+            }
+
+            Ok(interpreter
+                .mem
+                .alloc_bound_native_fn(self_as_val, shim_set_iter_iter)?)
+        } else {
+            Err(format!(
+                "Can't get_attr {} on {}",
+                debug_u8s(ident),
+                type_name::<Self>()
+            ))
+        }
+    }
+
+    fn gc_vals(&self) -> Vec<ShimValue> {
+        vec![self.set]
+    }
+}
+
+pub(crate) fn shim_set(
+    interpreter: &mut Interpreter,
+    args: &ArgBundle,
+) -> Result<ShimValue, String> {
+    let mut unpacker = ArgUnpacker::new(args);
+    let iterable = unpacker.optional(b"iterable");
+    unpacker.end()?;
+
+    let result = interpreter.mem.alloc_set()?;
+
+    if let Some(iterable) = iterable {
+        let mut iter_args = ArgBundle::new();
+        let iterator = match iterable
+            .get_attr(interpreter, b"iter")?
+            .call(interpreter, &mut iter_args)?
+        {
+            CallResult::ReturnValue(val) => val,
+            CallResult::PC(pc, captured_scope) => {
+                let mut new_env = Environment::with_scope(captured_scope);
+                interpreter.execute_bytecode_extended(&mut (pc as usize), iter_args, &mut new_env)?
+            }
+        };
+
+        let next_method = iterator.get_attr(interpreter, b"next")?;
+
+        loop {
+            let mut next_args = ArgBundle::new();
+            let item = match next_method.call(interpreter, &mut next_args)? {
+                CallResult::ReturnValue(val) => val,
+                CallResult::PC(pc, captured_scope) => {
+                    let mut new_env = Environment::with_scope(captured_scope);
+                    interpreter.execute_bytecode_extended(
+                        &mut (pc as usize),
+                        next_args,
+                        &mut new_env,
+                    )?
+                }
+            };
+
+            if item.is_stop_iteration() {
+                break;
+            }
+
+            result.set_mut(interpreter)?.add(interpreter, item)?;
+        }
+    }
+
+    Ok(result)
+}
+
+pub(crate) fn shim_set_add(
+    interpreter: &mut Interpreter,
+    args: &ArgBundle,
+) -> Result<ShimValue, String> {
+    let mut unpacker = ArgUnpacker::new(args);
+    let obj = unpacker.required(b"obj")?;
+    let item = unpacker.required(b"item")?;
+    unpacker.end()?;
+
+    obj.set_mut(interpreter)?.add(interpreter, item)?;
+
+    Ok(ShimValue::None)
+}
+
+pub(crate) fn shim_set_remove(
+    interpreter: &mut Interpreter,
+    args: &ArgBundle,
+) -> Result<ShimValue, String> {
+    let mut unpacker = ArgUnpacker::new(args);
+    let obj = unpacker.required(b"obj")?;
+    let item = unpacker.required(b"item")?;
+    unpacker.end()?;
+
+    obj.set_mut(interpreter)?.remove(interpreter, item)?;
+
+    Ok(ShimValue::None)
+}
+
+pub(crate) fn shim_set_discard(
+    interpreter: &mut Interpreter,
+    args: &ArgBundle,
+) -> Result<ShimValue, String> {
+    let mut unpacker = ArgUnpacker::new(args);
+    let obj = unpacker.required(b"obj")?;
+    let item = unpacker.required(b"item")?;
+    unpacker.end()?;
+
+    obj.set_mut(interpreter)?.discard(interpreter, item)?;
+
+    Ok(ShimValue::None)
+}
+
+pub(crate) fn shim_set_has(
+    interpreter: &mut Interpreter,
+    args: &ArgBundle,
+) -> Result<ShimValue, String> {
+    let mut unpacker = ArgUnpacker::new(args);
+    let obj = unpacker.required(b"obj")?;
+    let item = unpacker.required(b"item")?;
+    unpacker.end()?;
+
+    Ok(ShimValue::Bool(obj.set_mut(interpreter)?.contains(interpreter, item)?))
+}
+
+pub(crate) fn shim_set_len(
+    interpreter: &mut Interpreter,
+    args: &ArgBundle,
+) -> Result<ShimValue, String> {
+    let mut unpacker = ArgUnpacker::new(args);
+    let obj = unpacker.required(b"obj")?;
+    unpacker.end()?;
+
+    Ok(ShimValue::Integer(obj.set(interpreter)?.len(interpreter) as i32))
+}
+
+pub(crate) fn shim_set_clear(
+    interpreter: &mut Interpreter,
+    args: &ArgBundle,
+) -> Result<ShimValue, String> {
+    let mut unpacker = ArgUnpacker::new(args);
+    let obj = unpacker.required(b"obj")?;
+    unpacker.end()?;
+
+    obj.set_mut(interpreter)?.clear();
+
+    Ok(ShimValue::None)
+}
+
+pub(crate) fn shim_set_iter(
+    interpreter: &mut Interpreter,
+    args: &ArgBundle,
+) -> Result<ShimValue, String> {
+    let mut unpacker = ArgUnpacker::new(args);
+    let obj = unpacker.required(b"obj")?;
+    unpacker.end()?;
+
+    Ok(interpreter.mem.alloc_native(SetIterator { set: obj, idx: 0 })?)
+}
+
+pub(crate) fn shim_set_union(
+    interpreter: &mut Interpreter,
+    args: &ArgBundle,
+) -> Result<ShimValue, String> {
+    let mut unpacker = ArgUnpacker::new(args);
+    let obj = unpacker.required(b"obj")?;
+    let other = unpacker.required(b"other")?;
+    unpacker.end()?;
+
+    let mut items = obj.set(interpreter)?.entries(interpreter);
+    items.extend(other.set(interpreter)?.entries(interpreter));
+
+    let result = interpreter.mem.alloc_set()?;
+    for item in items {
+        result.set_mut(interpreter)?.add(interpreter, item)?;
+    }
+
+    Ok(result)
+}
+
+pub(crate) fn shim_set_intersection(
+    interpreter: &mut Interpreter,
+    args: &ArgBundle,
+) -> Result<ShimValue, String> {
+    let mut unpacker = ArgUnpacker::new(args);
+    let obj = unpacker.required(b"obj")?;
+    let other = unpacker.required(b"other")?;
+    unpacker.end()?;
+
+    let items = obj.set(interpreter)?.entries(interpreter);
+
+    let result = interpreter.mem.alloc_set()?;
+    for item in items {
+        if other.set_mut(interpreter)?.contains(interpreter, item)? {
+            result.set_mut(interpreter)?.add(interpreter, item)?;
+        }
+    }
+
+    Ok(result)
+}
+
+pub(crate) fn shim_set_difference(
+    interpreter: &mut Interpreter,
+    args: &ArgBundle,
+) -> Result<ShimValue, String> {
+    let mut unpacker = ArgUnpacker::new(args);
+    let obj = unpacker.required(b"obj")?;
+    let other = unpacker.required(b"other")?;
+    unpacker.end()?;
+
+    let items = obj.set(interpreter)?.entries(interpreter);
+
+    let result = interpreter.mem.alloc_set()?;
+    for item in items {
+        if !other.set_mut(interpreter)?.contains(interpreter, item)? {
+            result.set_mut(interpreter)?.add(interpreter, item)?;
+        }
+    }
+
+    Ok(result)
 }

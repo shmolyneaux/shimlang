@@ -804,10 +804,6 @@ empty forms are spelled with their delimiter to stay unambiguous:
 | `{ x }` | block whose value is `x` |
 | `{ x: 1 }` | one-entry dictionary |
 
-> Set literals (`{ a, b }`, with `{,}` empty and `{ x, }` single-element,
-> mirroring tuples) parse but are not yet supported at runtime; compiling one
-> reports "set literals are not yet implemented".
-
 Dictionary methods:
 
 | Method | Description |
@@ -851,6 +847,63 @@ c
 a => 1
 b => 2
 c => 3
+```
+
+### Sets
+
+A set is an unordered collection of unique values. Set literals use braces with
+comma-separated values and no colons. Because a brace beginning with a statement
+or containing a single value with no trailing comma is a [block
+expression](#blocks), the empty and single-element forms are spelled with a
+trailing comma, mirroring tuples:
+
+| Syntax | Meaning |
+|--------|---------|
+| `{,}` | empty set |
+| `{ x, }` | one-element set |
+| `{ x, y }` | two-element set |
+
+The `set()` builtin creates an empty set, or builds one from an iterable,
+discarding duplicates:
+
+```rust
+let s = set()          // empty
+let t = set([1, 1, 2]) // {1, 2}
+```
+
+Like tuples, sets print their empty and single-element forms with a trailing
+comma (`{,}`, `{1,}`). Membership is tested with `in`, and iterating a set
+yields its elements in insertion order. Two sets are equal when they contain
+the same elements, regardless of order.
+
+Set methods:
+
+| Method | Description |
+|--------|-------------|
+| `.len()` | Returns the number of elements |
+| `.add(item)` | Adds `item` (no-op if already present) |
+| `.remove(item)` | Removes `item`, erroring if absent |
+| `.discard(item)` | Removes `item` if present, otherwise a no-op |
+| `.has(item)` / `.contains(item)` | Returns `true` if `item` is present |
+| `.clear()` | Removes all elements |
+| `.iter()` | Returns an iterable over the elements |
+| `.union(other)` | Returns a new set with elements from both |
+| `.intersection(other)` | Returns a new set with elements common to both |
+| `.difference(other)` | Returns a new set with elements not in `other` |
+
+```rust
+let a = {1, 2, 3}
+a.add(4)
+
+print(2 in a)
+print(a.len())
+
+let b = {3, 4, 5}
+print(a.intersection(b).len())
+
+for x in a {
+    print(x)
+}
 ```
 
 ### Numeric Methods

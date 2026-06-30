@@ -51,6 +51,7 @@ pub(crate) enum ByteCode {
     CreateStruct,
     CreateTuple,
     CreateDict,
+    CreateSet,
     UnpackTuple,
     VariableDeclaration,
     Assignment,
@@ -242,11 +243,6 @@ fn validate_expr_loop_control(
             for e in items.iter() {
                 validate_expr_loop_control(e, in_loop, script)?;
             }
-            return Err(format_script_err(
-                expr.span,
-                script,
-                "set literals are not yet implemented",
-            ));
         }
     }
     Ok(())
@@ -1268,8 +1264,16 @@ pub fn compile_expression(expr: &ExprNode) -> Result<Vec<(u8, Span)>, String> {
             res.push(((len & 0xff) as u8, expr.span));
             Ok(res)
         }
-        Expression::Set(_items) => {
-            Err("set literals are not yet implemented".to_string())
+        Expression::Set(items) => {
+            let mut res = Vec::new();
+            for expr in items {
+                res.extend(compile_expression(expr)?);
+            }
+            res.push((ByteCode::CreateSet as u8, expr.span));
+            let len: u16 = items.len().try_into().expect("Set should fit into u16");
+            res.push(((len >> 8) as u8, expr.span));
+            res.push(((len & 0xff) as u8, expr.span));
+            Ok(res)
         }
         Expression::Primary(Primary::Expression(expr)) => compile_expression(expr),
         Expression::BooleanOp(BooleanOp::And(a, b)) => {
@@ -1754,16 +1758,20 @@ pub fn format_asm(bytes: &[u8]) -> String {
             out.push_str(&format!("CreateList size={}", list_size));
             idx += 2;
         } else if *b == ByteCode::CreateTuple as u8 {
-            let list_size = ((bytes[idx + 1] as usize) << 8) + bytes[idx + 2] as usize;
-            out.push_str(&format!("CreateTuple size={}", list_size));
+            let tuple_size = ((bytes[idx + 1] as usize) << 8) + bytes[idx + 2] as usize;
+            out.push_str(&format!("CreateTuple size={}", tuple_size));
             idx += 2;
         } else if *b == ByteCode::CreateDict as u8 {
             let pair_count = ((bytes[idx + 1] as usize) << 8) + bytes[idx + 2] as usize;
             out.push_str(&format!("CreateDict pairs={}", pair_count));
             idx += 2;
+        } else if *b == ByteCode::CreateSet as u8 {
+            let set_size = ((bytes[idx + 1] as usize) << 8) + bytes[idx + 2] as usize;
+            out.push_str(&format!("CreateSet size={}", set_size));
+            idx += 2;
         } else if *b == ByteCode::UnpackTuple as u8 {
-            let list_size = ((bytes[idx + 1] as usize) << 8) + bytes[idx + 2] as usize;
-            out.push_str(&format!("UnpackTuple size={}", list_size));
+            let tuple_size = ((bytes[idx + 1] as usize) << 8) + bytes[idx + 2] as usize;
+            out.push_str(&format!("UnpackTuple size={}", tuple_size));
             idx += 2;
         } else if *b == ByteCode::Copy as u8 {
             out.push_str("Copy");

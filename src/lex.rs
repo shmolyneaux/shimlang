@@ -590,6 +590,18 @@ pub fn lex(text: &[u8]) -> Result<TokenStream, String> {
                     tokens.push(Token::Bool(false));
                 } else if ident == b"None" {
                     tokens.push(Token::None);
+                } else if ident == b"not" {
+                    // `lex_identifier` leaves `text` one byte short of the end
+                    // of the identifier (the main loop's trailing advance makes
+                    // up the difference), so add one to reach the real end here.
+                    return Err(format_script_err(
+                        Span {
+                            start: (original_text.len() - token_start_len) as u32,
+                            end: (original_text.len() - text.len() + 1) as u32,
+                        },
+                        original_text,
+                        "Boolean negation uses `!` rather than `not`",
+                    ));
                 } else {
                     tokens.push(Token::Identifier(ident))
                 }
