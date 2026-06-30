@@ -452,10 +452,12 @@ print(lst)
 Output:
 
 ```
-[x, b, z]
+["x", "b", "z"]
 ```
 
-Lists have a rich set of methods:
+Strings inside a container are shown in their quoted `repr` form (so a list of
+strings round-trips to a literal), while printing a string on its own prints it
+bare. Lists have a rich set of methods:
 
 | Method | Description |
 |--------|-------------|
@@ -2135,6 +2137,7 @@ Output:
 | `average(iterable)` | Returns the arithmetic average, or `0` for an empty iterable |
 | `bool(value)` | Converts a value's truthiness to a boolean |
 | `str(value)` | Converts a value to a string |
+| `repr(value)` | Like `str`, but strings are quoted/escaped — the form used when a value is nested inside a printed container |
 | `int(value)` | Converts a value to an integer (panics on failure) |
 | `float(value)` | Converts a value to a float (panics on failure) |
 | `try_int(value)` | Converts a value to an integer, returns `None` on failure |

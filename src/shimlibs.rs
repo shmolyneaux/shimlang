@@ -2897,6 +2897,22 @@ pub(crate) fn shim_str(
     interpreter.mem.alloc_str(bytes)
 }
 
+/// Python-like `repr()`: like `str()`, but strings are rendered as quoted,
+/// escaped literals (matching how values appear when nested inside a printed
+/// container).
+pub(crate) fn shim_repr(
+    interpreter: &mut Interpreter,
+    args: &ArgBundle,
+) -> Result<ShimValue, String> {
+    let mut unpacker = ArgUnpacker::new(args);
+    let value = unpacker.required(b"value")?;
+    unpacker.end()?;
+
+    let string_repr = value.to_repr_mem(&interpreter.mem);
+    let bytes = string_repr.as_bytes();
+    interpreter.mem.alloc_str(bytes)
+}
+
 pub(crate) fn shim_bool(
     interpreter: &mut Interpreter,
     args: &ArgBundle,

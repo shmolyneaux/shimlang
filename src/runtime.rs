@@ -232,6 +232,7 @@ impl Environment {
             (b"assert", shim_assert),
             (b"bool", shim_bool),
             (b"str", shim_str),
+            (b"repr", shim_repr),
             (b"int", shim_int),
             (b"float", shim_float),
             (b"try_int", shim_try_int),
@@ -587,6 +588,26 @@ pub(crate) fn format_float(val: f32) -> String {
     } else {
         s
     }
+}
+
+/// Render a string as a quoted, escaped literal for `repr` stringification.
+/// Uses double quotes and escapes backslashes, quotes, and common control
+/// characters so the result mirrors how the string would be written in source.
+pub(crate) fn repr_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1513,14 +1534,27 @@ impl ShimValue {
 
     pub fn to_string_mem(&self, mem: &MMU) -> String {
         let mut visited: Vec<usize> = Vec::new();
-        self.to_string_mem_inner(mem, &mut visited)
+        self.to_string_mem_inner(mem, &mut visited, false)
+    }
+
+    /// Python-style `repr` stringification. Like `to_string_mem`, but strings
+    /// are rendered with surrounding quotes and escapes so the output round
+    /// trips to a literal.
+    pub fn to_repr_mem(&self, mem: &MMU) -> String {
+        let mut visited: Vec<usize> = Vec::new();
+        self.to_string_mem_inner(mem, &mut visited, true)
     }
 
     /// Recursive worker for `to_string_mem`. `visited` holds the memory
     /// positions of the container values currently being formatted; when a
     /// value would be formatted again (a reference cycle), `...` is emitted
     /// instead of recursing forever.
-    fn to_string_mem_inner(&self, mem: &MMU, visited: &mut Vec<usize>) -> String {
+    ///
+    /// When `repr` is true, strings are rendered as quoted/escaped literals.
+    /// Container values (lists, tuples, dicts, structs) always format their
+    /// elements with `repr` enabled, matching Python where `print(["a"])`
+    /// shows `['a']` rather than `[a]`.
+    fn to_string_mem_inner(&self, mem: &MMU, visited: &mut Vec<usize>, repr: bool) -> String {
         match self {
             ShimValue::Uninitialized => "Uninitialized".to_string(),
             ShimValue::None => "None".to_string(),
@@ -1529,8 +1563,15 @@ impl ShimValue {
             ShimValue::Float(f) => format_float(*f),
             ShimValue::Bool(false) => "false".to_string(),
             ShimValue::Bool(true) => "true".to_string(),
-            ShimValue::String(..) => String::from_utf8(self.string_from_mem(mem).unwrap().to_vec())
-                .expect("valid utf-8 string stored"),
+            ShimValue::String(..) => {
+                let s = String::from_utf8(self.string_from_mem(mem).unwrap().to_vec())
+                    .expect("valid utf-8 string stored");
+                if repr {
+                    repr_string(&s)
+                } else {
+                    s
+                }
+            }
             ShimValue::List(position) => {
                 let pos = usize::from(*position);
                 if visited.contains(&pos) {
@@ -1546,7 +1587,7 @@ impl ShimValue {
                         out.push(' ');
                     }
                     let item = lst.get(mem, idx as isize).unwrap();
-                    out.push_str(&item.to_string_mem_inner(mem, visited));
+                    out.push_str(&item.to_string_mem_inner(mem, visited, true));
                 }
                 out.push(']');
 
@@ -1568,7 +1609,7 @@ impl ShimValue {
                         out.push(' ');
                     }
                     let item = unsafe { ShimValue::from_u64(mem.mem()[pos+idx]) };
-                    out.push_str(&item.to_string_mem_inner(mem, visited));
+                    out.push_str(&item.to_string_mem_inner(mem, visited, true));
                 }
                 if len == 1 {
                     out.push(',');
@@ -1610,9 +1651,9 @@ impl ShimValue {
                         } else {
                             out.push_str(", ");
                         }
-                        out.push_str(&entry.key.to_string_mem_inner(mem, visited));
+                        out.push_str(&entry.key.to_string_mem_inner(mem, visited, true));
                         out.push_str(": ");
-                        out.push_str(&entry.value.to_string_mem_inner(mem, visited));
+                        out.push_str(&entry.value.to_string_mem_inner(mem, visited, true));
                     }
                     if first {
                         // No entries were emitted: empty dict literal
@@ -1660,7 +1701,7 @@ impl ShimValue {
                         }
                         out.push_str(attr_name);
                         out.push('=');
-                        out.push_str(&val.to_string_mem_inner(mem, visited));
+                        out.push_str(&val.to_string_mem_inner(mem, visited, true));
                     }
 
                     out.push(')');

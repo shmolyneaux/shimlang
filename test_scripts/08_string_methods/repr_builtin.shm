@@ -1,0 +1,19 @@
+// `repr()` renders a value the way it appears nested inside a container:
+// strings get quotes and escapes, everything else matches `str()`.
+
+// Bare string gains quotes under repr
+print(repr("hello"))
+print(str("hello"))
+
+// repr of containers matches how print renders them
+print(repr(["a", "b"]))
+print(repr({"k": "v"}))
+print(repr(("x", 1)))
+
+// Non-string scalars are unaffected
+print(repr(42))
+print(repr(3.5))
+print(repr(true))
+
+// Escapes inside the string
+print(repr("quote\"and\\slash"))
