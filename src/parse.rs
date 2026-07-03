@@ -1173,7 +1173,12 @@ pub fn parse_block_inner(tokens: &mut TokenStream) -> Result<Block, String> {
                 data: Statement::Let(target, expr),
                 span: start_span + end_span,
             }
-        } else if *tokens.peek()? == Token::Fn {
+        } else if *tokens.peek()? == Token::Fn
+            && matches!(tokens.tokens.get(tokens.idx + 1), Some(Token::Identifier(_)))
+        {
+            // `fn name(...) { ... }` is a named function declaration. A bare
+            // `fn(...) { ... }` (no name) is an anonymous closure expression,
+            // so it falls through to the general expression path below.
             let fn_result = parse_function(tokens)?;
             let end_span = tokens.previous_span()?;
             StatementNode {

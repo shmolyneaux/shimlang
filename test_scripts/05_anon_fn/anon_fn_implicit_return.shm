@@ -1,0 +1,22 @@
+// An anonymous `fn(...) { ... }` may appear as a bare expression statement
+// and in the implicit return (last expression) position of a block.
+
+// Bare anonymous fn statement (previously parsed as a broken function decl).
+fn() {}
+
+// Anonymous fn in the implicit return position of a function body.
+fn make_adder(n) {
+    fn(x) { x + n }
+}
+
+let add3 = make_adder(3)
+print(add3(4))
+
+// Anonymous fn in the implicit return position of a bare block, bound directly.
+let doubler = {
+    fn(x) { x * 2 }
+}
+print(doubler(10))
+
+// Immediately-invoked anonymous fn.
+print(fn(a, b) { a + b }(5, 6))
