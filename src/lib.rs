@@ -3,6 +3,15 @@
 #[cfg(feature = "facet")]
 use facet::Facet;
 
+// No-op profiling zone used when the `tracy` feature is disabled. With `tracy`
+// enabled the real `zone_scoped!` macro comes from the `shm-tracy` crate
+// instead (see the `use shm_tracy::*` imports in the instrumented modules).
+#[cfg(not(feature = "tracy"))]
+#[macro_export]
+macro_rules! zone_scoped {
+    ($($arg:tt)*) => {{}};
+}
+
 pub mod compile;
 pub mod lex;
 pub mod parse;

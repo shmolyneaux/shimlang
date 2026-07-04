@@ -1,6 +1,6 @@
 use crate::runtime::*;
 use crate::shimlibs::*;
-use shm_tracy::zone_scoped;
+#[cfg(feature = "tracy")]
 use shm_tracy::*;
 use std::any::TypeId;
 use std::collections::{HashMap, BTreeMap};

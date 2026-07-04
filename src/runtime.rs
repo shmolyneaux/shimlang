@@ -4,7 +4,7 @@ use std::fmt::Debug;
 use std::mem::size_of;
 use std::sync::Arc;
 
-use shm_tracy::zone_scoped;
+#[cfg(feature = "tracy")]
 use shm_tracy::*;
 
 use crate::compile::*;

@@ -1,7 +1,7 @@
 use crate::lex::debug_u8s;
 use crate::mem::*;
 use crate::runtime::*;
-use shm_tracy::zone_scoped;
+#[cfg(feature = "tracy")]
 use shm_tracy::*;
 use std::any::type_name;
 
