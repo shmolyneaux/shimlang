@@ -1,0 +1,5 @@
+ 1 | struct Foo { x }
+ 2 | let f = Foo(1)
+ 3 | f.nonexistent()
+      ^^^^^^^^^^^^^^
+Error: Ident "nonexistent" not found for Foo(x=1)

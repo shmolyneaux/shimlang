@@ -1,0 +1,11 @@
+print(1 < 2 < 3)
+print(1 < 5 < 3)
+print(3 >= 2 >= 2 >= 1)
+print(1 == 1 == 1)
+print(1 == 1 == 2)
+let x = 5
+print(0 < x < 10)
+fn mid() { print("mid"); 5 }
+print(1 < mid() < 10)
+fn upper() { print("upper"); 100 }
+print(9 < 1 < upper())

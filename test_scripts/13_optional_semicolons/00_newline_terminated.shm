@@ -1,0 +1,7 @@
+// Statements are terminated by newlines; no semicolons needed.
+let x = 1
+let y = 2
+x = x + y
+x += 10
+print(x)
+print(y)

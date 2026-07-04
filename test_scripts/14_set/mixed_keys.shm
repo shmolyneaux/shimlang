@@ -1,0 +1,18 @@
+// Sets can hold strings and tuples; string elements print with repr quoting.
+print({"a",})
+print({"a", "b"})
+
+// Tuple membership compares by value.
+let t = set()
+t.add((1, 2))
+t.add((3, 4))
+print((1, 2) in t)
+print((5, 6) in t)
+print(t.len())
+
+// Mixed element types coexist; ints and floats are distinct keys.
+let m = set()
+m.add(1)
+m.add(1.0)
+m.add("1")
+print(m.len())

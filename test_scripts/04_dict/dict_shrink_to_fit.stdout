@@ -1,0 +1,4 @@
+Length after adding 5 elements: 5
+Length after removing 3 elements: 2
+After shrink_to_fit, length: 2
+All shrink_to_fit tests passed!

@@ -1,0 +1,5 @@
+ 3 | }
+ 4 | 
+ 5 | test("test", b="test", fizz="buzz")
+     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Error: Unused kwargs remaining: b fizz

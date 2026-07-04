@@ -1,0 +1,31 @@
+struct Foo {
+    a,
+    fn tick() {}
+    fn tock() {}
+
+    fn eq(self, other) {
+        self.a == other.a
+    }
+}
+
+struct Bar {
+    a,
+    fn tick() {}
+    fn tock() {}
+}
+
+let a = Foo(None)
+
+assert(a.tick == a.tick)
+
+assert(a.tick != a.tock)
+
+let m = a.tick
+assert(a.tick == m)
+
+let b = Foo(None)
+assert(a == b)
+assert(a.tick != b.tick)
+
+let c = Bar(None)
+assert(a.tick != c.tick)

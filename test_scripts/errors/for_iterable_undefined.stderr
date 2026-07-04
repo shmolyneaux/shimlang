@@ -1,0 +1,3 @@
+ 1 | for x in undefined_var {}
+              ^^^^^^^^^^^^^
+Error: Unknown identifier "undefined_var"

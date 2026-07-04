@@ -1,7 +1,0 @@
-if false {
-    print("if taken");
-} else if false {
-    print("elif taken");
-} else {
-    print("else taken");
-}

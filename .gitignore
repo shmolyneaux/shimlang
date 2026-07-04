@@ -1,4 +1,7 @@
-zig-cache
-zig-out
-*.swp
-target
+/target
+/.idea
+/cmake-build-*
+/ignore
+build/
+imgui.ini
+test.shm

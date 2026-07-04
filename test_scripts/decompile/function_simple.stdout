@@ -1,0 +1,12 @@
+   0:  JMP -> 25
+   3:  start_scope
+   4:  unpack_args required=0 optional=0 []
+   7:  load "print"
+  14:  String "Hello"
+  21:  call args=1  kwargs=0
+  24:  return
+  25:  CreateFn -> PC 3
+  28:  let "greet"
+  35:  load "greet"
+  42:  call args=0  kwargs=0
+

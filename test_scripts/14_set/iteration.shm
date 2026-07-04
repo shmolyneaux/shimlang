@@ -1,0 +1,27 @@
+// Iteration yields elements in insertion order, including elements added
+// later. The values below are chosen so insertion order differs from both
+// sorted and hash order.
+let s = {30, 10, 20}
+s.add(5)
+s.add(40)
+s.add(10) // duplicate, does not change order
+for x in s {
+    print(x)
+}
+
+print("---")
+
+// .iter() can be called explicitly and yields the same order.
+for x in s.iter() {
+    print(x)
+}
+
+print("---")
+
+// Iterating an empty set yields nothing
+let empty = set()
+let n = 0
+for x in empty {
+    n = n + 1
+}
+print(n)

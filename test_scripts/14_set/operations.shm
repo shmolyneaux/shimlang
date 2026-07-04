@@ -1,0 +1,38 @@
+// Basic construction, len, add, and membership
+let s = {1, 2, 3}
+print(s.len())
+
+s.add(4)
+s.add(2) // duplicate, no effect
+print(s.len())
+
+print(2 in s)
+print(5 in s)
+print(s.has(3))
+print(s.contains(99))
+
+// remove and discard
+s.remove(2)
+print(2 in s)
+s.discard(2)   // already gone, no error
+s.discard(4)
+print(s.len())
+
+// The empty set literal and the set() builtin agree
+let empty = set()
+print(empty.len())
+print(1 in empty)
+
+// set() over an iterable removes duplicates
+let from_list = set([1, 1, 2, 3, 3, 3])
+print(from_list.len())
+
+// clear
+from_list.clear()
+print(from_list.len())
+
+// truthiness
+if {1} {
+    print("non-empty is truthy")
+}
+print(empty.len() == 0)

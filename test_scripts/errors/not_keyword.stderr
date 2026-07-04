@@ -1,0 +1,8 @@
+Parse Error:
+ 1 | let d = 0
+ 2 | if not d {
+        ^^^
+ 3 |     print("x")
+ 4 | }
+Error: Boolean negation uses `!` rather than `not`
+Failed to parse script

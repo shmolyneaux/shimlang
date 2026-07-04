@@ -1,0 +1,29 @@
+   0:  ShimValue 0
+   9:  let "i"
+  12:  Loop Start -> 88
+  15:  load "i"
+  18:  ShimValue 3
+  27:  LT
+  28:  JMPZ -> 88
+  31:  load "i"
+  34:  ShimValue 1
+  43:  add
+  44:  assign "i"
+  47:  load "i"
+  50:  ShimValue 2
+  59:  equal
+  60:  JMPZ -> 69
+  63:  continue
+  64:  None
+  65:  pop
+  66:  JMP -> 71
+  69:  None
+  70:  pop
+  71:  load "print"
+  78:  load "i"
+  81:  call args=1  kwargs=0
+  84:  pop
+  85:  JMPUP -> 15
+  88:  Loop End
+  89:  None
+

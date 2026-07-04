@@ -1,0 +1,28 @@
+// The `{`-led forms are disjoint: `{:}` is an empty dict, while `{}` and
+// `{ expr }` remain blocks (no brace-top-level colon).
+
+// Empty dict literal
+let empty = {:}
+print("empty dict len:", empty.len())
+empty.set("k", 1)
+print("after insert:", empty.len())
+
+// Empty braces are still an empty block (not a dict)
+let eb = {}
+print("empty block ran")
+
+// A single-expression block is still a block
+let sb = { 41 + 1 }
+print("single-expr block:", sb)
+
+// A multi-statement block is still a block
+let mb = {
+    let x = 10
+    x * 2
+}
+print("multi-stmt block:", mb)
+
+// A colon inside brackets must not turn a block into a dict
+let lst = [100, 200, 300]
+let idxblock = { lst[1] }
+print("index block:", idxblock)

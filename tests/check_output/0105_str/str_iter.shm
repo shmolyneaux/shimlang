@@ -1,4 +1,0 @@
-let text = "test";
-for c in text {
-    print(c);
-}

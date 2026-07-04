@@ -1,0 +1,8 @@
+Parse Error:
+ 1 | fn test() {
+ 2 |     return 5 return 6
+                  ^^^^^^
+ 3 | }
+ 4 | test();
+Error: Expected `;` or newline to end statement, found Return
+Failed to parse script

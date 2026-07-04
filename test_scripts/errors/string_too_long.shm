@@ -1,0 +1,7 @@
+let s = "x"
+let i = 0
+while i < 25 {
+    s = s + s
+    i += 1
+}
+print(s.len())

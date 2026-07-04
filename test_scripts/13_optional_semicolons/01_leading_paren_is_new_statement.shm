@@ -1,0 +1,6 @@
+// A line starting with `(` is a new statement, NOT a call on the previous
+// line's value. If it were treated as `print("a")("b")`, calling None would
+// error.
+print("a")
+("b")
+print("c")

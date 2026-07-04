@@ -1,7 +1,0 @@
-let a = 4;
-{
-    print(a);
-    let a = 5;
-    print(a);
-}
-print(a);

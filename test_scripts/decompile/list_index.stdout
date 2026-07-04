@@ -1,0 +1,21 @@
+   0:  ShimValue 1
+   9:  ShimValue 2
+  18:  ShimValue 3
+  27:  CreateList size=3
+  30:  let "lst"
+  35:  load "print"
+  42:  load "lst"
+  47:  ShimValue 0
+  56:  index
+  57:  call args=1  kwargs=0
+  60:  pop
+  61:  load "lst"
+  66:  ShimValue 1
+  75:  ShimValue 5
+  84:  set_index
+  85:  load "print"
+  92:  load "lst"
+  97:  ShimValue 1
+ 106:  index
+ 107:  call args=1  kwargs=0
+
