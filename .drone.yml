@@ -1,0 +1,12 @@
+kind: pipeline
+name: default
+
+steps:
+- name: test
+  image: rust:1.93.0-trixie
+  commands:
+    - python3 test_shimlang.py
+
+trigger:
+  event:
+  - push
