@@ -1,0 +1,12 @@
+// This tests that member default expressions can reference
+// members declared earlier. It's not entirely clear if this
+// is something we explicitly want to support, or if it's just
+// a consequence of how we output the bytecode.
+
+struct Foo {
+    a,
+    b = a + 1,
+}
+
+let obj = Foo(1)
+assert(obj.b == 2)

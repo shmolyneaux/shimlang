@@ -1,0 +1,3 @@
+ 1 | let a = 12+does_not_exist
+                ^^^^^^^^^^^^^^
+Error: Unknown identifier "does_not_exist"

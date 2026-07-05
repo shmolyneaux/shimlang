@@ -1,0 +1,4 @@
+ 1 | let d = dict()
+ 2 | d["missing"]
+     ^^^^^^^^^^^^
+Error: Key missing not in dict

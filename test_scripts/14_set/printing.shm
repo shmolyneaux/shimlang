@@ -1,0 +1,8 @@
+let s = {,}
+print(s)
+
+s = {13,}
+print(s)
+
+s = {13, 14}
+print(s)

@@ -1,0 +1,230 @@
+print("shimlang documentation smoke test")
+
+let failures = 0
+
+fn check(name, condition) {
+    if condition {
+        print("PASS", name)
+    } else {
+        print("FAIL", name)
+        failures += 1
+    }
+}
+
+check("integer arithmetic", 42 + -7 == 35)
+check("division returns float", int(10 / 3) == 3)
+check("euclidean modulo", -7 % 3 == 2)
+check("boolean logic returns determining value", (false or "fallback") == "fallback")
+check("short circuit and", (false and panic("unreachable")) == false)
+check("short circuit or", (true or panic("unreachable")) == true)
+
+let word = "Shimlang"
+check("string len", word.len() == 8)
+check("string index", word[0] == "S")
+check("string concatenation", "Hello" + " " + "World" == "Hello World")
+check("string membership", "lang" in word)
+
+let chars = ""
+for ch in "abc" {
+    chars = chars + ch
+}
+check("string iteration", chars == "abc")
+
+let lst = [3, 1, 4, 1, 5]
+lst.append(9)
+check("list append and negative index", lst[-1] == 9 and lst.len() == 6)
+check("list pop by index", lst.pop(2) == 4)
+lst.insert(2, 4)
+check("list index default", lst.index(8, -1) == -1)
+
+let doubled = lst.map(fn(x) { x * 2 })
+check("list map", doubled[0] == 6 and doubled[-1] == 18)
+
+let big = lst.filter(fn(x) { x > 3 })
+check("list filter", big.len() == 3 and big[0] == 4)
+
+let sorted_copy = lst.sorted()
+check("list sorted copy", sorted_copy[0] == 1 and lst[0] == 3)
+lst.sort(fn(x) { 0 - x })
+check("list sort key function", lst[0] == 9 and lst[-1] == 1)
+
+let enum_sum = 0
+for i, value in ["a", "b", "c"].enumerate() {
+    enum_sum += i
+}
+check("enumerate tuple unpacking", enum_sum == 3)
+
+let tuple_key = (1, 2)
+let d = dict()
+d["name"] = "Alice"
+d[tuple_key] = "point"
+check("dictionary string key", d.get("name") == "Alice")
+check("dictionary tuple key", d[(1, 2)] == "point")
+check("dictionary missing default", d.get("missing", 99) == 99)
+check("dictionary missing keyword default", d.get("missing", default=88) == 88)
+check("dictionary membership", (1, 2) in d)
+check("empty dictionary falsy", !dict())
+
+let seen_items = 0
+for key, value in d.items() {
+    seen_items += 1
+}
+check("dictionary items tuple iteration", seen_items == 2)
+
+let range_sum = 0
+for i in 0..5 {
+    range_sum += i
+}
+check("range operator", range_sum == 10)
+
+let stepped = []
+for i in Range(0, 10).step(3) {
+    stepped.append(i)
+}
+check("Range step", stepped == [0, 3, 6, 9])
+
+let descending = []
+for i in Range(5, 0).step(-2) {
+    descending.append(i)
+}
+check("Range negative step", descending == [5, 3, 1])
+check("global enumerate", enumerate(["x"]).iter().next() == (0, "x"))
+
+let while_total = 0
+let i = 0
+while true {
+    i += 1
+    if i == 2 {
+        continue
+    }
+    if i == 5 {
+        break
+    }
+    while_total += i
+}
+check("while break continue", while_total == 8)
+
+fn greet(name="World", punctuation="!") {
+    "Hello, " + name + punctuation
+}
+check("function defaults", greet() == "Hello, World!")
+check("keyword arguments", greet(punctuation=".", name="Alice") == "Hello, Alice.")
+
+fn make_counter(start) {
+    let count = start
+    fn increment() {
+        count += 1
+        count
+    }
+    increment
+}
+let counter = make_counter(10)
+check("closure mutation", counter() == 11 and counter() == 12)
+
+let label = if range_sum > 5 { "big" } else { "small" }
+check("if expression", label == "big")
+
+let block_value = {
+    let a = 10
+    let b = 20
+    a + b
+}
+check("block expression", block_value == 30)
+check("empty tuple falsy", !())
+check("negation uses truthiness", !0 and !"" and ![] and !dict() and !())
+check("list comparison lexicographic", [1, 2] < [1, 3] and [1, 2] < [1, 2, 0])
+
+struct Vec2 {
+    x,
+    y
+
+    fn origin() {
+        Vec2(0, 0)
+    }
+
+    fn add(self, other) {
+        Vec2(self.x + other.x, self.y + other.y)
+    }
+
+    fn eq(self, other) {
+        self.x == other.x and self.y == other.y
+    }
+
+    fn format(self, pretty=false) {
+        if pretty {
+            "Vec2 { x: \(self.x), y: \(self.y) }"
+        } else {
+            "(\(self.x), \(self.y))"
+        }
+    }
+}
+
+let v = Vec2(1, 2) + Vec2(3, 4)
+check("struct operator overloading", v == Vec2(4, 6))
+check("static method", Vec2.origin() == Vec2(0, 0))
+check("struct introspection", v.__type__.__name__ == "Vec2" and Vec2.__name__ == "Vec2")
+check("custom format interpolation", "\(v)" == "(4, 6)")
+check("custom format keyword interpolation", "\(v, pretty=true)" == "Vec2 { x: 4, y: 6 }")
+
+struct Config {
+    debug = false,
+    retries = 3
+}
+let cfg = Config(debug=true)
+check("struct default field values", cfg.debug == true and cfg.retries == 3)
+cfg.retries += 2
+check("compound assignment on field", cfg.retries == 5)
+
+struct Counter {
+    current,
+    max
+
+    fn iter(self) {
+        self
+    }
+
+    fn next(self) {
+        if self.current >= self.max {
+            return StopIteration
+        }
+        let val = self.current
+        self.current += 1
+        val
+    }
+}
+
+let custom_sum = 0
+for value in Counter(0, 4) {
+    custom_sum += value
+}
+check("custom iterator", custom_sum == 6)
+
+check("numeric methods", (9).sqrt() == 3.0 and (-3).abs() == 3)
+check("numeric keyword method", (1000.0).log(base=10) == 3.0)
+check("float in_range", (3.5).in_range(0.0, 5.0))
+check("float format precision", "\(3.14159, precision=2)" == "3.14")
+check("float format width fill", "\(3.14, width=8, fill="0")" == "00003.14")
+
+check("try_int success", try_int("42") == 42)
+check("try_int failure", try_int("hello") == None)
+check("conversion functions", int("7") == 7 and float("2.5") == 2.5 and str(123) == "123")
+check("global filter", filter([0, 1, "", "ok"]) == [1, "ok"])
+check("global filter callback", filter(0..5, fn(x) { x % 2 == 0 }) == [0, 2, 4])
+check("average empty", average([]) == 0)
+check("list average", [2, 4, 6].average() == 4.0)
+check("string split", "  alpha\tbeta\n".split() == ["alpha", "beta"])
+check("string join", ",".join(["a", "b", "c"]) == "a,b,c")
+check("string case", "AbC".lower() == "abc" and "AbC".upper() == "ABC")
+check("string trim", "  hi\t".strip() == "hi" and "  hi".lstrip() == "hi" and "hi  ".rstrip() == "hi")
+check("string prefix suffix", "shimlang".starts_with("shim") and "shimlang".ends_with("lang"))
+check("string remove prefix suffix", "shimlang".remove_prefix("shim") == "lang" and "shimlang".remove_suffix("lang") == "shim")
+check("string contains find", "shimlang".contains("mla") and "shimlang".find("lang") == 4 and "shimlang".find("zzz") == None)
+check("string replace", "banana".replace("na", "NA") == "baNANA")
+check("string split lines", "one\ntwo\nthree".split_lines() == ["one", "two", "three"])
+
+if failures == 0 {
+    print("ALL PASS")
+} else {
+    print("FAILURES", failures)
+    panic("documentation smoke test failed")
+}

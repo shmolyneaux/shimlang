@@ -1,0 +1,4 @@
+print("a", "b", "c", sep="-", end="!\n")
+print(1, 2, 3, sep="")
+print("x", end="")
+print("y")

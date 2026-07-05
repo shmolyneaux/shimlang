@@ -1,0 +1,38 @@
+// Dict literal `{ key: value }` syntax.
+
+// String keys
+let person = { "name": "Alice", "age": 30 }
+print(person.get("name"))
+print(person.get("age"))
+print("len:", person.len())
+
+// Integer keys
+let nums = { 1: "one", 2: "two", 3: "three" }
+print(nums.get(2))
+print(nums.has(3))
+
+// Keys are arbitrary expressions: a variable as a key
+let k = "dynamic"
+let computed = { k: 99 }
+print(computed.get("dynamic"))
+
+// Values can be any expression, including nested literals
+let nested = { "list": [1, 2, 3], "inner": { "x": 10, "y": 20 } }
+print(nested.get("list"))
+print(nested.get("inner").get("x"))
+print(nested.get("inner").get("y"))
+
+// Trailing comma is allowed
+let trailing = { "a": 1, "b": 2, }
+print(trailing.get("b"))
+
+// Dict literal used as a function argument
+fn name_of(d) {
+    return d.get("name")
+}
+print(name_of({ "name": "Bob" }))
+
+// Dict literal used directly in an `if` condition
+if { "ok": true }.get("ok") {
+    print("dict condition works")
+}

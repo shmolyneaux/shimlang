@@ -1,0 +1,6 @@
+ 1 | let x = if true {
+ 2 |     undefined_var
+         ^^^^^^^^^^^^^
+ 3 | } else {
+ 4 |     2
+Error: Unknown identifier "undefined_var"

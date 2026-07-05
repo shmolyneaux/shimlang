@@ -1,0 +1,15 @@
+1
+None
+3
+None
+5
+index: None
+len: 5
+0 1
+1 None
+2 3
+3 None
+4 5
+filtered none count: 2
+1,None,3,None,5
+extended: 3 None 6

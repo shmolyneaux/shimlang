@@ -1,0 +1,29 @@
+   0:  ShimValue 1
+   9:  ShimValue 2
+  18:  ShimValue 3
+  27:  CreateList size=3
+  30:  let "items"
+  37:  load "items"
+  44:  get .iter
+  50:  call args=0  kwargs=0
+  53:  get .next
+  59:  Loop Start -> 101
+  62:  Copy
+  63:  call args=0  kwargs=0
+  66:  Copy
+  67:  StopIteration
+  68:  equal
+  69:  JMPNZ -> 100
+  72:  start_scope
+  73:  let "item"
+  79:  load "print"
+  86:  load "item"
+  92:  call args=1  kwargs=0
+  95:  pop
+  96:  end_scope
+  97:  JMPUP -> 62
+ 100:  pop
+ 101:  Loop End
+ 102:  pop
+ 103:  None
+

@@ -1,0 +1,11 @@
+   0:  ShimValue 1
+   9:  JMPZ -> 32
+  12:  load "print"
+  19:  String "true"
+  25:  call args=1  kwargs=0
+  28:  pop
+  29:  JMP -> 34
+  32:  None
+  33:  pop
+  34:  None
+

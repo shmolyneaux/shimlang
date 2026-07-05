@@ -1,0 +1,8 @@
+// Set literals parse into the AST (they are not yet lowered by the compiler,
+// so this is a parse-only test). A single element requires a trailing comma
+// and the empty set is `{,}`, mirroring tuple syntax.
+let empty = {,}
+let single = { 1, }
+let multi = { 1, 2, 3 }
+let multi_trailing = { 1, 2, 3, }
+let exprs = { 1 + 1, foo(), [1, 2], }

@@ -1,2 +1,0 @@
-// Assert doesn't run since the whole thing is false if the first is false
-false and assert(false);

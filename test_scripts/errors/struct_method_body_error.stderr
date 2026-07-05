@@ -1,0 +1,7 @@
+ 2 |     x
+ 3 |     fn bad(self) {
+ 4 |         self.x + "string"
+                    ^
+ 5 |     }
+ 6 | }
+Error: Operation '+' not supported between 1 and string

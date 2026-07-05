@@ -1,0 +1,7 @@
+ 2 | let i = 0
+ 3 | while i < 25 {
+ 4 |     s = s + s
+               ^
+ 5 |     i += 1
+ 6 | }
+Error: String length 65536 exceeds the maximum of 65535 bytes

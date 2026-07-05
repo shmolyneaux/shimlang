@@ -1,2 +1,0 @@
-let my_str = "HeLlO, WoRlD!";
-print(my_str.lower());

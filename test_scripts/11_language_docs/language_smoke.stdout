@@ -1,0 +1,70 @@
+shimlang documentation smoke test
+PASS integer arithmetic
+PASS division returns float
+PASS euclidean modulo
+PASS boolean logic returns determining value
+PASS short circuit and
+PASS short circuit or
+PASS string len
+PASS string index
+PASS string concatenation
+PASS string membership
+PASS string iteration
+PASS list append and negative index
+PASS list pop by index
+PASS list index default
+PASS list map
+PASS list filter
+PASS list sorted copy
+PASS list sort key function
+PASS enumerate tuple unpacking
+PASS dictionary string key
+PASS dictionary tuple key
+PASS dictionary missing default
+PASS dictionary missing keyword default
+PASS dictionary membership
+PASS empty dictionary falsy
+PASS dictionary items tuple iteration
+PASS range operator
+PASS Range step
+PASS Range negative step
+PASS global enumerate
+PASS while break continue
+PASS function defaults
+PASS keyword arguments
+PASS closure mutation
+PASS if expression
+PASS block expression
+PASS empty tuple falsy
+PASS negation uses truthiness
+PASS list comparison lexicographic
+PASS struct operator overloading
+PASS static method
+PASS struct introspection
+PASS custom format interpolation
+PASS custom format keyword interpolation
+PASS struct default field values
+PASS compound assignment on field
+PASS custom iterator
+PASS numeric methods
+PASS numeric keyword method
+PASS float in_range
+PASS float format precision
+PASS float format width fill
+PASS try_int success
+PASS try_int failure
+PASS conversion functions
+PASS global filter
+PASS global filter callback
+PASS average empty
+PASS list average
+PASS string split
+PASS string join
+PASS string case
+PASS string trim
+PASS string prefix suffix
+PASS string remove prefix suffix
+PASS string contains find
+PASS string replace
+PASS string split lines
+ALL PASS

@@ -1,0 +1,19 @@
+[package]
+name = "shimlang"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+facet = { version = "0.27.14", optional = true}
+facet-reflect = { version = "0.27.14", optional = true }
+shm-tracy = { path = "shm-tracy", optional = true, default-features = false }
+
+[features]
+default = ["dev"]
+facet = ["dep:facet", "dep:facet-reflect"]
+# Tracy profiling instrumentation. Off by default so the crate builds
+# standalone with no external dependencies; enable it (e.g. from an embedder
+# that links the Tracy client) to emit interpreter zones.
+tracy = ["dep:shm-tracy"]
+dev = []
+gc_debug = []

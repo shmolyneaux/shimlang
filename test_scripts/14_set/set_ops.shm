@@ -1,0 +1,27 @@
+let a = {1, 2, 3}
+let b = {2, 3, 4}
+
+let u = a.union(b)
+print(u.len())
+print(1 in u)
+print(4 in u)
+
+let i = a.intersection(b)
+print(i.len())
+print(2 in i)
+print(1 in i)
+
+let d = a.difference(b)
+print(d.len())
+print(1 in d)
+print(2 in d)
+
+// Operands are left unchanged by the operations
+print(a.len())
+print(b.len())
+
+// Equality is by contents, order-independent
+print({1, 2, 3} == {3, 2, 1})
+print({1, 2} == {1, 2, 3})
+print(set() == set())
+print({1} == {2})

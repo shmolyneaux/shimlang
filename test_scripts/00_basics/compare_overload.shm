@@ -1,0 +1,15 @@
+struct Ver {
+    n,
+
+    fn lt(self, other) { self.n < other.n }
+    fn gt(self, other) { self.n > other.n }
+    fn lte(self, other) { self.n <= other.n }
+    fn gte(self, other) { self.n >= other.n }
+}
+
+let a = Ver(1)
+let b = Ver(2)
+print(a < b, b < a)
+print(b > a, a > b)
+print(a <= a, b <= a)
+print(a >= a, a >= b)

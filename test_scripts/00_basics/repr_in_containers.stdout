@@ -1,0 +1,7 @@
+hello
+["a", "b", "c"]
+("x", 1, "y")
+{"key": "value", "another": "thing"}
+[1, [2, "three"], {"a": "b"}]
+["say \"hi\"", "back\\slash", "line\nbreak", "tab\tsep"]
+Person(name="Alice", nick="Al")

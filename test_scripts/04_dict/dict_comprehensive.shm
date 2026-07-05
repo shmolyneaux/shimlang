@@ -1,0 +1,34 @@
+// Test empty dict iteration
+let empty = dict()
+print("Empty dict keys:")
+for k in empty {
+    print(k)
+}
+print("Done with empty")
+
+// Test dict with multiple types of keys
+let mixed = dict()
+mixed.set(1, "one")
+mixed.set("two", 2)
+mixed.set(3, "three")
+
+print("Keys:")
+for k in mixed.keys() {
+    print(k)
+}
+
+print("Values:")
+for v in mixed.values() {
+    print(v)
+}
+
+print("Items:")
+for key, value in mixed.items() {
+    print(key, "=>", value)
+}
+
+// Test that we can reuse iterators
+print("Keys again:")
+for k in mixed.keys() {
+    print(k)
+}

@@ -1,0 +1,6 @@
+empty dict len: 0
+after insert: 1
+empty block ran
+single-expr block: 42
+multi-stmt block: 20
+index block: 200

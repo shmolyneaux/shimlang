@@ -1,0 +1,12 @@
+let a = (13,)
+let (b,) = a
+assert(b == 13)
+
+(b,) = (14,)
+assert(b == 14)
+
+let a = 1
+let b = 2
+(a, b) = (b, a)
+assert(a == 2)
+assert(b == 1)

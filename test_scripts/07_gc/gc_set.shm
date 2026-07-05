@@ -1,0 +1,31 @@
+// A set that survives many intervening allocations stays intact through GC.
+let keep = {1, 2, 3}
+
+let i = 0
+while i < 500 {
+    let tmp = set()
+    tmp.add(i)
+    tmp.add(i + 1)
+    i = i + 1
+}
+
+print(keep.len())
+print(1 in keep)
+print(2 in keep)
+print(3 in keep)
+print(4 in keep)
+
+// Sets holding heap values (strings, tuples) keep them alive too.
+let words = set()
+words.add("hello")
+words.add("world")
+
+i = 0
+while i < 500 {
+    let junk = [i, i + 1, i + 2]
+    i = i + 1
+}
+
+print(words.len())
+print("hello" in words)
+print("nope" in words)

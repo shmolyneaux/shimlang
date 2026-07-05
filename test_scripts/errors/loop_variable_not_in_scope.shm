@@ -1,0 +1,3 @@
+let lst = ["foo", "bar", "baz"]
+for item in lst {}
+print(item)

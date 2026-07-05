@@ -1,4 +1,0 @@
-// Returns the first truthy value or the last value
-assert(42 == false or 42);
-assert(42 == 42 or false);
-assert([] == 0 or false or []);

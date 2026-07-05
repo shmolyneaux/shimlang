@@ -1,0 +1,5 @@
+Parse Error:
+ 1 | let x = 5 let y = 6
+               ^^^
+Error: Expected `;` or newline to end statement, found Let
+Failed to parse script

@@ -1,5 +1,0 @@
-if false {
-    print("if taken");
-} else {
-    print("else taken");
-}

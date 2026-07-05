@@ -1,0 +1,7 @@
+// A line starting with `.` DOES continue the previous line's value, so method
+// chains may span multiple lines.
+let nums = [3, 1, 2]
+let result = nums
+    .sorted()
+    .reversed()
+print(result)

@@ -1,0 +1,27 @@
+// Strings nested inside containers print in their quoted `repr` form, while a
+// bare string prints without quotes.
+
+// Bare string: no quotes
+print("hello")
+
+// List of strings: quoted
+print(["a", "b", "c"])
+
+// Tuple of mixed values
+print(("x", 1, "y"))
+
+// Dict: both keys and values use repr
+print({"key": "value", "another": "thing"})
+
+// Nested containers
+print([1, [2, "three"], {"a": "b"}])
+
+// Escapes: quote, backslash, newline, tab
+print(["say \"hi\"", "back\\slash", "line\nbreak", "tab\tsep"])
+
+// Struct members that are strings use repr
+struct Person {
+    name,
+    nick
+}
+print(Person("Alice", "Al"))
