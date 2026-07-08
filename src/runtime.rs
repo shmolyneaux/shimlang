@@ -227,8 +227,10 @@ impl Environment {
             (b"dict", shim_dict),
             (b"set", shim_set),
             (b"Range", shim_range),
+            (b"Iterator", shim_iterator),
             (b"enumerate", shim_enumerate),
             (b"filter", shim_filter),
+            (b"map", shim_map),
             (b"average", shim_average),
             (b"assert", shim_assert),
             (b"bool", shim_bool),
@@ -1126,8 +1128,8 @@ impl ShimValue {
             }
             ShimValue::List(_) => {
                 let func = match ident {
-                    b"map" => shim_list_map,
-                    b"filter" => shim_list_filter,
+                    b"map" => shim_map,
+                    b"filter" => shim_filter,
                     b"join" => shim_list_join,
                     b"len" => shim_list_len,
                     b"iter" => shim_list_iter,

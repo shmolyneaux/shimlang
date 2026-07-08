@@ -1,0 +1,28 @@
+// The builtin `map(iterable, func)` applies func to each element and
+// collects the results into a new list. It works on any iterable, not
+// just lists.
+
+let doubled = map([1, 2, 3, 4], fn(x) { x * 2 })
+assert(doubled[0] == 2)
+assert(doubled[1] == 4)
+assert(doubled[2] == 6)
+assert(doubled[3] == 8)
+assert(doubled.len() == 4)
+
+// Works on a Range iterable.
+let tens = map(Range(0, 3), fn(x) { x * 10 })
+assert(tens[0] == 0)
+assert(tens[1] == 10)
+assert(tens[2] == 20)
+assert(tens.len() == 3)
+
+// Works on an already-obtained iterator.
+let from_iter = map([5, 6].iter(), fn(x) { x + 1 })
+assert(from_iter[0] == 6)
+assert(from_iter[1] == 7)
+
+// Mapping an empty iterable yields an empty list.
+let empty = map([], fn(x) { x })
+assert(empty.len() == 0)
+
+print("Builtin map passed")

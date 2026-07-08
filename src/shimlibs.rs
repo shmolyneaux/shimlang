@@ -40,6 +40,20 @@ impl ShimNative for ListIterator {
             Ok(interpreter
                 .mem
                 .alloc_bound_native_fn(self_as_val, shim_list_iter_next)?)
+        } else if ident == b"iter" {
+            fn shim_list_iterator_iter(
+                _interpreter: &mut Interpreter,
+                args: &ArgBundle,
+            ) -> Result<ShimValue, String> {
+                let mut unpacker = ArgUnpacker::new(args);
+                let obj = unpacker.required(b"obj")?;
+                unpacker.end()?;
+                Ok(obj)
+            }
+
+            Ok(interpreter
+                .mem
+                .alloc_bound_native_fn(self_as_val, shim_list_iterator_iter)?)
         } else {
             Err(format!(
                 "Can't get_attr {} on {}",
@@ -166,6 +180,20 @@ impl ShimNative for EnumeratorIterator {
             Ok(interpreter
                 .mem
                 .alloc_bound_native_fn(self_as_val, shim_enumerator_iter_next)?)
+        } else if ident == b"iter" {
+            fn shim_enumerator_iterator_iter(
+                _interpreter: &mut Interpreter,
+                args: &ArgBundle,
+            ) -> Result<ShimValue, String> {
+                let mut unpacker = ArgUnpacker::new(args);
+                let obj = unpacker.required(b"obj")?;
+                unpacker.end()?;
+                Ok(obj)
+            }
+
+            Ok(interpreter
+                .mem
+                .alloc_bound_native_fn(self_as_val, shim_enumerator_iterator_iter)?)
         } else {
             Err(format!(
                 "Can't get_attr {} on {}",
@@ -206,6 +234,18 @@ impl ShimNative for StringIterator {
             }
 
             Ok(interpreter.mem.alloc_bound_native_fn(self_as_val, shim_str_iter_next)?)
+        } else if ident == b"iter" {
+            fn shim_str_iterator_iter(
+                _interpreter: &mut Interpreter,
+                args: &ArgBundle,
+            ) -> Result<ShimValue, String> {
+                let mut unpacker = ArgUnpacker::new(args);
+                let obj = unpacker.required(b"obj")?;
+                unpacker.end()?;
+                Ok(obj)
+            }
+
+            Ok(interpreter.mem.alloc_bound_native_fn(self_as_val, shim_str_iterator_iter)?)
         } else {
             Err(format!("Can't get_attr {} on {}", debug_u8s(ident), type_name::<Self>()))
         }
@@ -613,6 +653,91 @@ impl ShimNative for RangeIterator {
 
     fn gc_vals(&self) -> Vec<ShimValue> {
         vec![self.current, self.end, self.step]
+    }
+}
+
+/// An iterator backed by a user-provided function. Its `.next` simply calls the
+/// stored function, and `.iter` returns itself, so it acts as both an iterable
+/// and an iterator. This lets users implement iterators without defining a
+/// bespoke iterator struct, and lets `Iterator(...)` be returned directly from a
+/// struct's `iter` method.
+pub(crate) struct FuncIterator {
+    pub(crate) func: ShimValue,
+}
+
+impl ShimNative for FuncIterator {
+    fn to_string(&self, _interpreter: &mut Interpreter) -> String {
+        "Iterator(...)".to_string()
+    }
+
+    fn to_string_mem(&self, _mem: &MMU) -> String {
+        "Iterator(...)".to_string()
+    }
+
+    fn get_attr(
+        &self,
+        self_as_val: &ShimValue,
+        interpreter: &mut Interpreter,
+        ident: &[u8],
+    ) -> Result<ShimValue, String> {
+        if ident == b"next" {
+            fn shim_func_iterator_next(
+                interpreter: &mut Interpreter,
+                args: &ArgBundle,
+            ) -> Result<ShimValue, String> {
+                if args.args.len() != 1 {
+                    return Err(
+                        "Can't provide positional args to FuncIterator.next()".to_string()
+                    );
+                }
+
+                let func = {
+                    let itr: &FuncIterator = args.args[0].as_native(interpreter)?;
+                    itr.func
+                };
+
+                let mut call_args = ArgBundle::new();
+                match func.call(interpreter, &mut call_args)? {
+                    CallResult::ReturnValue(val) => Ok(val),
+                    CallResult::PC(pc, captured_scope) => {
+                        let mut new_env = Environment::with_scope(captured_scope);
+                        interpreter.execute_bytecode_extended(
+                            &mut (pc as usize),
+                            call_args,
+                            &mut new_env,
+                        )
+                    }
+                }
+            }
+
+            Ok(interpreter
+                .mem
+                .alloc_bound_native_fn(self_as_val, shim_func_iterator_next)?)
+        } else if ident == b"iter" {
+            fn shim_func_iterator_iter(
+                _interpreter: &mut Interpreter,
+                args: &ArgBundle,
+            ) -> Result<ShimValue, String> {
+                let mut unpacker = ArgUnpacker::new(args);
+                let obj = unpacker.required(b"obj")?;
+                unpacker.end()?;
+                Ok(obj)
+            }
+
+            Ok(interpreter
+                .mem
+                .alloc_bound_native_fn(self_as_val, shim_func_iterator_iter)?)
+        } else {
+            Err(format!(
+                "Can't get_attr {} on {}",
+                debug_u8s(ident),
+                type_name::<Self>()
+            ))
+        }
+    }
+
+    fn gc_vals(&self) -> Vec<ShimValue> {
+        vec![self.func]
     }
 }
 
@@ -1488,6 +1613,82 @@ pub(crate) fn shim_filter(
     filter_iterable(interpreter, obj, predicate)
 }
 
+pub(crate) fn shim_map(
+    interpreter: &mut Interpreter,
+    args: &ArgBundle,
+) -> Result<ShimValue, String> {
+    let mut unpacker = ArgUnpacker::new(args);
+    let obj = unpacker.required(b"obj")?;
+    let func = unpacker.required(b"func")?;
+    unpacker.end()?;
+
+    map_iterable(interpreter, obj, func)
+}
+
+fn map_iterable(
+    interpreter: &mut Interpreter,
+    obj: ShimValue,
+    func: ShimValue,
+) -> Result<ShimValue, String> {
+    let new_lst_val = interpreter.mem.alloc_list()?;
+
+    let mut iter_args = ArgBundle::new();
+    let iterator = match obj.attr_call(b"iter", interpreter, &mut iter_args)? {
+        CallResult::ReturnValue(val) => val,
+        CallResult::PC(pc, captured_scope) => {
+            let mut new_env = Environment::with_scope(captured_scope);
+            interpreter.execute_bytecode_extended(&mut (pc as usize), iter_args, &mut new_env)?
+        }
+    };
+
+    loop {
+        let mut next_args = ArgBundle::new();
+        let input = match iterator.attr_call(b"next", interpreter, &mut next_args)? {
+            CallResult::ReturnValue(val) => val,
+            CallResult::PC(pc, captured_scope) => {
+                let mut new_env = Environment::with_scope(captured_scope);
+                interpreter.execute_bytecode_extended(&mut (pc as usize), next_args, &mut new_env)?
+            }
+        };
+
+        if input.is_stop_iteration() {
+            break;
+        }
+
+        let mut args = ArgBundle::new();
+        args.args.push(input);
+        let output = match func.call(interpreter, &mut args)? {
+            CallResult::ReturnValue(val) => val,
+            CallResult::PC(pc, captured_scope) => {
+                let mut new_env = Environment::with_scope(captured_scope);
+
+                interpreter.execute_bytecode_extended(
+                    &mut (pc as usize),
+                    args,
+                    &mut new_env,
+                )?
+            }
+        };
+
+        let new_lst = new_lst_val.list_mut(interpreter)?;
+        new_lst.push(&mut interpreter.mem, output)?;
+    }
+
+    Ok(new_lst_val)
+}
+
+pub(crate) fn shim_iterator(
+    interpreter: &mut Interpreter,
+    args: &ArgBundle,
+) -> Result<ShimValue, String> {
+    let mut unpacker = ArgUnpacker::new(args);
+    let func = unpacker.required(b"func")?;
+    unpacker.end()?;
+
+    let iterator = FuncIterator { func };
+    Ok(interpreter.mem.alloc_native(iterator)?)
+}
+
 pub(crate) fn shim_range(
     interpreter: &mut Interpreter,
     args: &ArgBundle,
@@ -1768,21 +1969,6 @@ pub(crate) fn compare_values(
     }
 }
 
-pub(crate) fn shim_list_filter(
-    interpreter: &mut Interpreter,
-    args: &ArgBundle,
-) -> Result<ShimValue, String> {
-    let mut unpacker = ArgUnpacker::new(args);
-    let obj = unpacker.required(b"obj")?;
-    let predicate = match unpacker.optional(b"predicate") {
-        Some(v) => Some(v),
-        None => unpacker.optional(b"key"),
-    };
-    unpacker.end()?;
-
-    filter_iterable(interpreter, obj, predicate)
-}
-
 fn filter_iterable(
     interpreter: &mut Interpreter,
     obj: ShimValue,
@@ -1835,41 +2021,6 @@ fn filter_iterable(
             let new_lst = new_lst_val.list_mut(interpreter)?;
             new_lst.push(&mut interpreter.mem, input)?;
         }
-    }
-
-    Ok(new_lst_val)
-}
-
-pub(crate) fn shim_list_map(
-    interpreter: &mut Interpreter,
-    args: &ArgBundle,
-) -> Result<ShimValue, String> {
-    let mut unpacker = ArgUnpacker::new(args);
-    let obj = unpacker.required(b"obj")?;
-    let lst = obj.list(interpreter)?;
-    let key = unpacker.required(b"key")?;
-    unpacker.end()?;
-
-    let new_lst_val = interpreter.mem.alloc_list()?;
-    let new_lst = new_lst_val.list_mut(interpreter)?;
-
-    for idx in 0..lst.len() {
-        let input = lst.get(&interpreter.mem, idx as isize)?;
-        let mut args = ArgBundle::new();
-        args.args.push(input);
-        let output = match key.call(interpreter, &mut args)? {
-            CallResult::ReturnValue(val) => val,
-            CallResult::PC(pc, captured_scope) => {
-                let mut new_env = Environment::with_scope(captured_scope);
-                
-                interpreter.execute_bytecode_extended(
-                    &mut (pc as usize),
-                    args,
-                    &mut new_env,
-                )?
-            }
-        };
-        new_lst.push(&mut interpreter.mem, output)?;
     }
 
     Ok(new_lst_val)
