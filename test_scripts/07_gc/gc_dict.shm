@@ -1,7 +1,7 @@
-let d = dict()
+let d = {:}
 d.set("a", 1)
 d.set("b", 2)
-let e = dict()
+let e = {:}
 e.set("value", 42)
 print(d["a"])
 print(e["value"])

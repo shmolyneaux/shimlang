@@ -1,4 +1,4 @@
-let d = dict()
+let d = {:}
 d.set("a", 100)
 d.set("b", 200)
 d.set("c", 300)

@@ -1,5 +1,5 @@
 // Test empty dict iteration
-let empty = dict()
+let empty = {:}
 print("Empty dict keys:")
 for k in empty {
     print(k)
@@ -7,7 +7,7 @@ for k in empty {
 print("Done with empty")
 
 // Test dict with multiple types of keys
-let mixed = dict()
+let mixed = {:}
 mixed.set(1, "one")
 mixed.set("two", 2)
 mixed.set(3, "three")

@@ -1,5 +1,5 @@
 // Simple test of shrink_to_fit method
-let d = dict()
+let d = {:}
 
 // Add a few elements
 d[0] = "zero"
@@ -34,7 +34,7 @@ assert(d[3] == "three")
 assert(d[4] == "four")
 
 // Test shrinking an empty dict
-let empty = dict()
+let empty = {:}
 empty[1] = "test"
 empty.pop(1)
 empty.shrink_to_fit()

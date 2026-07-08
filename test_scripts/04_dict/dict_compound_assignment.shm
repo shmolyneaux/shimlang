@@ -1,4 +1,4 @@
-let d = dict()
+let d = {:}
 d["a"] = 10
 d["a"] += 5
 assert(d["a"] == 15)

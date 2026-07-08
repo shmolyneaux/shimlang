@@ -1,4 +1,4 @@
-let d = dict()
+let d = {:}
 d.set("test", "foo")
 
 print(d["test"])

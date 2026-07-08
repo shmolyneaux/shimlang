@@ -1,2 +1,2 @@
-let d = dict()
+let d = {:}
 d["missing"]

@@ -1,4 +1,4 @@
-let d = dict()
+let d = {:}
 
 let count = 0
 let end = 100 // 1000000

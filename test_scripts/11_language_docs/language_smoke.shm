@@ -55,7 +55,7 @@ for i, value in ["a", "b", "c"].enumerate() {
 check("enumerate tuple unpacking", enum_sum == 3)
 
 let tuple_key = (1, 2)
-let d = dict()
+let d = {:}
 d["name"] = "Alice"
 d[tuple_key] = "point"
 check("dictionary string key", d.get("name") == "Alice")
@@ -63,7 +63,7 @@ check("dictionary tuple key", d[(1, 2)] == "point")
 check("dictionary missing default", d.get("missing", 99) == 99)
 check("dictionary missing keyword default", d.get("missing", default=88) == 88)
 check("dictionary membership", (1, 2) in d)
-check("empty dictionary falsy", !dict())
+check("empty dictionary falsy", !{:})
 
 let seen_items = 0
 for key, value in d.items() {
@@ -131,7 +131,7 @@ let block_value = {
 }
 check("block expression", block_value == 30)
 check("empty tuple falsy", !())
-check("negation uses truthiness", !0 and !"" and ![] and !dict() and !())
+check("negation uses truthiness", !0 and !"" and ![] and !{:} and !())
 check("list comparison lexicographic", [1, 2] < [1, 3] and [1, 2] < [1, 2, 0])
 
 struct Vec2 {

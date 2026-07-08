@@ -1,4 +1,4 @@
-let d = dict()
+let d = {:}
 d.set(42, "forty-two")
 d.set(12, "twelve")
 d.set(3, "three")

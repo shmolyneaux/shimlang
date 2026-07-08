@@ -1,4 +1,4 @@
-let d = dict()
+let d = {:}
 d["foo"] = "bar"
 assert(d.pop("foo") == "bar")
 assert(d.pop("foo", 42) == 42)
