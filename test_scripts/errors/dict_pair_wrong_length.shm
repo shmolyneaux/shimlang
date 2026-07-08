@@ -1,0 +1,2 @@
+// dict() pairs must have exactly two elements.
+let d = dict([(1, 2, 3)])

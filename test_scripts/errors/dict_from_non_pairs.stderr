@@ -1,0 +1,4 @@
+ 1 | // dict() requires an iterable of (key, value) pairs; a bare value is not a pair.
+ 2 | let d = dict([1, 2])
+             ^^^^^^^^^^^^
+Error: dict() expects an iterable of (key, value) pairs, got int

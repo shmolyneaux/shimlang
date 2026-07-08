@@ -439,6 +439,22 @@ Output:
 5
 ```
 
+A list literal `[...]` is the usual way to build a list. The `list()` built-in
+creates an empty list, or builds one from any iterable — useful for
+materializing a lazy iterator such as a range:
+
+```rust
+let empty = list()
+let nums = list(Range(0, 4))
+print(nums)
+```
+
+Output:
+
+```
+[0, 1, 2, 3]
+```
+
 Negative indices count from the end of the list. List elements can be reassigned
 by index:
 
@@ -679,7 +695,7 @@ Output:
 Tuples are hashable and may be used as dictionary keys:
 
 ```rust
-let d = dict()
+let d = {:}
 d[(0, 0)] = "origin"
 d[(1, 2)] = "point"
 print(d[(0, 0)])
@@ -709,9 +725,10 @@ Output:
 
 ### Dictionaries
 
-Dictionaries are hash maps created with the `dict()` built-in. Keys can be
-hashable values: integers, floats, booleans, strings, `None`, and tuples whose
-items are also hashable.
+Dictionaries are hash maps. An empty dictionary is written `{:}` (see
+[Dictionary literals](#dictionary-literals) below) or created with the bare
+`dict()` built-in. Keys can be hashable values: integers, floats, booleans,
+strings, `None`, and tuples whose items are also hashable.
 
 Keys are identified by both type and value: an integer key and a float key are
 **distinct** even when they are numerically equal, so `1` and `1.0` index
@@ -722,7 +739,7 @@ looked up again.
 For example:
 
 ```rust
-let d = dict()
+let d = {:}
 d["name"] = "Alice"
 d["age"] = 30
 print(d["name"])
@@ -741,7 +758,7 @@ Alice
 You can also use the `.set()` and `.get()` methods:
 
 ```rust
-let d = dict()
+let d = {:}
 d.set("key", "value")
 print(d.get("key"))
 ```
@@ -752,10 +769,12 @@ Output:
 value
 ```
 
-`dict()` also accepts keyword arguments. Keyword names become string keys:
+`dict()` also accepts a single iterable of `(key, value)` pairs (two-element
+tuples or lists) and builds a dictionary from them. Later pairs overwrite
+earlier ones with the same key:
 
 ```rust
-let d = dict(name="Alice", age=30)
+let d = dict([("name", "Alice"), ("age", 30)])
 print(d["name"], d["age"])
 ```
 
@@ -768,9 +787,8 @@ Alice 30
 #### Dictionary literals
 
 A dictionary can also be written directly with brace-and-colon syntax,
-`{ key: value, ... }`. Both keys and values are arbitrary expressions, so —
-unlike the `dict(name=...)` keyword form, where the name becomes a string key —
-a bare identifier key is evaluated as a variable. Use a string literal for a
+`{ key: value, ... }`. Both keys and values are arbitrary expressions, so a
+bare identifier key is evaluated as a variable. Use a string literal for a
 string key, and any hashable expression (including integers) for other keys:
 
 ```rust
@@ -824,7 +842,7 @@ Dictionary methods:
 Iterating over a dictionary yields its keys. Use `.items()` for key-value pairs:
 
 ```rust
-let d = dict()
+let d = {:}
 d["a"] = 1
 d["b"] = 2
 d["c"] = 3
@@ -1113,7 +1131,7 @@ distinct struct instances compare unequal.
 The `in` operator tests containment in dictionaries, lists, and strings:
 
 ```rust
-let d = dict()
+let d = {:}
 d["x"] = 1
 print("x" in d)
 print("y" in d)
@@ -2182,9 +2200,14 @@ Output:
 | `assert(condition, message)` | Panics with `message` if `condition` is falsy |
 | `panic(message)` | Immediately halts execution with an error message |
 | `dict()` | Creates a new empty dictionary |
-| `dict(key=value, ...)` | Creates a dictionary with string keys from keyword names |
+| `dict(iterable)` | Creates a dictionary from an iterable of `(key, value)` pairs (two-element tuples or lists) |
+| `list()` | Creates a new empty list |
+| `list(iterable)` | Creates a list from any iterable |
+| `set()` | Creates a new empty set |
+| `set(iterable)` | Creates a set from any iterable, discarding duplicates |
 | `Range(start, end)` | Creates a range from `start` (inclusive) to `end` (exclusive) |
 | `enumerate(iterable)` | Returns an iterable yielding `(index, value)` tuples |
+| `map(iterable, fn)` | Returns a new list with `fn` applied to each element |
 | `filter(iterable)` | Returns a list of truthy values from any iterable |
 | `filter(iterable, fn)` | Returns a list of values where `fn(value)` is truthy |
 | `average(iterable)` | Returns the arithmetic average, or `0` for an empty iterable |

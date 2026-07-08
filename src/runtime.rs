@@ -225,6 +225,7 @@ impl Environment {
             (b"print", shim_print),
             (b"panic", shim_panic),
             (b"dict", shim_dict),
+            (b"list", shim_list),
             (b"set", shim_set),
             (b"Range", shim_range),
             (b"Iterator", shim_iterator),

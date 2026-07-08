@@ -1,0 +1,4 @@
+ 1 | // list() takes at most one iterable argument.
+ 2 | let l = list([1], [2])
+             ^^^^^^^^^^^^^^
+Error: Got 2 arguments, but only used 1

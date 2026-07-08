@@ -1,0 +1,4 @@
+ 1 | // dict() pairs must have exactly two elements.
+ 2 | let d = dict([(1, 2, 3)])
+             ^^^^^^^^^^^^^^^^^
+Error: dict() expects (key, value) pairs, got a 3-tuple

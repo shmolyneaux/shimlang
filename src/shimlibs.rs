@@ -1501,20 +1501,122 @@ const _: () = {
     assert!(std::mem::size_of::<ShimList>() == 8);
 };
 
+/// Invoke `f` for each item produced by iterating `iterable` (i.e. calling its
+/// `iter` method and repeatedly calling `next` until `StopIteration`).
+fn for_each_item<F>(
+    interpreter: &mut Interpreter,
+    iterable: ShimValue,
+    mut f: F,
+) -> Result<(), String>
+where
+    F: FnMut(&mut Interpreter, ShimValue) -> Result<(), String>,
+{
+    let mut iter_args = ArgBundle::new();
+    let iterator = match iterable
+        .get_attr(interpreter, b"iter")?
+        .call(interpreter, &mut iter_args)?
+    {
+        CallResult::ReturnValue(val) => val,
+        CallResult::PC(pc, captured_scope) => {
+            let mut new_env = Environment::with_scope(captured_scope);
+            interpreter.execute_bytecode_extended(&mut (pc as usize), iter_args, &mut new_env)?
+        }
+    };
+
+    let next_method = iterator.get_attr(interpreter, b"next")?;
+
+    loop {
+        let mut next_args = ArgBundle::new();
+        let item = match next_method.call(interpreter, &mut next_args)? {
+            CallResult::ReturnValue(val) => val,
+            CallResult::PC(pc, captured_scope) => {
+                let mut new_env = Environment::with_scope(captured_scope);
+                interpreter.execute_bytecode_extended(&mut (pc as usize), next_args, &mut new_env)?
+            }
+        };
+
+        if item.is_stop_iteration() {
+            break;
+        }
+
+        f(interpreter, item)?;
+    }
+
+    Ok(())
+}
+
+/// Unpack a `(key, value)` pair from a two-element tuple or list.
+fn unpack_pair(
+    interpreter: &mut Interpreter,
+    item: ShimValue,
+) -> Result<(ShimValue, ShimValue), String> {
+    match item {
+        ShimValue::Tuple(len, pos) => {
+            let len = usize::from(len);
+            if len != 2 {
+                return Err(format!(
+                    "dict() expects (key, value) pairs, got a {}-tuple",
+                    len
+                ));
+            }
+            let pos = usize::from(pos);
+            let key = unsafe { ShimValue::from_u64(interpreter.mem.mem()[pos]) };
+            let val = unsafe { ShimValue::from_u64(interpreter.mem.mem()[pos + 1]) };
+            Ok((key, val))
+        }
+        ShimValue::List(_) => {
+            let lst = item.list(interpreter)?;
+            if lst.len() != 2 {
+                return Err(format!(
+                    "dict() expects (key, value) pairs, got a list of length {}",
+                    lst.len()
+                ));
+            }
+            let key = lst.get(&interpreter.mem, 0)?;
+            let val = lst.get(&interpreter.mem, 1)?;
+            Ok((key, val))
+        }
+        other => Err(format!(
+            "dict() expects an iterable of (key, value) pairs, got {}",
+            get_type_name(&other)
+        )),
+    }
+}
+
 pub(crate) fn shim_dict(
     interpreter: &mut Interpreter,
     args: &ArgBundle,
 ) -> Result<ShimValue, String> {
-    if !args.args.is_empty() {
-        return Err("Can't provide positional args to dict()".to_string());
-    }
+    let mut unpacker = ArgUnpacker::new(args);
+    let iterable = unpacker.optional(b"iterable");
+    unpacker.end()?;
 
     let retval = interpreter.mem.alloc_dict()?;
-    let dict = retval.dict_mut(interpreter)?;
 
-    for (key, val) in args.kwargs.clone().into_iter() {
-        let key = interpreter.mem.alloc_str(&key)?;
-        dict.set(interpreter, key, val)?;
+    if let Some(iterable) = iterable {
+        for_each_item(interpreter, iterable, |interpreter, item| {
+            let (key, val) = unpack_pair(interpreter, item)?;
+            retval.dict_mut(interpreter)?.set(interpreter, key, val)
+        })?;
+    }
+
+    Ok(retval)
+}
+
+pub(crate) fn shim_list(
+    interpreter: &mut Interpreter,
+    args: &ArgBundle,
+) -> Result<ShimValue, String> {
+    let mut unpacker = ArgUnpacker::new(args);
+    let iterable = unpacker.optional(b"iterable");
+    unpacker.end()?;
+
+    let retval = interpreter.mem.alloc_list()?;
+
+    if let Some(iterable) = iterable {
+        for_each_item(interpreter, iterable, |interpreter, item| {
+            retval.list_mut(interpreter)?.push(&mut interpreter.mem, item)
+        })?;
     }
 
     Ok(retval)

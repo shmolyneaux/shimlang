@@ -1,0 +1,36 @@
+// The builtin `list()` creates an empty list, or materializes any iterable
+// into a new list.
+
+// Bare list() is empty.
+let empty = list()
+assert(empty.len() == 0)
+
+// From another list (a shallow copy).
+let copy = list([1, 2, 3])
+assert(copy[0] == 1)
+assert(copy[2] == 3)
+assert(copy.len() == 3)
+
+// From a lazy Range iterable.
+let nums = list(Range(0, 4))
+assert(nums[0] == 0)
+assert(nums[3] == 3)
+assert(nums.len() == 4)
+
+// From an already-obtained iterator.
+let from_iter = list([5, 6].iter())
+assert(from_iter[0] == 5)
+assert(from_iter[1] == 6)
+
+// Iterating a dictionary yields its keys.
+let d = {:}
+d["a"] = 1
+d["b"] = 2
+let keys = list(d)
+assert(keys.len() == 2)
+
+// Materializing an empty iterable yields an empty list.
+let none = list(Range(0, 0))
+assert(none.len() == 0)
+
+print("Builtin list passed")

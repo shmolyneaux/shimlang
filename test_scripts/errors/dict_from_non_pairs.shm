@@ -1,0 +1,2 @@
+// dict() requires an iterable of (key, value) pairs; a bare value is not a pair.
+let d = dict([1, 2])

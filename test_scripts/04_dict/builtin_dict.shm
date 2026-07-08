@@ -1,0 +1,39 @@
+// The builtin `dict()` creates an empty dictionary, or builds one from an
+// iterable of (key, value) pairs. Pairs may be two-element tuples or lists.
+
+// Bare dict() is empty.
+let empty = dict()
+assert(empty.len() == 0)
+
+// From a list of tuples.
+let d = dict([("name", "Alice"), ("age", 30)])
+assert(d["name"] == "Alice")
+assert(d["age"] == 30)
+assert(d.len() == 2)
+
+// Pairs may also be two-element lists.
+let e = dict([[1, "one"], [2, "two"]])
+assert(e[1] == "one")
+assert(e[2] == "two")
+
+// Later pairs overwrite earlier ones with the same key.
+let dup = dict([("x", 1), ("x", 2), ("x", 3)])
+assert(dup["x"] == 3)
+assert(dup.len() == 1)
+
+// Any iterable works, not just a list literal — round-trip through .items().
+let round_trip = dict(d.items())
+assert(round_trip["name"] == "Alice")
+assert(round_trip["age"] == 30)
+assert(round_trip.len() == 2)
+
+// An already-obtained iterator works too.
+let from_iter = dict([("a", 1), ("b", 2)].iter())
+assert(from_iter["a"] == 1)
+assert(from_iter["b"] == 2)
+
+// Building from an empty iterable yields an empty dict.
+let none = dict([])
+assert(none.len() == 0)
+
+print("Builtin dict passed")
