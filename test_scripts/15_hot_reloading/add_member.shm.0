@@ -1,0 +1,10 @@
+struct Test {
+    fn test(self) {
+        print("no members")
+    }
+}
+
+let a = Test()
+fn loop() {
+    a.test()
+}

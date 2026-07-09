@@ -1,0 +1,10 @@
+struct Test {
+    fn test(self) {
+        print("one")
+    }
+}
+
+let a = Test()
+fn loop() {
+    a.test()
+}

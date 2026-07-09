@@ -1,0 +1,15 @@
+struct Test {
+    fn test(self) {
+        print("test")
+        self.test2()
+    }
+
+    fn test2(self) {
+        print("test2")
+    }
+}
+
+let a = Test()
+fn loop() {
+    a.test()
+}
