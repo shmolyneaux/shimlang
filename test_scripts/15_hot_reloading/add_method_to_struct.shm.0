@@ -1,3 +1,4 @@
+// Snapshot 0: create a Counter and set its value to a non-default 5.
 struct Counter {
     n = 0,
 
@@ -7,6 +8,8 @@ struct Counter {
 }
 
 let c = Counter()
+c.n = 5
+
 fn loop() {
     c.show()
 }

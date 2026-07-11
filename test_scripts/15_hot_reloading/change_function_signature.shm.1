@@ -1,7 +1,12 @@
+// Snapshot 1: `add` is redefined with renamed args and an extra parameter.
+// `total` carries over as 3, so 3 + (10 + 20 + 30) = 63.
+let total = 0
+
 fn add(x, y, z) {
-    print(x + y + z)
+    total = total + x + y + z
 }
 
 fn loop() {
     add(10, 20, 30)
+    print(total)
 }

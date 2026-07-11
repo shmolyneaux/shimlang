@@ -1,7 +1,11 @@
+// Snapshot 0: add(a, b) folds into a persisted running total.
+let total = 0
+
 fn add(a, b) {
-    print(a + b)
+    total = total + a + b
 }
 
 fn loop() {
     add(1, 2)
+    print(total)
 }

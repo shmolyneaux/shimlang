@@ -1,7 +1,7 @@
-fn greet() {
-    print("hello")
-}
+// Snapshot 0: loop increments a persisted counter and prints it with a v0 tag.
+let count = 0
 
 fn loop() {
-    greet()
+    count = count + 1
+    print("body v0, count \(count)")
 }

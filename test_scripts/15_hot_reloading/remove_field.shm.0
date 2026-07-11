@@ -1,3 +1,4 @@
+// Snapshot 0: create a Config and mutate its name to a non-default value.
 struct Config {
     name = "app",
     debug = true,
@@ -8,6 +9,8 @@ struct Config {
 }
 
 let c = Config()
+c.name = "myapp"
+
 fn loop() {
     c.describe()
 }

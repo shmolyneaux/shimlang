@@ -1,3 +1,6 @@
+// Snapshot 1: fields are declared in a new order, but `p` carries over with
+// x = 10 and z = 30. Fields stay bound by name, not position, so describe()
+// still prints "10 2 30".
 struct Point {
     z = 3,
     y = 2,
@@ -9,6 +12,7 @@ struct Point {
 }
 
 let p = Point()
+
 fn loop() {
     p.describe()
 }

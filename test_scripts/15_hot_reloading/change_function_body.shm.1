@@ -1,7 +1,8 @@
-fn greet() {
-    print("goodbye")
-}
+// Snapshot 1: only loop's body changed (v0 -> v1). `count` is not
+// re-initialized on reload, so this loop call sees 1 and prints count 2.
+let count = 0
 
 fn loop() {
-    greet()
+    count = count + 1
+    print("body v1, count \(count)")
 }

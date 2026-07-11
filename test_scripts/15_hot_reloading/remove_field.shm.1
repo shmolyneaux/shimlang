@@ -1,3 +1,5 @@
+// Snapshot 1: the `debug` field is removed. `c` keeps name = "myapp" from
+// snapshot 0, proving the instance carried over across the field removal.
 struct Config {
     name = "app",
 
@@ -7,6 +9,7 @@ struct Config {
 }
 
 let c = Config()
+
 fn loop() {
     c.describe()
 }

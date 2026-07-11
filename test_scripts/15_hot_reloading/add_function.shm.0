@@ -1,7 +1,11 @@
-fn first() {
-    print("first")
+// Snapshot 0: a single `append` helper mutates a persisted log.
+let log = "start"
+
+fn append(s) {
+    log = log + s
 }
 
 fn loop() {
-    first()
+    append("-0")
+    print(log)
 }

@@ -1,14 +1,19 @@
+// Snapshot 0: create a Greeter and set its name to a non-default value.
 struct Greeter {
+    name = "?",
+
     fn hello(self) {
-        print("hello")
+        print("hello \(self.name)")
     }
 
     fn bye(self) {
-        print("bye")
+        print("bye \(self.name)")
     }
 }
 
 let g = Greeter()
+g.name = "world"
+
 fn loop() {
     g.hello()
     g.bye()

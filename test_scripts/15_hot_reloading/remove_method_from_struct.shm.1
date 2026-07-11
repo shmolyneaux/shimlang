@@ -1,10 +1,15 @@
+// Snapshot 1: the `bye` method is removed. `g` keeps name = "world" from
+// snapshot 0, so the surviving `hello` still greets "world".
 struct Greeter {
+    name = "?",
+
     fn hello(self) {
-        print("hello")
+        print("hello \(self.name)")
     }
 }
 
 let g = Greeter()
+
 fn loop() {
     g.hello()
 }

@@ -1,3 +1,5 @@
+// Snapshot 1: `r` keeps width = 10 from snapshot 0. The added `area` field's
+// default is computed from the live instance, so area = 10 * 3 = 30 (not 4 * 3).
 struct Rect {
     width = 4,
     height = 3,
@@ -9,6 +11,7 @@ struct Rect {
 }
 
 let r = Rect()
+
 fn loop() {
     r.describe()
 }

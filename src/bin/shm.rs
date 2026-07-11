@@ -25,7 +25,19 @@ struct Args {
     scripts: Vec<String>,
     gc: bool,
     script_on_command_line: bool,
+    hot_reload: bool,
     command: Command,
+}
+
+/// An ordered list of script snapshots for a hot-reload session. Each snapshot
+/// is a full version of the program; the reload driver runs one, calls its
+/// `loop` (if defined), then swaps in the next while preserving interpreter
+/// state between them.
+#[derive(Debug, Default)]
+struct HotReloadSession {
+    // Populated by the CLI; consumed by the (not-yet-implemented) reload driver.
+    #[allow(dead_code)]
+    scripts: Vec<String>,
 }
 
 fn print_help() {
@@ -35,13 +47,14 @@ fn print_help() {
     println!();
     println!("Arguments:");
     println!("  [FILE]...           Script file to execute (or script content with -c).");
-    println!("                      Multiple files are run as a hot-reload session, each");
-    println!("                      file being a successive snapshot of the program.");
+    println!("                      With --hot-reload, multiple files are run as a");
+    println!("                      hot-reload session, each a successive snapshot.");
     println!();
     println!("Options:");
     println!(
         "  -c                  Treat positional argument as script content instead of file path"
     );
+    println!("  --hot-reload        Run the given files as an ordered hot-reload session");
     println!("  --gc                Run garbage collector after execution");
     println!("  --parse             Parse the script and check syntax without execution");
     println!("  --spans             Display lexical spans (tokens) from the script");
@@ -67,6 +80,8 @@ fn parse_args() -> Result<Args, String> {
             args.gc = true;
         } else if arg == "-c" {
             args.script_on_command_line = true;
+        } else if arg == "--hot-reload" {
+            args.hot_reload = true;
         } else if arg == "--parse" {
             if args.command != Command::default() {
                 return Err(format!("Attempted to set command multiple times! {}", arg));
@@ -92,6 +107,100 @@ fn parse_args() -> Result<Args, String> {
 
 fn run() -> Result<(), String> {
     let args = parse_args()?;
+
+    if args.hot_reload {
+        // Hot-reload session: the positional scripts are successive snapshots of
+        // the program, run in order with interpreter state preserved between
+        // them. Collect them for the reload driver. The actual reload/execution
+        // loop is not wired up yet.
+        let session = HotReloadSession {
+            scripts: args.scripts.clone(),
+        };
+        let _ = session;
+        // TODO: drive the hot-reload loop over `session.scripts`.
+        return Ok(());
+    }
+
+    if args.hot_reload {
+        if !matches!(args.command, Command::Execute) {
+            return Err("--hot-reload not compatible with other flags".to_string());
+        }
+
+        let ast = shimlang::ast_from_text(b"").unwrap();
+        let program = shimlang::compile_ast(&ast)?;
+        let mut interpreter = shimlang::Interpreter::create(&Config::default(), program);
+
+        for (idx, script) in args.scripts.iter().enumerate() {
+            let contents = if !args.script_on_command_line {
+                let mut file = File::open(&script).map_err(|e| format!("{:?}", e))?;
+                let mut contents = Vec::new();
+                file.read_to_end(&mut contents)
+                    .map_err(|e| format!("{:?}", e))?;
+                contents
+            } else {
+                script.clone().into_bytes()
+            };
+
+            match std::str::from_utf8(&contents) {
+                Ok(_) => (),
+                Err(e) => return Err(format!("Script is not utf8 {:?}", e)),
+            }
+
+            let ast = match shimlang::ast_from_text(&contents) {
+                Ok(ast) => ast,
+                Err(msg) => {
+                    eprintln!("Parse Error:\n{msg}");
+                    return Err("Failed to parse script".to_string());
+                }
+            };
+            let program = shimlang::compile_ast(&ast)?;
+            if idx == 0 {
+                // Create a new interpreter for the initial load
+                interpreter = shimlang::Interpreter::create(&Config::default(), program);
+                match interpreter.execute() {
+                    Ok(_) => {
+                        if args.gc {
+                            interpreter.gc();
+                        }
+                    }
+                    Err(msg) => {
+                        eprintln!("{msg}");
+                        return Err(String::new());
+                    }
+                };
+            } else {
+                todo!("Implement hot reloading");
+                // Execute the new script in the existing interpreter
+                // Get the AST of the old script
+                // - Find the _top-level_ struct definitions and variable assignments
+                //   of the old script (maybe also functions so that function
+                //   references that are passed around are updated too?)
+                // - Create a map of old-struct to new-struct
+                // - Transform all the top-level values (recursively) to match
+                //   the new struct data shape
+                // - Assign the transformed values to the new environment
+            }
+
+            match interpreter.get_from_root_env(b"loop") {
+                Some(ShimValue::None) | None => (),
+                // This can be any callable, we'll just return an Err if it's not
+                Some(func) => {
+                    let mut args = ArgBundle::new();
+                    match func.call(&mut interpreter, &mut args)? {
+                        CallResult::ReturnValue(_) => (),
+                        CallResult::PC(pc, captured_scope) => {
+                            let mut new_env = Environment::with_scope(captured_scope);
+                            interpreter.execute_bytecode_extended(
+                                &mut (pc as usize),
+                                args,
+                                &mut new_env,
+                            )?;
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     if let Some(pos) = args.scripts.into_iter().next() {
         let contents = if !args.script_on_command_line {

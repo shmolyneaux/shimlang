@@ -1,3 +1,6 @@
+// Snapshot 1: `p` is the same instance from snapshot 0, so `name` is still
+// "renamed" (not the "hero" default). The new `health` field is filled with
+// its default on the live instance.
 struct Player {
     name = "hero",
     health = 100,
@@ -8,6 +11,7 @@ struct Player {
 }
 
 let p = Player()
+
 fn loop() {
     p.describe()
 }

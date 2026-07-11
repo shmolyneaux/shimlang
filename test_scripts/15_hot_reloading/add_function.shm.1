@@ -1,12 +1,17 @@
-fn first() {
-    print("first")
+// Snapshot 1: a new `twice` function is added. `log` carries over as
+// "start-0", so this loop appends onto it: "start-0" + "-1" + "!!".
+let log = "start"
+
+fn append(s) {
+    log = log + s
 }
 
-fn second() {
-    print("second")
+fn twice(s) {
+    log = log + s + s
 }
 
 fn loop() {
-    first()
-    second()
+    append("-1")
+    twice("!")
+    print(log)
 }

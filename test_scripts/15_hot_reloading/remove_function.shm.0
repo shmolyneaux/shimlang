@@ -1,8 +1,11 @@
+// Snapshot 0: a `helper` function extends a persisted log.
+let log = "start"
+
 fn helper() {
-    print("helper")
+    log = log + "-helper"
 }
 
 fn loop() {
-    print("loop")
     helper()
+    print(log)
 }

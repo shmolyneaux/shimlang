@@ -165,7 +165,7 @@ for command in (
             proc = subprocess.run(f"{exe_path} --compile {script}", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         elif command == "hot_reload":
             snapshot_args = " ".join(str(s) for s in snapshots)
-            proc = subprocess.run(f"{exe_path} {snapshot_args}", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            proc = subprocess.run(f"{exe_path} --hot-reload {snapshot_args}", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         else:
             raise Exception("Unknown command")
 

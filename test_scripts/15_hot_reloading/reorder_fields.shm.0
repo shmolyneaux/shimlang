@@ -1,3 +1,4 @@
+// Snapshot 0: create a Point and mutate x and z to non-default values.
 struct Point {
     x = 1,
     y = 2,
@@ -9,6 +10,9 @@ struct Point {
 }
 
 let p = Point()
+p.x = 10
+p.z = 30
+
 fn loop() {
     p.describe()
 }

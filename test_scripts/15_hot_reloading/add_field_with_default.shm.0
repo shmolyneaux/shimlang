@@ -1,3 +1,4 @@
+// Snapshot 0: create a Player and mutate it to a non-default name.
 struct Player {
     name = "hero",
 
@@ -7,6 +8,8 @@ struct Player {
 }
 
 let p = Player()
+p.name = "renamed"
+
 fn loop() {
     p.describe()
 }
