@@ -1,0 +1,13 @@
+struct Player {
+    name = "hero",
+    health = 100,
+
+    fn describe(self) {
+        print("\(self.name) has \(self.health) health")
+    }
+}
+
+let p = Player()
+fn loop() {
+    p.describe()
+}

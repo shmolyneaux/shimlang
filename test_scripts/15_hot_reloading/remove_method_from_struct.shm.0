@@ -1,0 +1,15 @@
+struct Greeter {
+    fn hello(self) {
+        print("hello")
+    }
+
+    fn bye(self) {
+        print("bye")
+    }
+}
+
+let g = Greeter()
+fn loop() {
+    g.hello()
+    g.bye()
+}

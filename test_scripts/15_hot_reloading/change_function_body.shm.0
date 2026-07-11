@@ -1,0 +1,7 @@
+fn greet() {
+    print("hello")
+}
+
+fn loop() {
+    greet()
+}

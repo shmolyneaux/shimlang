@@ -1,0 +1,12 @@
+struct Player {
+    name = "hero",
+
+    fn describe(self) {
+        print(self.name)
+    }
+}
+
+let p = Player()
+fn loop() {
+    p.describe()
+}

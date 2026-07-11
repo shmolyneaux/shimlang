@@ -1,0 +1,17 @@
+struct Counter {
+    n = 0,
+
+    fn inc(self) {
+        self.n = self.n + 1
+    }
+
+    fn show(self) {
+        print(self.n)
+    }
+}
+
+let c = Counter()
+fn loop() {
+    c.inc()
+    c.show()
+}

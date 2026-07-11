@@ -1,0 +1,13 @@
+struct Rect {
+    width = 4,
+    height = 3,
+
+    fn describe(self) {
+        print("\(self.width) x \(self.height)")
+    }
+}
+
+let r = Rect()
+fn loop() {
+    r.describe()
+}

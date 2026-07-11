@@ -21,19 +21,22 @@ enum Command {
 
 #[derive(Debug, Default)]
 struct Args {
-    pos: Option<String>,
+    // Scripts to execute/hot reload in order
+    scripts: Vec<String>,
     gc: bool,
     script_on_command_line: bool,
     command: Command,
 }
 
 fn print_help() {
-    println!("Usage: shm [OPTIONS] [FILE]");
+    println!("Usage: shm [OPTIONS] [FILE]...");
     println!();
     println!("Shimlang interpreter and compiler");
     println!();
     println!("Arguments:");
-    println!("  [FILE]              Script file to execute (or script content with -c)");
+    println!("  [FILE]...           Script file to execute (or script content with -c).");
+    println!("                      Multiple files are run as a hot-reload session, each");
+    println!("                      file being a successive snapshot of the program.");
     println!();
     println!("Options:");
     println!(
@@ -59,14 +62,7 @@ fn parse_args() -> Result<Args, String> {
             print_help();
             std::process::exit(0);
         } else if !arg.starts_with('-') {
-            if let Some(existing_positional_arg) = args.pos {
-                return Err(format!(
-                    "Found multiple positional arguments {} and {}",
-                    existing_positional_arg, arg
-                ));
-            } else {
-                args.pos = Some(arg.clone());
-            }
+            args.scripts.push(arg.clone());
         } else if arg == "--gc" {
             args.gc = true;
         } else if arg == "-c" {
@@ -97,7 +93,7 @@ fn parse_args() -> Result<Args, String> {
 fn run() -> Result<(), String> {
     let args = parse_args()?;
 
-    if let Some(pos) = args.pos {
+    if let Some(pos) = args.scripts.into_iter().next() {
         let contents = if !args.script_on_command_line {
             let mut file = File::open(&pos).map_err(|e| format!("{:?}", e))?;
             let mut contents = Vec::new();

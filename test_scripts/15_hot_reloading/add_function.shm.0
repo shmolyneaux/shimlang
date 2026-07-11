@@ -1,0 +1,7 @@
+fn first() {
+    print("first")
+}
+
+fn loop() {
+    first()
+}

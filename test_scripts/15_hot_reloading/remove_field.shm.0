@@ -1,0 +1,13 @@
+struct Config {
+    name = "app",
+    debug = true,
+
+    fn describe(self) {
+        print("\(self.name) debug=\(self.debug)")
+    }
+}
+
+let c = Config()
+fn loop() {
+    c.describe()
+}

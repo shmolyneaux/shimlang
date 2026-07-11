@@ -1,0 +1,7 @@
+fn add(a, b) {
+    print(a + b)
+}
+
+fn loop() {
+    add(1, 2)
+}

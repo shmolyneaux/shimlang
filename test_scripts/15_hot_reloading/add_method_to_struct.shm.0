@@ -1,0 +1,12 @@
+struct Counter {
+    n = 0,
+
+    fn show(self) {
+        print(self.n)
+    }
+}
+
+let c = Counter()
+fn loop() {
+    c.show()
+}

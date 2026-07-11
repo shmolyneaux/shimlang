@@ -1,0 +1,8 @@
+fn helper() {
+    print("helper")
+}
+
+fn loop() {
+    print("loop")
+    helper()
+}

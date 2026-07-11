@@ -78,6 +78,7 @@ for command in (
     "errors",
     "decompile",
     "gc",
+    "hot_reload",
 ):
     if command == "execute":
         scripts = []
@@ -100,6 +101,12 @@ for command in (
     elif command == "gc":
         scripts = []
         scripts.extend(Path("test_scripts/07_gc").glob("*.shm"))
+    elif command == "hot_reload":
+        # Each test is a group of numbered snapshots (name.shm.0, name.shm.1,
+        # ...). The `.shm.0` file identifies the group; all snapshots are run
+        # in order as a single hot-reload session.
+        scripts = []
+        scripts.extend(Path("test_scripts/15_hot_reloading").glob("*.shm.0"))
     else:
         raise Exception("Unknown command")
 
@@ -110,8 +117,20 @@ for command in (
         pad = "-" * (76 - len(str(script)))
         print(f"{script} {pad} ", end="")
 
-        stdout_file = script.with_suffix(".stdout")
-        stderr_file = script.with_suffix(".stderr")
+        if command == "hot_reload":
+            # `script` is the first snapshot: name.shm.0. Strip the numeric
+            # suffix to recover the base (name.shm), then map to the expected
+            # output files and collect every numbered snapshot in order.
+            base = script.with_suffix("")
+            stdout_file = base.with_suffix(".stdout")
+            stderr_file = base.with_suffix(".stderr")
+            snapshots = sorted(
+                script.parent.glob(base.name + ".*"),
+                key=lambda p: int(p.suffix[1:]),
+            )
+        else:
+            stdout_file = script.with_suffix(".stdout")
+            stderr_file = script.with_suffix(".stderr")
 
         expected_stdout = ""
         if stdout_file.exists():
@@ -144,6 +163,9 @@ for command in (
             proc = subprocess.run(f"{exe_path} --parse {script}", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         elif command == "decompile":
             proc = subprocess.run(f"{exe_path} --compile {script}", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        elif command == "hot_reload":
+            snapshot_args = " ".join(str(s) for s in snapshots)
+            proc = subprocess.run(f"{exe_path} {snapshot_args}", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         else:
             raise Exception("Unknown command")
 
