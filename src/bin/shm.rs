@@ -163,7 +163,7 @@ fn run() -> Result<(), String> {
                     }
                 };
             } else {
-                interpreter.hot_reload_from_script(contents)?;
+                interpreter.hot_reload_from_script(&contents)?;
                 // Execute the new script in the existing interpreter
                 // Get the AST of the old script
                 // - Find the _top-level_ struct definitions and variable assignments

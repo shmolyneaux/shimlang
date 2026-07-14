@@ -392,7 +392,7 @@ impl Environment {
 
         loop {
             if current_scope_pos == 0 {
-                break;/
+                break;
             }
 
             let (parent, value_offset) = unsafe {
@@ -2557,12 +2557,12 @@ impl Interpreter {
 
         // TODO: handle the case where there are multiple struct definitions with the same ident
         for decl in old_ast.block.structs() {
-            old_structs[&decl.ident] = decl;
+            old_structs.insert(decl.ident.clone(), decl);
         }
 
         // TODO: handle the case where there are multiple struct definitions with the same ident
         for decl in ast.block.structs() {
-            new_structs[&decl.ident] = decl;
+            new_structs.insert(decl.ident.clone(), decl);
         }
 
         let mut ty_map: HashMap<u24, ReloadStructTransform> = HashMap::new();
@@ -2584,26 +2584,26 @@ impl Interpreter {
             };
 
             let mut old_members: Vec<Vec<u8>> = Vec::new();
-            for mem in old_decl.members_required {
+            for mem in &old_decl.members_required {
                 old_members.push(mem.clone());
             }
-            for (mem, _) in old_decl.members_optional {
+            for (mem, _) in &old_decl.members_optional {
                 old_members.push(mem.clone());
             }
 
             let mut new_members: Vec<Vec<u8>> = Vec::new();
-            for mem in new_decl.members_required {
+            for mem in &new_decl.members_required {
                 new_members.push(mem.clone());
             }
-            for (mem, _) in new_decl.members_optional {
+            for (mem, _) in &new_decl.members_optional {
                 new_members.push(mem.clone());
             }
 
-            ty_map[&old_pos] = if old_members == new_members {
+            ty_map.insert(old_pos, if old_members == new_members {
                 ReloadStructTransform::NoOp(new_pos)
             } else {
                 ReloadStructTransform::Realloc(new_pos)
-            }
+            });
         }
 
         // Points from the old pos to the new pos
@@ -2643,12 +2643,12 @@ impl Interpreter {
 
                         for idx in pos..(pos + len) {
                             reload_update(
-                                &mut self,
+                                &mut *self,
                                 &mut to_process,
                                 &mut updated_structs,
                                 idx,
                                 &ty_map,
-                            );
+                            )?;
                             mask.setx(idx);
                         }
                     }
@@ -2663,12 +2663,12 @@ impl Interpreter {
                         let contents_pos = usize::from(lst.data);
                         for idx in contents_pos..(contents_pos + lst.capacity()) {
                             reload_update(
-                                &mut self,
+                                &mut *self,
                                 &mut to_process,
                                 &mut updated_structs,
                                 idx,
                                 &ty_map,
-                            );
+                            )?;
                             mask.setx(idx);
                         }
                     }
@@ -2677,10 +2677,13 @@ impl Interpreter {
                         if mask.is_set(pos) {
                             continue;
                         }
-                        let dict: &ShimDict = &self.mem.get(pos);
-                        let u64_slice = &self.mem.mem[usize::from(dict.entries)
-                            ..usize::from(dict.entries) + 3 * (dict.entry_count as usize)];
-                        let entries: &mut [DictEntry] = std::slice::from_raw_parts_mut(
+                        let (dict_entries, dict_entry_count) = {
+                            let dict: &ShimDict = self.mem.get(pos.into());
+                            (dict.entries, dict.entry_count)
+                        };
+                        let u64_slice = &self.mem.mem()[usize::from(dict_entries)
+                            ..usize::from(dict_entries) + 3 * (dict_entry_count as usize)];
+                        let entries: &[DictEntry] = std::slice::from_raw_parts(
                             u64_slice.as_ptr() as *const DictEntry,
                             u64_slice.len() / 3,
                         );
@@ -2688,19 +2691,19 @@ impl Interpreter {
                         let value_offset = std::mem::offset_of!(DictEntry, value);
 
                         // Push the keys/vals
-                        let count: usize = dict.entry_count as usize;
-                        for (entry_idx, entry) in &entries[..count].iter().enumerate() {
+                        let count: usize = dict_entry_count as usize;
+                        for (entry_idx, entry) in entries[..count].iter().enumerate() {
                             if !entry.key.is_uninitialized() {
                                 // Structs aren't hashable, so can't be a key,
                                 // so we don't need to call reload_update for entry.key
                                 to_process.push(entry.key);
                                 reload_update(
-                                    &mut self,
+                                    &mut *self,
                                     &mut to_process,
                                     &mut updated_structs,
                                     entry_idx*3 + value_offset,
                                     &ty_map,
-                                );
+                                )?;
                             }
                         }
 
@@ -2709,6 +2712,7 @@ impl Interpreter {
                             mask.setx(idx);
                         }
 
+                        let dict: &ShimDict = self.mem.get(pos.into());
                         let size: usize = 1 << dict.size_pow;
 
                         // Mark the indices array
@@ -2771,12 +2775,12 @@ impl Interpreter {
 
                         for idx in pos..(pos + def.member_count as usize) {
                             reload_update(
-                                &mut self,
+                                &mut *self,
                                 &mut to_process,
                                 &mut updated_structs,
                                 idx,
                                 &ty_map,
-                            );
+                            )?;
                             mask.setx(idx);
                         }
                         to_process.push(ShimValue::StructDef(def_pos));
@@ -2802,10 +2806,10 @@ impl Interpreter {
 
                         // Reconstruct a fat pointer to call gc_vals() without a Box.
                         let vtable = info.vtable;
-                        let data_ptr = &self.mem.mem[pos] as *const u64 as *const ();
+                        let data_ptr = &self.mem.mem()[pos] as *const u64 as *const ();
                         let fat_ptr: (*const (), *const ()) = (data_ptr, vtable);
                         let native_ref: &dyn ShimNative = std::mem::transmute(fat_ptr);
-                        vals.extend(native_ref.gc_vals());
+                        to_process.extend(native_ref.gc_vals());
                     }
                     ShimValue::BoundMethod(pos) => {
                         let pos: usize = pos.into();
@@ -2817,14 +2821,14 @@ impl Interpreter {
                         mask.setx(pos + 1);
 
                         reload_update(
-                            &mut self,
+                            &mut *self,
                             &mut to_process,
                             &mut updated_structs,
                             pos,
                             &ty_map,
-                        );
+                        )?;
 
-                        let func_pos = u24::from(self.mem.mem[pos + 1]);
+                        let func_pos = u24::from(self.mem.mem()[pos + 1]);
                         to_process.push(ShimValue::Fn(func_pos));
                     }
                     ShimValue::BoundNativeMethod(pos) => {
@@ -2838,12 +2842,12 @@ impl Interpreter {
                         mask.setx(pos + 1);
 
                         reload_update(
-                            &mut self,
+                            &mut *self,
                             &mut to_process,
                             &mut updated_structs,
                             pos,
                             &ty_map,
-                        );
+                        )?;
                     }
                     ShimValue::Environment(pos) => {
                         let og_pos = pos;
@@ -2851,7 +2855,10 @@ impl Interpreter {
                         if mask.is_set(pos) {
                             continue;
                         }
-                        let scope: &EnvScope = self.mem.get(og_pos);
+                        let (scope_data, scope_capacity, scope_used, scope_parent) = {
+                            let scope: &EnvScope = self.mem.get(og_pos);
+                            (scope.data, scope.capacity, scope.used, scope.parent)
+                        };
 
                         // Chunk of memory that store the EnvScope metadata
                         for bit in pos..(pos + std::mem::size_of::<EnvScope>().div_ceil(8)) {
@@ -2859,46 +2866,59 @@ impl Interpreter {
                         }
 
                         // Data block
-                        let start = usize::from(scope.data);
-                        let end = start + scope.capacity as usize;
+                        let start = usize::from(scope_data);
+                        let end = start + scope_capacity as usize;
                         for bit in start..end {
                             mask.setx(bit);
                         }
 
-                        // Walk the contiguous data block and collect values
-                        let bytes = scope.raw_bytes(&self.mem);
+                        // Walk the contiguous data block and collect values. Each
+                        // read below re-derives a short-lived byte view instead of
+                        // holding one across the loop, since alloc_and_set/
+                        // reload_update need a mutable borrow of self.mem.
                         let mut off = 0usize;
-                        while off < bytes.len() {
-                            let key_len = bytes[off] as usize;
-                            let value_offset = off + 1 + key_len;
-                            let val: ShimValue = {
+                        while off < scope_used as usize {
+                            let (value_offset, val) = {
+                                let word_count = (scope_used as usize).div_ceil(8);
+                                let u64_slice = &self.mem.mem()[start..start + word_count];
+                                let bytes: &[u8] = std::slice::from_raw_parts(
+                                    u64_slice.as_ptr() as *const u8,
+                                    scope_used as usize,
+                                );
+                                let key_len = bytes[off] as usize;
+                                let value_offset = off + 1 + key_len;
                                 let mut val_bytes = [0u8; 8];
                                 std::ptr::copy_nonoverlapping(
                                     bytes[value_offset..].as_ptr(),
                                     val_bytes.as_mut_ptr(),
                                     8,
                                 );
-                                std::mem::transmute(val_bytes)
+                                let val: ShimValue = std::mem::transmute(val_bytes);
+                                (value_offset, val)
                             };
-                            let pos = self.mem.alloc_and_set(val);
+
+                            let new_pos = self.mem.alloc_and_set(val, "hot reload env value")?;
                             reload_update(
-                                &mut self,
+                                &mut *self,
                                 &mut to_process,
                                 &mut updated_structs,
-                                pos,
+                                new_pos.into(),
                                 &ty_map,
+                            )?;
+                            let updated_val: ShimValue = *self.mem.get(new_pos);
+                            EnvScope::write_value_at(
+                                &mut self.mem,
+                                scope_data,
+                                scope_capacity,
+                                value_offset,
+                                updated_val,
                             );
-                            let updated_val: &ShimValue = self.mem.get(pos);
-                            std::ptr::copy_nonoverlapping(
-                                updated_val.as_ptr(),
-                                bytes[value_offset..].as_mut_ptr(),
-                                8,
-                            );
+
                             off = value_offset + 8;
                         }
 
-                        if scope.parent != 0.into() {
-                            to_process.push(ShimValue::Environment(scope.parent));
+                        if scope_parent != 0.into() {
+                            to_process.push(ShimValue::Environment(scope_parent));
                         }
                     }
                 }
@@ -2912,12 +2932,15 @@ impl Interpreter {
         let mut mmu = MMU::with_capacity(u24::from(config.memory_space_bytes / 8));
 
         let root_env = Environment::new_with_builtins(&mut mmu);
+        let ast = ast_from_text(&program.script)
+            .expect("Program script should already have been validated by compile_ast");
         Self {
             mem: mmu,
             program: Arc::new(program),
             singletons: HashMap::new(),
             root_env,
             debug_hook: None,
+            ast,
         }
     }
 
