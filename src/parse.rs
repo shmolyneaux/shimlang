@@ -18,7 +18,7 @@ impl Add<Span> for Span {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Node<T> {
     pub data: T,
     pub span: Span,
@@ -31,7 +31,7 @@ pub type ExprNode = Node<Expression>;
 pub type StatementNode = Node<Statement>;
 pub type Ident = Vec<u8>;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Primary {
     None,
     // Carried as i64 so a leading-minus fold can represent i32::MIN; it is
@@ -46,13 +46,13 @@ pub enum Primary {
     Expression(Box<ExprNode>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum UnaryOp {
     Not(Box<ExprNode>),
     Negate(Box<ExprNode>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum BinaryOp {
     Add(Box<ExprNode>, Box<ExprNode>),
     Subtract(Box<ExprNode>, Box<ExprNode>),
@@ -89,7 +89,7 @@ impl BinaryOp {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum BooleanOp {
     And(Box<ExprNode>, Box<ExprNode>),
     Or(Box<ExprNode>, Box<ExprNode>),
@@ -104,17 +104,17 @@ impl BooleanOp {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Block {
     pub(crate) stmts: Vec<StatementNode>,
     pub(crate) last_expr: Option<Box<ExprNode>>,
 }
 
 impl Block {
-    fn structs(&self) -> Vec<Struct> {
+    pub fn structs(&self) -> Vec<Struct> {
         let mut out = Vec::new();
-        for stmt in self.stmts {
-            match stmt.data {
+        for stmt in self.stmts.iter() {
+            match &stmt.data {
                 Statement::Struct(s) => out.push(s.clone()),
                 _ => (),
             }
@@ -133,7 +133,7 @@ pub enum CompareOp {
     Lte,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Expression {
     Primary(Primary),
     BooleanOp(BooleanOp),
@@ -158,7 +158,7 @@ pub enum Expression {
     Set(Vec<ExprNode>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Fn {
     pub(crate) ident: Option<Vec<u8>>,
     pub(crate) pos_args_required: Vec<Vec<u8>>,
@@ -166,7 +166,7 @@ pub struct Fn {
     pub(crate) body: Block,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Struct {
     pub(crate) ident: Vec<u8>,
     pub(crate) members_required: Vec<Vec<u8>>,
@@ -179,7 +179,7 @@ enum Reloadable {
     Struct(Struct),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum CompoundOp {
     Add,
     Subtract,
@@ -188,13 +188,13 @@ pub enum CompoundOp {
     Modulus,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Target {
     Ident(Vec<u8>),
     Tuple(Vec<Vec<u8>>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Statement {
     Let(Target, ExprNode),
     Assignment(Target, ExprNode),
@@ -214,12 +214,13 @@ pub enum Statement {
     Return(Option<ExprNode>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Ast {
     pub(crate) block: Block,
     pub(crate) script: Vec<u8>,
 }
 
+#[derive(Debug, Clone)]
 pub struct Conditional {
     pub(crate) conditional: ExprNode,
     pub(crate) if_body: Block,

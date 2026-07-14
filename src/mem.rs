@@ -203,7 +203,7 @@ pub struct MMU {
     pub free_blocks: BTreeMap<u32, Vec<u32>>,
 
     // The memory position beyond the furthest we've allocated
-    wilderness: u32,
+    pub wilderness: u32,
 
     // We don't store metadata about any allocations
     // It's up to the caller to know how much memory
@@ -1200,18 +1200,5 @@ impl<'a> GC<'a> {
 
         self.interpreter.mem.free_blocks = free_blocks;
         self.interpreter.mem.wilderness = new_wilderness;
-    }
-}
-
-pub(crate) struct MemScanner<'a> {
-    pub interpreter: &'a mut Interpreter,
-    pub mask: Bitmask,
-}
-
-    pub(crate) fn scan(
-        &mut self,
-        mut vals: Vec<ShimValue>
-        f: impl Fn<&mut ShimValue, ()>
-    ) {
     }
 }

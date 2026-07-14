@@ -1,5 +1,5 @@
 use std::any::{Any, TypeId, type_name};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::mem::size_of;
 use std::sync::Arc;
@@ -392,7 +392,7 @@ impl Environment {
 
         loop {
             if current_scope_pos == 0 {
-                break;
+                break;/
             }
 
             let (parent, value_offset) = unsafe {
@@ -2526,43 +2526,89 @@ impl Interpreter {
         let mut mmu = MMU::with_capacity(u24::from(config.memory_space_bytes / 8));
 
         let root_env = Environment::new_with_builtins(&mut mmu);
-        Self {
-            mem: mmu,
-            program: Arc::new(program),
-            singletons: HashMap::new(),
-            root_env,
-            debug_hook: None,
-        }
+        Ok(
+            Self {
+                ast,
+                mem: mmu,
+                program: Arc::new(program),
+                singletons: HashMap::new(),
+                root_env,
+                debug_hook: None,
+            }
+        )
     }
 
     pub fn hot_reload_from_script(&mut self, script: &[u8]) -> Result<(), String> {
         let ast = ast_from_text(script)?;
         let program = compile_ast(&ast)?;
 
-        let old_ast = mem::replace(&mut self.ast, ast.clone());
-        self.program = program;
+        let old_ast = std::mem::replace(&mut self.ast, ast.clone());
+        self.program = Arc::new(program);
 
-        let old_env = mem::replace(
+        let old_env = std::mem::replace(
             &mut self.root_env,
-            Environment::new_with_builtins(&mut self.mmu),
+            Environment::new_with_builtins(&mut self.mem),
         );
 
         self.execute()?;
 
-        let mut old_structs = HashMap::new();
-        let mut new_structs = HashMap::new();
+        let mut old_structs: HashMap<Vec<u8>, Struct> = HashMap::new();
+        let mut new_structs: HashMap<Vec<u8>, Struct> = HashMap::new();
 
+        // TODO: handle the case where there are multiple struct definitions with the same ident
         for decl in old_ast.block.structs() {
-            old_structs[decl.ident.clone()] = decl;
+            old_structs[&decl.ident] = decl;
         }
 
+        // TODO: handle the case where there are multiple struct definitions with the same ident
         for decl in ast.block.structs() {
-            new_structs[decl.ident.clone()] = decl;
+            new_structs[&decl.ident] = decl;
+        }
+
+        let mut ty_map: HashMap<u24, ReloadStructTransform> = HashMap::new();
+        for (struct_name, old_decl) in old_structs.iter() {
+            let new_decl = if let Some(new_decl) = new_structs.get(struct_name) {
+                new_decl
+            } else {
+                continue;
+            };
+            let old_pos = match old_env.get(&self.mem, struct_name) {
+                Some(ShimValue::StructDef(pos)) => pos,
+                Some(_) => return Err(format!("Struct {} in old_env is not a StructDef", debug_u8s(struct_name))),
+                None =>  return Err(format!("Struct {} in old_env does not exist!", debug_u8s(struct_name))),
+            };
+            let new_pos = match self.root_env.get(&self.mem, struct_name) {
+                Some(ShimValue::StructDef(pos)) => pos,
+                Some(_) => return Err(format!("Struct {} in new_env is not a StructDef", debug_u8s(struct_name))),
+                None =>  return Err(format!("Struct {} in new_env does not exist!", debug_u8s(struct_name))),
+            };
+
+            let mut old_members: Vec<Vec<u8>> = Vec::new();
+            for mem in old_decl.members_required {
+                old_members.push(mem.clone());
+            }
+            for (mem, _) in old_decl.members_optional {
+                old_members.push(mem.clone());
+            }
+
+            let mut new_members: Vec<Vec<u8>> = Vec::new();
+            for mem in new_decl.members_required {
+                new_members.push(mem.clone());
+            }
+            for (mem, _) in new_decl.members_optional {
+                new_members.push(mem.clone());
+            }
+
+            ty_map[&old_pos] = if old_members == new_members {
+                ReloadStructTransform::NoOp(new_pos)
+            } else {
+                ReloadStructTransform::Realloc(new_pos)
+            }
         }
 
         // Points from the old pos to the new pos
         let mut updated_structs = HashMap::new();
-        let mut mask = Bitmask::new(interpreter.mem.wilderness as usize);
+        let mut mask = Bitmask::new(self.mem.wilderness as usize);
 
         let mut to_process = vec![ShimValue::Environment(u24::from(old_env.current_scope))];
         unsafe {
@@ -2584,7 +2630,7 @@ impl Interpreter {
                         mask.setx(pos);
 
                         // Mark the function name string
-                        let shim_fn: &ShimFn = self.interpreter.mem.get(fn_pos);
+                        let shim_fn: &ShimFn = self.mem.get(fn_pos);
 
                         // Mark the captured scope if present
                         if shim_fn.captured_scope != 0 {
@@ -2597,7 +2643,7 @@ impl Interpreter {
 
                         for idx in pos..(pos + len) {
                             reload_update(
-                                &mut self.interpreter,
+                                &mut self,
                                 &mut to_process,
                                 &mut updated_structs,
                                 idx,
@@ -2613,11 +2659,11 @@ impl Interpreter {
                         }
                         mask.setx(pos);
 
-                        let lst: &ShimList = self.interpreter.mem.get(pos.into());
+                        let lst: &ShimList = self.mem.get(pos.into());
                         let contents_pos = usize::from(lst.data);
                         for idx in contents_pos..(contents_pos + lst.capacity()) {
                             reload_update(
-                                &mut self.interpreter,
+                                &mut self,
                                 &mut to_process,
                                 &mut updated_structs,
                                 idx,
@@ -2631,8 +2677,8 @@ impl Interpreter {
                         if mask.is_set(pos) {
                             continue;
                         }
-                        let dict: &ShimDict = std::mem::transmute(&self.interpreter.mem.mem[pos]);
-                        let u64_slice = &self.interpreter.mem.mem[usize::from(dict.entries)
+                        let dict: &ShimDict = &self.mem.get(pos);
+                        let u64_slice = &self.mem.mem[usize::from(dict.entries)
                             ..usize::from(dict.entries) + 3 * (dict.entry_count as usize)];
                         let entries: &mut [DictEntry] = std::slice::from_raw_parts_mut(
                             u64_slice.as_ptr() as *const DictEntry,
@@ -2649,7 +2695,7 @@ impl Interpreter {
                                 // so we don't need to call reload_update for entry.key
                                 to_process.push(entry.key);
                                 reload_update(
-                                    &mut self.interpreter,
+                                    &mut self,
                                     &mut to_process,
                                     &mut updated_structs,
                                     entry_idx*3 + value_offset,
@@ -2687,7 +2733,7 @@ impl Interpreter {
                         if mask.is_set(pos) {
                             continue;
                         }
-                        let set: &ShimSet = std::mem::transmute(&self.interpreter.mem.mem[pos]);
+                        let set: &ShimSet = self.mem.get(pos.into());
 
                         // Mark the space for the ShimSet struct
                         for idx in pos..(pos + std::mem::size_of::<ShimSet>().div_ceil(8)) {
@@ -2706,7 +2752,7 @@ impl Interpreter {
                         if mask.is_set(pos) {
                             continue;
                         }
-                        let def: &StructDef = self.interpreter.mem.get(pos.into());
+                        let def: &StructDef = self.mem.get(pos.into());
                         for idx in pos..(pos + def.mem_size()) {
                             mask.setx(idx);
                         }
@@ -2721,11 +2767,11 @@ impl Interpreter {
                         if mask.is_set(pos) {
                             continue;
                         }
-                        let def: &StructDef = self.interpreter.mem.get(def_pos);
+                        let def: &StructDef = self.mem.get(def_pos);
 
                         for idx in pos..(pos + def.member_count as usize) {
                             reload_update(
-                                &mut self.interpreter,
+                                &mut self,
                                 &mut to_process,
                                 &mut updated_structs,
                                 idx,
@@ -2748,7 +2794,7 @@ impl Interpreter {
                             continue;
                         }
                         let type_idx: usize = type_idx.into();
-                        let info = &self.interpreter.mem.native_type_registry[type_idx];
+                        let info = &self.mem.native_type_registry[type_idx];
                         let native_word_count = info.word_count;
                         for idx in pos..(pos + native_word_count) {
                             mask.setx(idx);
@@ -2756,7 +2802,7 @@ impl Interpreter {
 
                         // Reconstruct a fat pointer to call gc_vals() without a Box.
                         let vtable = info.vtable;
-                        let data_ptr = &self.interpreter.mem.mem[pos] as *const u64 as *const ();
+                        let data_ptr = &self.mem.mem[pos] as *const u64 as *const ();
                         let fat_ptr: (*const (), *const ()) = (data_ptr, vtable);
                         let native_ref: &dyn ShimNative = std::mem::transmute(fat_ptr);
                         vals.extend(native_ref.gc_vals());
@@ -2771,14 +2817,14 @@ impl Interpreter {
                         mask.setx(pos + 1);
 
                         reload_update(
-                            &mut self.interpreter,
+                            &mut self,
                             &mut to_process,
                             &mut updated_structs,
                             pos,
                             &ty_map,
                         );
 
-                        let func_pos = u24::from(self.interpreter.mem.mem[pos + 1]);
+                        let func_pos = u24::from(self.mem.mem[pos + 1]);
                         to_process.push(ShimValue::Fn(func_pos));
                     }
                     ShimValue::BoundNativeMethod(pos) => {
@@ -2792,7 +2838,7 @@ impl Interpreter {
                         mask.setx(pos + 1);
 
                         reload_update(
-                            &mut self.interpreter,
+                            &mut self,
                             &mut to_process,
                             &mut updated_structs,
                             pos,
@@ -2805,7 +2851,7 @@ impl Interpreter {
                         if mask.is_set(pos) {
                             continue;
                         }
-                        let scope: &EnvScope = self.interpreter.mem.get(og_pos);
+                        let scope: &EnvScope = self.mem.get(og_pos);
 
                         // Chunk of memory that store the EnvScope metadata
                         for bit in pos..(pos + std::mem::size_of::<EnvScope>().div_ceil(8)) {
@@ -2820,7 +2866,7 @@ impl Interpreter {
                         }
 
                         // Walk the contiguous data block and collect values
-                        let bytes = scope.raw_bytes(&self.interpreter.mem);
+                        let bytes = scope.raw_bytes(&self.mem);
                         let mut off = 0usize;
                         while off < bytes.len() {
                             let key_len = bytes[off] as usize;
@@ -2834,9 +2880,9 @@ impl Interpreter {
                                 );
                                 std::mem::transmute(val_bytes)
                             };
-                            let pos = self.interpreter.mem.alloc_and_set(val);
+                            let pos = self.mem.alloc_and_set(val);
                             reload_update(
-                                &mut self.interpreter,
+                                &mut self,
                                 &mut to_process,
                                 &mut updated_structs,
                                 pos,
@@ -2858,6 +2904,8 @@ impl Interpreter {
                 }
             }
         }
+
+        Ok(())
     }
 
     pub fn create(config: &Config, program: Program) -> Self {
@@ -3992,67 +4040,83 @@ fn reload_update(
     interpreter: &mut Interpreter,
     to_process: &mut Vec<ShimValue>,
     updated_structs: &mut HashMap<u24, u24>,
-    idx: u64,
+    idx: usize,
     ty_map: &HashMap<u24, ReloadStructTransform>
 ) -> Result<(), String>
 {
-    let mut val = interpreter.mem.get_mut(idx);
+    unsafe {
+        let val = match *interpreter.mem.get_mut(idx.into()) {
+            ShimValue::Struct(ty, pos) => {
+                match ty_map.get(&ty) {
+                    None => ShimValue::Struct(ty, pos), // The struct isn't hot reloadable
+                    Some(ReloadStructTransform::NoOp(new_ty)) => {
+                        ShimValue::Struct(*new_ty, pos)
+                        // Don't need to change updated_structs since the struct data
+                        // doesn't change
+                    }
+                    Some(ReloadStructTransform::Realloc(new_ty)) => {
+                        if updated_structs.contains_key(&pos) {
+                            let new_pos = updated_structs.get(&pos).unwrap();
+                            ShimValue::Struct(*new_ty, *new_pos)
+                        } else {
+                            let old_struct_def = ShimValue::StructDef(ty).struct_def(interpreter)?;
+                            let new_struct_def = ShimValue::StructDef(*new_ty).struct_def(interpreter)?;
 
-    match val {
-        ShimValue::Struct(&mut ty, &mut pos) => {
-            match ty_map.get(ty) {
-                None => (), // The struct isn't hot reloadable
-                Some(NoOp(new_ty)) => {
-                    *ty = *new_ty;
-                    // Don't need to change updated_structs since the struct data
-                    // doesn't change
-                }
-                Some(Realloc(new_ty)) => {
-                    if updated_structs.contains(pos) {
-                        let new_pos = updated_structs.get(pos).unwrap();
-                        *ty = *new_ty;
-                        *pos = new_pos;
-                    } else {
-                        let old_struct_def = ShimValue::StructDef(ty).struct_def()?
-                        let new_struct_def = ShimValue::StructDef(new_ty).struct_def()?
-
-                        // Get the members of the new struct shape
-                        let mut new_struct_members = HashSet::new();
-                        for (attr, loc) in new_struct_def.lookup.iter() {
-                            if let StructAttribute::MemberInstanceOffset(_) = loc {
-                                new_struct_members.add(attr);
-                            }
-                        }
-
-                        // Add the members of the old struct to the kwargs if the
-                        // member is expected by the new struct
-                        let mut args = ArgBundle::new();
-                        for (attr, loc) in def.lookup.iter() {
-                            if let StructAttribute::MemberInstanceOffset(offset) = loc {
-                                if new_struct_members.contains(attr) {
-                                    args.kwargs.insert(
-                                        attr,
-                                        interpreter.mem.get(pos.into() + offset),
-                                    );
+                            // Get the members of the new struct shape
+                            let mut new_struct_members = HashSet::new();
+                            for (attr, loc) in new_struct_def.lookup.iter() {
+                                if let StructAttribute::MemberInstanceOffset(_) = loc {
+                                    new_struct_members.insert(attr);
                                 }
                             }
-                        }
 
-                        let s: ShimValue = ShimValue::StructDef(new_ty).call(interpreter, args)?;
-                        if let ShimValue::Struct(new_ty, new_pos) = s {
-                            *ty = *new_ty;
-                            *pos = new_pos;
-                        } else {
-                            return Err(format!("Call to presumed StructDef {new_ty:?} yielded {s:?}"));
+                            // Add the members of the old struct to the kwargs if the
+                            // member is expected by the new struct
+                            let mut args = ArgBundle::new();
+                            for (attr, loc) in old_struct_def.lookup.iter() {
+                                if let StructAttribute::MemberInstanceOffset(offset) = loc {
+                                    if new_struct_members.contains(attr) {
+                                        let pos: usize = pos.into();
+                                        let pos = pos + *offset as usize;
+                                        let pos_with_offset: u24 = pos.into();
+                                        args.kwargs.push(
+                                            (
+                                                attr.clone(),
+                                                *interpreter.mem.get(pos_with_offset),
+                                            )
+                                        );
+                                    }
+                                }
+                            }
+
+                            let s: ShimValue = match ShimValue::StructDef(*new_ty).call(interpreter, &mut args)? {
+                                CallResult::ReturnValue(val) => val,
+                                CallResult::PC(pc, captured_scope) => {
+                                    let mut new_env = Environment::with_scope(captured_scope);
+                                    interpreter.execute_bytecode_extended(
+                                        &mut (pc as usize),
+                                        args,
+                                        &mut new_env,
+                                    )?
+                                }
+                            };
+
+                            if let ShimValue::Struct(new_ty, new_pos) = s {
+                                ShimValue::Struct(new_ty, new_pos)
+                            } else {
+                                return Err(format!("Call to presumed StructDef {new_ty:?} yielded {s:?}"));
+                            }
                         }
                     }
                 }
             }
-        }
-        _ => (),
-    }
+            val => val,
+        };
 
-    to_process.push(val);
+        to_process.push(val);
+
+        Ok(())
+    }
 }
 
 /**
