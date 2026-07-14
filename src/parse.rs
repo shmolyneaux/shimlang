@@ -110,6 +110,19 @@ pub struct Block {
     pub(crate) last_expr: Option<Box<ExprNode>>,
 }
 
+impl Block {
+    fn structs(&self) -> Vec<Struct> {
+        let mut out = Vec::new();
+        for stmt in self.stmts {
+            match stmt.data {
+                Statement::Struct(s) => out.push(s.clone()),
+                _ => (),
+            }
+        }
+        out
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum CompareOp {
     Eq,
@@ -159,6 +172,11 @@ pub struct Struct {
     pub(crate) members_required: Vec<Vec<u8>>,
     pub(crate) members_optional: Vec<(Vec<u8>, ExprNode)>,
     pub(crate) methods: Vec<Fn>,
+}
+
+enum Reloadable {
+    Fn(Fn),
+    Struct(Struct),
 }
 
 #[derive(Debug)]

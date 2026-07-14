@@ -699,6 +699,11 @@ impl Bitmask {
         self.data[block_idx] |= 1 << bit_offset;
     }
 
+    pub fn setx(&mut self, index: usize) {
+        let (block_idx, bit_offset) = self.pos(index);
+        self.data[block_idx] |= 1 << bit_offset;
+    }
+
     pub fn is_set(&self, index: usize) -> bool {
         let (block_idx, bit_offset) = self.pos(index);
         (self.data[block_idx] & (1 << bit_offset)) != 0
@@ -1195,5 +1200,18 @@ impl<'a> GC<'a> {
 
         self.interpreter.mem.free_blocks = free_blocks;
         self.interpreter.mem.wilderness = new_wilderness;
+    }
+}
+
+pub(crate) struct MemScanner<'a> {
+    pub interpreter: &'a mut Interpreter,
+    pub mask: Bitmask,
+}
+
+    pub(crate) fn scan(
+        &mut self,
+        mut vals: Vec<ShimValue>
+        f: impl Fn<&mut ShimValue, ()>
+    ) {
     }
 }

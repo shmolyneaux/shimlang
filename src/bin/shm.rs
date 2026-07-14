@@ -131,30 +131,24 @@ fn run() -> Result<(), String> {
         let mut interpreter = shimlang::Interpreter::create(&Config::default(), program);
 
         for (idx, script) in args.scripts.iter().enumerate() {
-            let contents = if !args.script_on_command_line {
-                let mut file = File::open(&script).map_err(|e| format!("{:?}", e))?;
-                let mut contents = Vec::new();
-                file.read_to_end(&mut contents)
-                    .map_err(|e| format!("{:?}", e))?;
-                contents
-            } else {
-                script.clone().into_bytes()
-            };
-
+            let mut file = File::open(&script).map_err(|e| format!("{:?}", e))?;
+            let mut contents = Vec::new();
+            file.read_to_end(&mut contents)
+                .map_err(|e| format!("{:?}", e))?;
             match std::str::from_utf8(&contents) {
                 Ok(_) => (),
                 Err(e) => return Err(format!("Script is not utf8 {:?}", e)),
             }
 
-            let ast = match shimlang::ast_from_text(&contents) {
-                Ok(ast) => ast,
-                Err(msg) => {
-                    eprintln!("Parse Error:\n{msg}");
-                    return Err("Failed to parse script".to_string());
-                }
-            };
-            let program = shimlang::compile_ast(&ast)?;
             if idx == 0 {
+                let ast = match shimlang::ast_from_text(&contents) {
+                    Ok(ast) => ast,
+                    Err(msg) => {
+                        eprintln!("Parse Error:\n{msg}");
+                        return Err("Failed to parse script".to_string());
+                    }
+                };
+                let program = shimlang::compile_ast(&ast)?;
                 // Create a new interpreter for the initial load
                 interpreter = shimlang::Interpreter::create(&Config::default(), program);
                 match interpreter.execute() {
@@ -169,7 +163,7 @@ fn run() -> Result<(), String> {
                     }
                 };
             } else {
-                todo!("Implement hot reloading");
+                interpreter.hot_reload_from_script(contents)?;
                 // Execute the new script in the existing interpreter
                 // Get the AST of the old script
                 // - Find the _top-level_ struct definitions and variable assignments
