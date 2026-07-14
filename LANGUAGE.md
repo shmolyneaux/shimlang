@@ -2316,24 +2316,3 @@ occurs, the developer can inspect the full program state, step backward through
 execution, fix the code, and resume — without restarting the program. GDScript
 takes a similar approach by treating errors as signals for the development
 environment rather than conditions to catch at runtime.
-
-## Suggested Improvements
-
-The following changes would improve the Shimlang experience for users:
-
-- **Error handling:** The absence of `try`/`catch` is a deliberate design
-  choice (see [Error Handling Philosophy](#error-handling-philosophy)). Future
-  work in this area focuses on the time-travelling debugger and expanding the
-  set of `try_` variants for operations that can fail with user-supplied data.
-- **Module / import system:** All code lives in a single file. An import
-  system would allow organizing projects into reusable modules.
-- **Variadic arguments (`*args`, `**kwargs`):** Functions cannot currently
-  accept a variable number of positional or keyword arguments.
-- **Standard library expansion:** Built-in support for file I/O and additional
-  collection, path, and text-processing helpers would greatly increase the
-  language's utility.
-- **REPL improvements:** The interactive REPL could benefit from line editing,
-  history, and multi-line input support.
-- **Better error messages:** While error messages include source location,
-  they could be improved with suggestions, "did you mean?" hints, and
-  stack traces for runtime errors in nested function calls.
