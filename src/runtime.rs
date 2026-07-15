@@ -2925,6 +2925,29 @@ impl Interpreter {
             }
         }
 
+        // Copy the state (let) to the new env
+
+        let mut old_state: HashMap<Vec<u8>, ShimValue> = HashMap::new();
+        for ident in old_ast.block.assigned_idents() {
+            match old_env.get(&self.mem, &ident) {
+                Some(val) => {
+                    old_state.insert(ident.to_vec(), val);
+                }
+                None => {
+                    return Err(format!("Didn't find expected ident {} in env", debug_u8s(&ident)));
+                }
+            }
+        }
+
+        for ident in ast.block.assigned_idents() {
+            if let Some(val) = old_state.get(&ident) {
+                // `?` is okay since any assigned idents in the new ast should
+                // exist in the env.
+                // TODO: How to deal with captured values...?
+                self.update_in_root_env(&ident, *val)?;
+            }
+        }
+
         Ok(())
     }
 

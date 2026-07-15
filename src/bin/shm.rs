@@ -29,17 +29,6 @@ struct Args {
     command: Command,
 }
 
-/// An ordered list of script snapshots for a hot-reload session. Each snapshot
-/// is a full version of the program; the reload driver runs one, calls its
-/// `loop` (if defined), then swaps in the next while preserving interpreter
-/// state between them.
-#[derive(Debug, Default)]
-struct HotReloadSession {
-    // Populated by the CLI; consumed by the (not-yet-implemented) reload driver.
-    #[allow(dead_code)]
-    scripts: Vec<String>,
-}
-
 fn print_help() {
     println!("Usage: shm [OPTIONS] [FILE]...");
     println!();
@@ -107,19 +96,6 @@ fn parse_args() -> Result<Args, String> {
 
 fn run() -> Result<(), String> {
     let args = parse_args()?;
-
-    if args.hot_reload {
-        // Hot-reload session: the positional scripts are successive snapshots of
-        // the program, run in order with interpreter state preserved between
-        // them. Collect them for the reload driver. The actual reload/execution
-        // loop is not wired up yet.
-        let session = HotReloadSession {
-            scripts: args.scripts.clone(),
-        };
-        let _ = session;
-        // TODO: drive the hot-reload loop over `session.scripts`.
-        return Ok(());
-    }
 
     if args.hot_reload {
         if !matches!(args.command, Command::Execute) {

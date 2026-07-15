@@ -121,6 +121,22 @@ impl Block {
         }
         out
     }
+
+    pub fn assigned_idents(&self) -> Vec<Ident> {
+        let mut out = Vec::new();
+        for stmt in self.stmts.iter() {
+            match &stmt.data {
+                Statement::Let(Target::Ident(ident), _expr) => out.push(ident.clone()),
+                Statement::Let(Target::Tuple(idents), _expr) => {
+                    for ident in idents {
+                        out.push(ident.clone())
+                    }
+                }
+                _ => (),
+            }
+        }
+        out
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
