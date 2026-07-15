@@ -1,19 +1,15 @@
 # ISSUES
-- Update alloc to use proper data structure
 - Closure not capturing shadowed variable
-- Remove mandatory semicolons
-- Last expression for a block can't be a closure
 
 # MAJOR
 - Type annotations
 - AOT compilation
 
 # MINOR
-- `*args`, and `**kwargs`
+- Hot reloading
 - Type annotations
-- Runtime type checking
-- Static type checking
-- Add value type for strings 6 bytes or less?
+  - Runtime type checking
+  - Static type checking
 - How do we time-travel resources provided by external systems?
   - Examples
     - Models
