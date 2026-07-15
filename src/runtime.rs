@@ -2613,6 +2613,10 @@ impl Interpreter {
         let mut to_process = vec![ShimValue::Environment(u24::from(old_env.current_scope))];
         unsafe {
             while !to_process.is_empty() {
+                // We can allocate while reloading to execute default expressions
+                // for updated structs so we need to ensure our bitmask expands
+                // if we grow our memory.
+                mask.ensure_capacity(self.mem.wilderness as usize);
                 match to_process.pop().unwrap() {
                     ShimValue::Integer(_)
                     | ShimValue::Float(_)

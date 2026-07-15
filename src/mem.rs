@@ -686,6 +686,13 @@ impl Bitmask {
         }
     }
 
+    pub fn ensure_capacity(&mut self, num_bits: usize) {
+        let blocks = num_bits.div_ceil(64);
+        while self.data.len() < blocks {
+            self.data.push(0);
+        }
+    }
+
     #[cfg(feature = "gc_debug")]
     pub fn set(&mut self, index: usize, description: &MemDescriptor) {
         let (block_idx, bit_offset) = self.pos(index);
