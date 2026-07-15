@@ -4067,6 +4067,7 @@ mod tests {
     }
 }
 
+#[derive(Debug)]
 enum ReloadStructTransform {
     NoOp(u24),   // Just point to new ty, the data doesn't need to change
     Realloc(u24),
@@ -4091,7 +4092,7 @@ fn reload_update(
 ) -> Result<(), String>
 {
     unsafe {
-        let val = match *interpreter.mem.get_mut(idx.into()) {
+        let val = match *interpreter.mem.get(idx.into()) {
             ShimValue::Struct(ty, pos) => {
                 match ty_map.get(&ty) {
                     None => ShimValue::Struct(ty, pos), // The struct isn't hot reloadable
@@ -4159,6 +4160,7 @@ fn reload_update(
             val => val,
         };
 
+        *interpreter.mem.get_mut(idx.into()) = val;
         to_process.push(val);
 
         Ok(())
