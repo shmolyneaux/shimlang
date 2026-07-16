@@ -122,6 +122,17 @@ impl Block {
         out
     }
 
+    pub fn fns(&self) -> Vec<Fn> {
+        let mut out = Vec::new();
+        for stmt in self.stmts.iter() {
+            match &stmt.data {
+                Statement::Fn(f) => out.push(f.clone()),
+                _ => (),
+            }
+        }
+        out
+    }
+
     pub fn assigned_idents(&self) -> Vec<Ident> {
         let mut out = Vec::new();
         for stmt in self.stmts.iter() {

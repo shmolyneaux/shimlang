@@ -2609,37 +2609,52 @@ impl Interpreter {
             });
         }
 
-        let mut new_fns = Vec::new()
-        let mut old_fns = HashSet::new()
+        let mut new_fns: Vec<Vec<u8>> = Vec::new();
+        let mut old_fns = HashSet::new();
         let mut fn_map: HashMap<u24, u24> = HashMap::new();
 
         for decl in old_ast.block.fns() {
-            old_fns.insert(decl.ident.clone());
+            if let Some(ident) = decl.ident {
+                old_fns.insert(ident.clone());
+            }
         }
         for decl in ast.block.fns() {
-            new_fns.push(decl.ident.clone());
+            if let Some(ident) = decl.ident {
+                new_fns.push(ident.clone());
+            }
         }
 
         for fn_ident in new_fns {
-            if !old_fns.contains(fn_ident) {
+            let new_pos = match self.root_env.get(&self.mem, &fn_ident) {
+                Some(ShimValue::Fn(pos)) => pos,
+                Some(_) => return Err(format!("Fn {} in root env is not a Fn", debug_u8s(&fn_ident))),
+                None =>  return Err(format!("Fn {} in root env does not exist!", debug_u8s(&fn_ident))),
+            };
+
+            // Map `new_pos` to itself so that we can identify any functions that
+            // can't be updated (and we fail in this case, since we would be pointing
+            // at old code that's not possible to reference anymore)
+            fn_map.insert(new_pos, new_pos);
+
+            if !old_fns.contains(&fn_ident) {
                 continue;
             }
-            let old_pos = match old_env.get(&self.mem, fn_ident) {
+            let old_pos = match old_env.get(&self.mem, &fn_ident) {
                 Some(ShimValue::Fn(pos)) => pos,
-                Some(_) => return Err(format!("Fn {} in old_env is not a Fn", debug_u8s(fn_ident))),
-                None =>  return Err(format!("Fn {} in old_env does not exist!", debug_u8s(fn_ident))),
+                Some(_) => return Err(format!("Fn {} in old_env is not a Fn", debug_u8s(&fn_ident))),
+                None =>  return Err(format!("Fn {} in old_env does not exist!", debug_u8s(&fn_ident))),
             };
-            let new_pos = match self.root_env.get(&self.mem, fn_ident) {
-                Some(ShimValue::Fn(pos)) => pos,
-                Some(_) => return Err(format!("Fn {} in root env is not a Fn", debug_u8s(fn_ident))),
-                None =>  return Err(format!("Fn {} in root env does not exist!", debug_u8s(fn_ident))),
-            };
+
+            // Map the old pos to a new pos so that if it's called the new code runs
+            fn_map.insert(old_pos, new_pos);
+
         }
 
         // Points from the old pos to the new pos
         let mut updated_structs = HashMap::new();
         let mut mask = Bitmask::new(self.mem.wilderness as usize);
 
+        // Update all the structs
         let mut to_process = vec![ShimValue::Environment(u24::from(old_env.current_scope))];
         unsafe {
             while !to_process.is_empty() {
@@ -2676,7 +2691,7 @@ impl Interpreter {
                         let len: usize = len.into();
 
                         for idx in pos..(pos + len) {
-                            reload_update(
+                            reload_update_struct(
                                 &mut *self,
                                 &mut to_process,
                                 &mut updated_structs,
@@ -2696,7 +2711,7 @@ impl Interpreter {
                         let lst: &ShimList = self.mem.get(pos.into());
                         let contents_pos = usize::from(lst.data);
                         for idx in contents_pos..(contents_pos + lst.capacity()) {
-                            reload_update(
+                            reload_update_struct(
                                 &mut *self,
                                 &mut to_process,
                                 &mut updated_structs,
@@ -2729,9 +2744,9 @@ impl Interpreter {
                         for (entry_idx, entry) in entries[..count].iter().enumerate() {
                             if !entry.key.is_uninitialized() {
                                 // Structs aren't hashable, so can't be a key,
-                                // so we don't need to call reload_update for entry.key
+                                // so we don't need to call reload_update_struct for entry.key
                                 to_process.push(entry.key);
-                                reload_update(
+                                reload_update_struct(
                                     &mut *self,
                                     &mut to_process,
                                     &mut updated_structs,
@@ -2808,7 +2823,7 @@ impl Interpreter {
                         let def: &StructDef = self.mem.get(def_pos);
 
                         for idx in pos..(pos + def.member_count as usize) {
-                            reload_update(
+                            reload_update_struct(
                                 &mut *self,
                                 &mut to_process,
                                 &mut updated_structs,
@@ -2854,7 +2869,7 @@ impl Interpreter {
                         mask.setx(pos);
                         mask.setx(pos + 1);
 
-                        reload_update(
+                        reload_update_struct(
                             &mut *self,
                             &mut to_process,
                             &mut updated_structs,
@@ -2875,7 +2890,7 @@ impl Interpreter {
                         // Pointer to the fn
                         mask.setx(pos + 1);
 
-                        reload_update(
+                        reload_update_struct(
                             &mut *self,
                             &mut to_process,
                             &mut updated_structs,
@@ -2909,7 +2924,7 @@ impl Interpreter {
                         // Walk the contiguous data block and collect values. Each
                         // read below re-derives a short-lived byte view instead of
                         // holding one across the loop, since alloc_and_set/
-                        // reload_update need a mutable borrow of self.mem.
+                        // reload_update_struct need a mutable borrow of self.mem.
                         let mut off = 0usize;
                         while off < scope_used as usize {
                             let (value_offset, val) = {
@@ -2932,7 +2947,7 @@ impl Interpreter {
                             };
 
                             let new_pos = self.mem.alloc_and_set(val, "hot reload env value")?;
-                            reload_update(
+                            reload_update_struct(
                                 &mut *self,
                                 &mut to_process,
                                 &mut updated_structs,
@@ -2979,6 +2994,326 @@ impl Interpreter {
                 // exist in the env.
                 // TODO: How to deal with captured values...?
                 self.update_in_root_env(&ident, *val)?;
+            }
+        }
+
+        // Update function references to point to the new locations
+        let mut to_process = vec![ShimValue::Environment(u24::from(self.root_env.current_scope))];
+        unsafe {
+            while !to_process.is_empty() {
+                // We can allocate while reloading to execute default expressions
+                // for updated structs so we need to ensure our bitmask expands
+                // if we grow our memory.
+                mask.ensure_capacity(self.mem.wilderness as usize);
+                match to_process.pop().unwrap() {
+                    ShimValue::Integer(_)
+                    | ShimValue::Float(_)
+                    | ShimValue::Bool(_)
+                    | ShimValue::String(..)
+                    | ShimValue::Unit
+                    | ShimValue::None
+                    | ShimValue::StopIteration
+                    | ShimValue::Uninitialized => (),
+                    ShimValue::Fn(fn_pos) => {
+                        let pos: usize = fn_pos.into();
+                        if mask.is_set(pos) {
+                            continue;
+                        }
+                        mask.setx(pos);
+
+                        // Mark the function name string
+                        let shim_fn: &ShimFn = self.mem.get(fn_pos);
+
+                        // Mark the captured scope if present
+                        if shim_fn.captured_scope != 0 {
+                            to_process.push(ShimValue::Environment(shim_fn.captured_scope.into()));
+                        }
+                    }
+                    ShimValue::Tuple(len, pos) => {
+                        let pos: usize = pos.into();
+                        let len: usize = len.into();
+
+                        for idx in pos..(pos + len) {
+                            reload_update_fn(
+                                &mut *self,
+                                &mut to_process,
+                                &mut updated_structs,
+                                idx,
+                                &fn_map,
+                            )?;
+                            mask.setx(idx);
+                        }
+                    }
+                    ShimValue::List(pos) => {
+                        let pos: usize = pos.into();
+                        if mask.is_set(pos) {
+                            continue;
+                        }
+                        mask.setx(pos);
+
+                        let lst: &ShimList = self.mem.get(pos.into());
+                        let contents_pos = usize::from(lst.data);
+                        for idx in contents_pos..(contents_pos + lst.capacity()) {
+                            reload_update_fn(
+                                &mut *self,
+                                &mut to_process,
+                                &mut updated_structs,
+                                idx,
+                                &fn_map,
+                            )?;
+                            mask.setx(idx);
+                        }
+                    }
+                    ShimValue::Dict(pos) => {
+                        let pos: usize = pos.into();
+                        if mask.is_set(pos) {
+                            continue;
+                        }
+                        let (dict_entries, dict_entry_count) = {
+                            let dict: &ShimDict = self.mem.get(pos.into());
+                            (dict.entries, dict.entry_count)
+                        };
+                        let u64_slice = &self.mem.mem()[usize::from(dict_entries)
+                            ..usize::from(dict_entries) + 3 * (dict_entry_count as usize)];
+                        let entries: &[DictEntry] = std::slice::from_raw_parts(
+                            u64_slice.as_ptr() as *const DictEntry,
+                            u64_slice.len() / 3,
+                        );
+
+                        let value_offset = std::mem::offset_of!(DictEntry, value);
+
+                        // Push the keys/vals
+                        let count: usize = dict_entry_count as usize;
+                        for (entry_idx, entry) in entries[..count].iter().enumerate() {
+                            if !entry.key.is_uninitialized() {
+                                // Structs aren't hashable, so can't be a key,
+                                // so we don't need to call reload_update_fn for entry.key
+                                to_process.push(entry.key);
+                                reload_update_fn(
+                                    &mut *self,
+                                    &mut to_process,
+                                    &mut updated_structs,
+                                    entry_idx*3 + value_offset,
+                                    &fn_map,
+                                )?;
+                            }
+                        }
+
+                        // Mark the space for the dict struct
+                        for idx in pos..(pos + std::mem::size_of::<ShimDict>().div_ceil(8)) {
+                            mask.setx(idx);
+                        }
+
+                        let dict: &ShimDict = self.mem.get(pos.into());
+                        let size: usize = 1 << dict.size_pow;
+
+                        // Mark the indices array
+                        let indices_pos: usize = dict.indices.into();
+                        let indices_word_count = if dict.size_pow == 0 {
+                            0
+                        } else {
+                            size.div_ceil(8 / dict.indices_stride_bytes(size))
+                        };
+                        for idx in indices_pos..(indices_pos + indices_word_count) {
+                            mask.setx(idx);
+                        }
+
+                        // Mark the entries array
+                        let entries_pos: usize = dict.entries.into();
+                        for idx in entries_pos..(entries_pos + dict.capacity() * 3) {
+                            mask.setx(idx);
+                        }
+                    }
+                    ShimValue::Set(pos) => {
+                        let pos: usize = pos.into();
+                        if mask.is_set(pos) {
+                            continue;
+                        }
+                        let set: &ShimSet = self.mem.get(pos.into());
+
+                        // Mark the space for the ShimSet struct
+                        for idx in pos..(pos + std::mem::size_of::<ShimSet>().div_ceil(8)) {
+                            mask.setx(idx);
+                        }
+
+                        // And mark the dict as normal. An empty set has no
+                        // backing dict allocated yet (dict_pos == 0), so there
+                        // is nothing further to mark in that case.
+                        if set.dict_pos != u24::from(0) {
+                            to_process.push(ShimValue::Dict(set.dict_pos));
+                        }
+                    }
+                    ShimValue::StructDef(pos) => {
+                        let pos: usize = pos.into();
+                        if mask.is_set(pos) {
+                            continue;
+                        }
+                        let def: &StructDef = self.mem.get(pos.into());
+                        for idx in pos..(pos + def.mem_size()) {
+                            mask.setx(idx);
+                        }
+
+                        // Mark method functions referenced by this struct def
+                        for fn_pos in def.method_fn_positions() {
+                            to_process.push(ShimValue::Fn(fn_pos));
+                        }
+                    }
+                    ShimValue::Struct(def_pos, pos) => {
+                        let pos: usize = pos.into();
+                        if mask.is_set(pos) {
+                            continue;
+                        }
+                        let def: &StructDef = self.mem.get(def_pos);
+
+                        for idx in pos..(pos + def.member_count as usize) {
+                            reload_update_fn(
+                                &mut *self,
+                                &mut to_process,
+                                &mut updated_structs,
+                                idx,
+                                &fn_map,
+                            )?;
+                            mask.setx(idx);
+                        }
+                        to_process.push(ShimValue::StructDef(def_pos));
+                    }
+                    ShimValue::NativeFn(pos) => {
+                        let pos: usize = pos.into();
+                        if mask.is_set(pos) {
+                            continue;
+                        }
+                        mask.setx(pos);
+                    }
+                    ShimValue::Native(type_idx, pos) => {
+                        let pos: usize = pos.into();
+                        if mask.is_set(pos) {
+                            continue;
+                        }
+                        let type_idx: usize = type_idx.into();
+                        let info = &self.mem.native_type_registry[type_idx];
+                        let native_word_count = info.word_count;
+                        for idx in pos..(pos + native_word_count) {
+                            mask.setx(idx);
+                        }
+
+                        // Reconstruct a fat pointer to call gc_vals() without a Box.
+                        let vtable = info.vtable;
+                        let data_ptr = &self.mem.mem()[pos] as *const u64 as *const ();
+                        let fat_ptr: (*const (), *const ()) = (data_ptr, vtable);
+                        let native_ref: &dyn ShimNative = std::mem::transmute(fat_ptr);
+                        to_process.extend(native_ref.gc_vals());
+                    }
+                    ShimValue::BoundMethod(pos) => {
+                        let pos: usize = pos.into();
+                        if mask.is_set(pos) {
+                            continue;
+                        }
+                        // Mark the 2 words used to store the BoundMethod
+                        mask.setx(pos);
+                        mask.setx(pos + 1);
+
+                        reload_update_fn(
+                            &mut *self,
+                            &mut to_process,
+                            &mut updated_structs,
+                            pos,
+                            &fn_map,
+                        )?;
+
+                        let func_pos = u24::from(self.mem.mem()[pos + 1]);
+                        to_process.push(ShimValue::Fn(func_pos));
+                    }
+                    ShimValue::BoundNativeMethod(pos) => {
+                        let pos: usize = pos.into();
+                        if mask.is_set(pos) {
+                            continue;
+                        }
+                        // Native ShimValue
+                        mask.setx(pos);
+                        // Pointer to the fn
+                        mask.setx(pos + 1);
+
+                        reload_update_fn(
+                            &mut *self,
+                            &mut to_process,
+                            &mut updated_structs,
+                            pos,
+                            &fn_map,
+                        )?;
+                    }
+                    ShimValue::Environment(pos) => {
+                        let og_pos = pos;
+                        let pos: usize = pos.into();
+                        if mask.is_set(pos) {
+                            continue;
+                        }
+                        let (scope_data, scope_capacity, scope_used, scope_parent) = {
+                            let scope: &EnvScope = self.mem.get(og_pos);
+                            (scope.data, scope.capacity, scope.used, scope.parent)
+                        };
+
+                        // Chunk of memory that store the EnvScope metadata
+                        for bit in pos..(pos + std::mem::size_of::<EnvScope>().div_ceil(8)) {
+                            mask.setx(bit);
+                        }
+
+                        // Data block
+                        let start = usize::from(scope_data);
+                        let end = start + scope_capacity as usize;
+                        for bit in start..end {
+                            mask.setx(bit);
+                        }
+
+                        // Walk the contiguous data block and collect values. Each
+                        // read below re-derives a short-lived byte view instead of
+                        // holding one across the loop, since alloc_and_set/
+                        // reload_update_fn need a mutable borrow of self.mem.
+                        let mut off = 0usize;
+                        while off < scope_used as usize {
+                            let (value_offset, val) = {
+                                let word_count = (scope_used as usize).div_ceil(8);
+                                let u64_slice = &self.mem.mem()[start..start + word_count];
+                                let bytes: &[u8] = std::slice::from_raw_parts(
+                                    u64_slice.as_ptr() as *const u8,
+                                    scope_used as usize,
+                                );
+                                let key_len = bytes[off] as usize;
+                                let value_offset = off + 1 + key_len;
+                                let mut val_bytes = [0u8; 8];
+                                std::ptr::copy_nonoverlapping(
+                                    bytes[value_offset..].as_ptr(),
+                                    val_bytes.as_mut_ptr(),
+                                    8,
+                                );
+                                let val: ShimValue = std::mem::transmute(val_bytes);
+                                (value_offset, val)
+                            };
+
+                            let new_pos = self.mem.alloc_and_set(val, "hot reload env value")?;
+                            reload_update_fn(
+                                &mut *self,
+                                &mut to_process,
+                                &mut updated_structs,
+                                new_pos.into(),
+                                &fn_map,
+                            )?;
+                            let updated_val: ShimValue = *self.mem.get(new_pos);
+                            EnvScope::write_value_at(
+                                &mut self.mem,
+                                scope_data,
+                                scope_capacity,
+                                value_offset,
+                                updated_val,
+                            );
+
+                            off = value_offset + 8;
+                        }
+
+                        if scope_parent != 0.into() {
+                            to_process.push(ShimValue::Environment(scope_parent));
+                        }
+                    }
+                }
             }
         }
 
@@ -4117,18 +4452,18 @@ enum ReloadStructTransform {
  * interpreter: Shim interpreter
  * to_process: Where to put the ShimValue we get from the memory for later process
  */
-fn reload_update(
+fn reload_update_struct(
     interpreter: &mut Interpreter,
     to_process: &mut Vec<ShimValue>,
     updated_structs: &mut HashMap<u24, u24>,
     idx: usize,
-    ty_map: &HashMap<u24, ReloadStructTransform>
+    struct_map: &HashMap<u24, ReloadStructTransform>,
 ) -> Result<(), String>
 {
     unsafe {
         let val = match *interpreter.mem.get(idx.into()) {
             ShimValue::Struct(ty, pos) => {
-                match ty_map.get(&ty) {
+                match struct_map.get(&ty) {
                     None => ShimValue::Struct(ty, pos), // The struct isn't hot reloadable
                     Some(ReloadStructTransform::NoOp(new_ty)) => {
                         ShimValue::Struct(*new_ty, pos)
@@ -4188,6 +4523,41 @@ fn reload_update(
                                 return Err(format!("Call to presumed StructDef {new_ty:?} yielded {s:?}"));
                             }
                         }
+                    }
+                }
+            }
+            val => val,
+        };
+
+        *interpreter.mem.get_mut(idx.into()) = val;
+        to_process.push(val);
+
+        Ok(())
+    }
+}
+
+fn reload_update_fn(
+    interpreter: &mut Interpreter,
+    to_process: &mut Vec<ShimValue>,
+    updated_structs: &mut HashMap<u24, u24>,
+    idx: usize,
+    fn_map: &HashMap<u24, u24>,
+) -> Result<(), String>
+{
+    unsafe {
+        let val = match *interpreter.mem.get(idx.into()) {
+            ShimValue::Fn(pos) => {
+                match fn_map.get(&pos) {
+                    Some(new_pos) => ShimValue::Fn(*new_pos),
+                    None => {
+                        // TODO: When the runtime is updated to store bytecode in the MMU then
+                        // we should be able to support running old closures. For now we discard
+                        // the old bytecode so we can't run it :(
+                        //
+                        // This also ends up disallowing closures in the new code that would be
+                        // completely valid, but that should be fine (it would fail on the next
+                        // hot reload anyways).
+                        return Err(format!("Referenced Fn({pos:?}) does not exist in reloaded code"));
                     }
                 }
             }
