@@ -2554,6 +2554,7 @@ impl Interpreter {
 
         let mut old_structs: HashMap<Vec<u8>, Struct> = HashMap::new();
         let mut new_structs: HashMap<Vec<u8>, Struct> = HashMap::new();
+        let mut ty_map: HashMap<u24, ReloadStructTransform> = HashMap::new();
 
         // TODO: handle the case where there are multiple struct definitions with the same ident
         for decl in old_ast.block.structs() {
@@ -2565,13 +2566,15 @@ impl Interpreter {
             new_structs.insert(decl.ident.clone(), decl);
         }
 
-        let mut ty_map: HashMap<u24, ReloadStructTransform> = HashMap::new();
         for (struct_name, old_decl) in old_structs.iter() {
             let new_decl = if let Some(new_decl) = new_structs.get(struct_name) {
                 new_decl
             } else {
                 continue;
             };
+
+            // Struct exists in old and in new code
+
             let old_pos = match old_env.get(&self.mem, struct_name) {
                 Some(ShimValue::StructDef(pos)) => pos,
                 Some(_) => return Err(format!("Struct {} in old_env is not a StructDef", debug_u8s(struct_name))),
@@ -2579,8 +2582,8 @@ impl Interpreter {
             };
             let new_pos = match self.root_env.get(&self.mem, struct_name) {
                 Some(ShimValue::StructDef(pos)) => pos,
-                Some(_) => return Err(format!("Struct {} in new_env is not a StructDef", debug_u8s(struct_name))),
-                None =>  return Err(format!("Struct {} in new_env does not exist!", debug_u8s(struct_name))),
+                Some(_) => return Err(format!("Struct {} in root env is not a StructDef", debug_u8s(struct_name))),
+                None =>  return Err(format!("Struct {} in root env does not exist!", debug_u8s(struct_name))),
             };
 
             let mut old_members: Vec<Vec<u8>> = Vec::new();
@@ -2604,6 +2607,33 @@ impl Interpreter {
             } else {
                 ReloadStructTransform::Realloc(new_pos)
             });
+        }
+
+        let mut new_fns = Vec::new()
+        let mut old_fns = HashSet::new()
+        let mut fn_map: HashMap<u24, u24> = HashMap::new();
+
+        for decl in old_ast.block.fns() {
+            old_fns.insert(decl.ident.clone());
+        }
+        for decl in ast.block.fns() {
+            new_fns.push(decl.ident.clone());
+        }
+
+        for fn_ident in new_fns {
+            if !old_fns.contains(fn_ident) {
+                continue;
+            }
+            let old_pos = match old_env.get(&self.mem, fn_ident) {
+                Some(ShimValue::Fn(pos)) => pos,
+                Some(_) => return Err(format!("Fn {} in old_env is not a Fn", debug_u8s(fn_ident))),
+                None =>  return Err(format!("Fn {} in old_env does not exist!", debug_u8s(fn_ident))),
+            };
+            let new_pos = match self.root_env.get(&self.mem, fn_ident) {
+                Some(ShimValue::Fn(pos)) => pos,
+                Some(_) => return Err(format!("Fn {} in root env is not a Fn", debug_u8s(fn_ident))),
+                None =>  return Err(format!("Fn {} in root env does not exist!", debug_u8s(fn_ident))),
+            };
         }
 
         // Points from the old pos to the new pos

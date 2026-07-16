@@ -1,0 +1,10 @@
+// Snapshot 0: `func` gets the value for `foo`
+fn foo() {
+    print("foo1")
+}
+
+let func = foo
+
+fn loop() {
+    func()
+}

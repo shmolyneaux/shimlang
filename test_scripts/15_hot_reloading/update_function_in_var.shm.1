@@ -1,0 +1,15 @@
+// Snapshot 1: `func` should point to the new definition of foo
+
+// Create some variables so that we can ensure that we're not referencing an old PC
+let a = 1
+let b = 2
+
+fn foo() {
+    print("foo2")
+}
+
+let func = foo
+
+fn loop() {
+    func()
+}
