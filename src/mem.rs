@@ -953,36 +953,23 @@ pub(crate) fn walk_heap<E>(
                         (usize::from(dict.entries), dict.entry_count as usize)
                     };
 
-                    // Collect the keys and the word index of each value slot,
-                    // then release the borrow before touching the walker again.
-                    // `DictEntry` has no `repr(C)`, so ask the compiler where the
-                    // value field actually lives rather than assuming an order.
+                    // Visit each entry by reading its fields at their word
+                    // indices, so no borrow of memory is held across the
+                    // per-value `visit_word` call. `DictEntry` has no `repr(C)`,
+                    // so ask the compiler where each field actually lives rather
+                    // than assuming an order.
                     let entry_words = std::mem::size_of::<DictEntry>() / 8;
+                    let key_word = std::mem::offset_of!(DictEntry, key) / 8;
                     let value_word = std::mem::offset_of!(DictEntry, value) / 8;
-                    let mut keys: Vec<ShimValue> = Vec::new();
-                    let mut value_slots: Vec<usize> = Vec::new();
-                    {
-                        let u64_slice = &interp.mem.mem()
-                            [entries_base..entries_base + entry_words * entry_count];
-                        let entries: &[DictEntry] = std::slice::from_raw_parts(
-                            u64_slice.as_ptr() as *const DictEntry,
-                            u64_slice.len() / entry_words,
-                        );
-                        for (entry_idx, entry) in entries[..entry_count].iter().enumerate() {
-                            if !entry.key.is_uninitialized() {
-                                keys.push(entry.key);
-                                value_slots
-                                    .push(entries_base + entry_idx * entry_words + value_word);
-                            }
+                    for entry_idx in 0..entry_count {
+                        let base = entries_base + entry_idx * entry_words;
+                        let key: ShimValue = *interp.mem.get((base + key_word).into());
+                        if !key.is_uninitialized() {
+                            // Keys are never structs or functions (not hashable),
+                            // so they only need to be traversed, not rewritten.
+                            worklist.push(key);
+                            visit_word(&mut transform, interp, &mut worklist, base + value_word)?;
                         }
-                    }
-                    // Keys are never structs or functions (not hashable), so
-                    // they only need to be traversed, not rewritten.
-                    for key in keys {
-                        worklist.push(key);
-                    }
-                    for slot in value_slots {
-                        visit_word(&mut transform, interp, &mut worklist, slot)?;
                     }
 
                     // Mark the dict header.
