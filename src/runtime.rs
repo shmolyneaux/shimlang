@@ -102,7 +102,7 @@ impl EnvScope {
 
     /// Write a ShimValue at the given byte offset within this scope's data block.
     /// Safety: `value_offset + 8` must be within capacity.
-    unsafe fn write_value_at(
+    pub(crate) unsafe fn write_value_at(
         mem: &mut MMU,
         data: u24,
         capacity: u32,
@@ -3857,8 +3857,9 @@ enum ReloadPass<'m> {
 }
 
 /// [`HeapWalk`] implementation used by both hot-reload passes. `walk_heap` owns
-/// the mark bitmask (a fresh one per pass) and threads in the interpreter, so
-/// this only carries the pass-specific rewrite state.
+/// the mark bitmask (a fresh one per pass), threads in the interpreter, and
+/// writes the transformed value back wherever it lives, so this only carries
+/// the pass-specific rewrite state.
 struct HotReloadWalk<'m> {
     pass: ReloadPass<'m>,
 }
@@ -3866,37 +3867,17 @@ struct HotReloadWalk<'m> {
 impl HeapWalk for HotReloadWalk<'_> {
     type Err = String;
 
-    fn visit_slot(&mut self, interp: &mut Interpreter, idx: usize) -> Result<ShimValue, Self::Err> {
+    fn transform(
+        &mut self,
+        interp: &mut Interpreter,
+        val: ShimValue,
+    ) -> Result<ShimValue, Self::Err> {
         match &mut self.pass {
             ReloadPass::Structs {
                 ty_map,
                 updated_structs,
-            } => reload_update_struct(interp, updated_structs, idx, ty_map),
-            ReloadPass::Fns(fn_map) => reload_update_fn(interp, idx, fn_map),
-        }
-    }
-
-    fn visit_env_value(
-        &mut self,
-        interp: &mut Interpreter,
-        scope_data: u24,
-        scope_capacity: u32,
-        value_offset: usize,
-        val: ShimValue,
-    ) -> Result<ShimValue, Self::Err> {
-        // The stored value isn't word-aligned, so copy it into a fresh word,
-        // rewrite it there, then store the updated value back into the scope.
-        unsafe {
-            let new_pos = interp.mem.alloc_and_set(val, "hot reload env value")?;
-            let updated_val = self.visit_slot(interp, new_pos.into())?;
-            EnvScope::write_value_at(
-                &mut interp.mem,
-                scope_data,
-                scope_capacity,
-                value_offset,
-                updated_val,
-            );
-            Ok(updated_val)
+            } => reload_update_struct(interp, updated_structs, val, ty_map),
+            ReloadPass::Fns(fn_map) => reload_update_fn(val, fn_map),
         }
     }
 }
@@ -3916,12 +3897,12 @@ impl HeapWalk for HotReloadWalk<'_> {
 fn reload_update_struct(
     interpreter: &mut Interpreter,
     updated_structs: &mut HashMap<u24, u24>,
-    idx: usize,
+    val: ShimValue,
     struct_map: &HashMap<u24, ReloadStructTransform>,
 ) -> Result<ShimValue, String>
 {
     unsafe {
-        let val = match *interpreter.mem.get(idx.into()) {
+        let new_val = match val {
             ShimValue::Struct(ty, pos) => {
                 match struct_map.get(&ty) {
                     None => ShimValue::Struct(ty, pos), // The struct isn't hot reloadable
@@ -3986,45 +3967,32 @@ fn reload_update_struct(
                     }
                 }
             }
-            val => val,
+            other => other,
         };
 
-        *interpreter.mem.get_mut(idx.into()) = val;
-
-        Ok(val)
+        Ok(new_val)
     }
 }
 
-fn reload_update_fn(
-    interpreter: &mut Interpreter,
-    idx: usize,
-    fn_map: &HashMap<u24, u24>,
-) -> Result<ShimValue, String>
-{
-    unsafe {
-        let val = match *interpreter.mem.get(idx.into()) {
-            ShimValue::Fn(pos) => {
-                match fn_map.get(&pos) {
-                    Some(new_pos) => ShimValue::Fn(*new_pos),
-                    None => {
-                        // TODO: When the runtime is updated to store bytecode in the MMU then
-                        // we should be able to support running old closures. For now we discard
-                        // the old bytecode so we can't run it :(
-                        //
-                        // This also ends up disallowing closures in the new code that would be
-                        // completely valid, but that should be fine (it would fail on the next
-                        // hot reload anyways).
-                        return Err(format!("Referenced Fn({pos:?}) does not exist in reloaded code"));
-                    }
+fn reload_update_fn(val: ShimValue, fn_map: &HashMap<u24, u24>) -> Result<ShimValue, String> {
+    Ok(match val {
+        ShimValue::Fn(pos) => {
+            match fn_map.get(&pos) {
+                Some(new_pos) => ShimValue::Fn(*new_pos),
+                None => {
+                    // TODO: When the runtime is updated to store bytecode in the MMU then
+                    // we should be able to support running old closures. For now we discard
+                    // the old bytecode so we can't run it :(
+                    //
+                    // This also ends up disallowing closures in the new code that would be
+                    // completely valid, but that should be fine (it would fail on the next
+                    // hot reload anyways).
+                    return Err(format!("Referenced Fn({pos:?}) does not exist in reloaded code"));
                 }
             }
-            val => val,
-        };
-
-        *interpreter.mem.get_mut(idx.into()) = val;
-
-        Ok(val)
-    }
+        }
+        other => other,
+    })
 }
 
 /**

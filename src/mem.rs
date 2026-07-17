@@ -792,23 +792,12 @@ pub(crate) trait HeapWalk {
     /// (`Infallible`); hot reload can (`String`).
     type Err;
 
-    /// Resolve the child value stored at word `idx` and return it for
-    /// `walk_heap` to enqueue. Hot reload additionally rewrites the slot in
-    /// place to point at the reloaded object; the GC just reads it.
-    fn visit_slot(&mut self, interp: &mut Interpreter, idx: usize) -> Result<ShimValue, Self::Err>;
-
-    /// Resolve a value living `value_offset` bytes into an env scope's data
-    /// block and return it for `walk_heap` to enqueue. The GC just reads it;
-    /// hot reload re-homes it, rewrites it, and stores the updated value back
-    /// into the scope.
-    fn visit_env_value(
-        &mut self,
-        interp: &mut Interpreter,
-        scope_data: u24,
-        scope_capacity: u32,
-        value_offset: usize,
-        val: ShimValue,
-    ) -> Result<ShimValue, Self::Err>;
+    /// Map a value discovered during the walk to the value that should take its
+    /// place. `walk_heap` enqueues the result and, if it differs from `val`,
+    /// writes it back wherever the value lived (a heap word or an env slot). The
+    /// GC returns `val` unchanged; hot reload rewrites structs and functions to
+    /// their reloaded equivalents.
+    fn transform(&mut self, interp: &mut Interpreter, val: ShimValue) -> Result<ShimValue, Self::Err>;
 }
 
 /// Mark every word in `range` on `mask`, attaching a debug descriptor built
@@ -831,6 +820,25 @@ macro_rules! mark_range {
             }
         }
     }};
+}
+
+/// Resolve the child value stored at word `idx`: hand it to `w`, write any
+/// rewrite back in place, and enqueue the result for further traversal.
+///
+/// Safety: `idx` must be a live word holding a [`ShimValue`].
+unsafe fn visit_word<W: HeapWalk>(
+    w: &mut W,
+    interp: &mut Interpreter,
+    worklist: &mut Vec<ShimValue>,
+    idx: usize,
+) -> Result<(), W::Err> {
+    let val = unsafe { *interp.mem.get(idx.into()) };
+    let new = w.transform(interp, val)?;
+    if new.to_u64() != val.to_u64() {
+        unsafe { *interp.mem.get_mut(idx.into()) = new };
+    }
+    worklist.push(new);
+    Ok(())
 }
 
 /// Walk every object transitively reachable from `roots`, dispatching the
@@ -900,7 +908,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(
                         MemDescriptor::other(pos, pos + len, "Tuple contents")
                     );
                     for idx in pos..(pos + len) {
-                        worklist.push(w.visit_slot(interp, idx)?);
+                        visit_word(w, interp, &mut worklist, idx)?;
                     }
                 }
                 ShimValue::List(pos) => {
@@ -928,7 +936,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(
                     // Only the logically-present elements are live; the unused
                     // tail of the backing store is marked (above) but not walked.
                     for idx in data..(data + len) {
-                        worklist.push(w.visit_slot(interp, idx)?);
+                        visit_word(w, interp, &mut worklist, idx)?;
                     }
                 }
                 s @ ShimValue::String(len, offset, pos) => {
@@ -993,7 +1001,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(
                         worklist.push(key);
                     }
                     for slot in value_slots {
-                        worklist.push(w.visit_slot(interp, slot)?);
+                        visit_word(w, interp, &mut worklist, slot)?;
                     }
 
                     // Mark the dict header.
@@ -1123,7 +1131,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(
                         }
                     );
                     for idx in pos..(pos + member_count) {
-                        worklist.push(w.visit_slot(interp, idx)?);
+                        visit_word(w, interp, &mut worklist, idx)?;
                     }
                     worklist.push(ShimValue::StructDef(def_pos));
                 }
@@ -1182,7 +1190,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(
                     );
 
                     // word[pos] holds the bound object; word[pos + 1] holds the fn.
-                    worklist.push(w.visit_slot(interp, pos)?);
+                    visit_word(w, interp, &mut worklist, pos)?;
                     let func_pos = u24::from(interp.mem.mem()[pos + 1]);
                     worklist.push(ShimValue::Fn(func_pos));
                 }
@@ -1199,7 +1207,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(
                     );
 
                     // word[pos] is the bound object; walk/rewrite it.
-                    worklist.push(w.visit_slot(interp, pos)?);
+                    visit_word(w, interp, &mut worklist, pos)?;
                 }
                 ShimValue::Environment(scope_pos) => {
                     let pos: usize = scope_pos.into();
@@ -1235,10 +1243,11 @@ pub(crate) fn walk_heap<W: HeapWalk>(
                         }
                     );
 
-                    // Walk the contiguous data block and hand each value to the
-                    // walker. Each read re-derives a short-lived byte view
-                    // instead of holding one across the loop, since hot reload's
-                    // visit_env_value needs a mutable borrow of memory.
+                    // Walk the contiguous data block, transforming each stored
+                    // value and writing any change back at its byte offset. Each
+                    // read re-derives a short-lived byte view instead of holding
+                    // one across the loop, since `transform` and the write-back
+                    // need a mutable borrow of memory.
                     let mut off = 0usize;
                     while off < scope_used as usize {
                         let (value_offset, val) = {
@@ -1260,14 +1269,17 @@ pub(crate) fn walk_heap<W: HeapWalk>(
                             (value_offset, val)
                         };
 
-                        let enqueued = w.visit_env_value(
-                            interp,
-                            scope_data,
-                            scope_capacity,
-                            value_offset,
-                            val,
-                        )?;
-                        worklist.push(enqueued);
+                        let new = w.transform(interp, val)?;
+                        if new.to_u64() != val.to_u64() {
+                            EnvScope::write_value_at(
+                                &mut interp.mem,
+                                scope_data,
+                                scope_capacity,
+                                value_offset,
+                                new,
+                            );
+                        }
+                        worklist.push(new);
 
                         off = value_offset + 8;
                     }
@@ -1364,18 +1376,12 @@ impl HeapWalk for GcWalk {
     // Marking is infallible.
     type Err = std::convert::Infallible;
 
-    fn visit_slot(&mut self, interp: &mut Interpreter, idx: usize) -> Result<ShimValue, Self::Err> {
-        Ok(unsafe { *interp.mem.get(idx.into()) })
-    }
-
-    fn visit_env_value(
+    fn transform(
         &mut self,
         _interp: &mut Interpreter,
-        _scope_data: u24,
-        _scope_capacity: u32,
-        _value_offset: usize,
         val: ShimValue,
     ) -> Result<ShimValue, Self::Err> {
+        // Marking never rewrites anything.
         Ok(val)
     }
 }
