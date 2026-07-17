@@ -3866,36 +3866,29 @@ struct HotReloadWalk<'m> {
 impl HeapWalk for HotReloadWalk<'_> {
     type Err = String;
 
-    fn visit_slot(
-        &mut self,
-        interp: &mut Interpreter,
-        worklist: &mut Vec<ShimValue>,
-        idx: usize,
-    ) -> Result<(), Self::Err> {
+    fn visit_slot(&mut self, interp: &mut Interpreter, idx: usize) -> Result<ShimValue, Self::Err> {
         match &mut self.pass {
             ReloadPass::Structs {
                 ty_map,
                 updated_structs,
-            } => reload_update_struct(interp, worklist, updated_structs, idx, ty_map),
-            ReloadPass::Fns(fn_map) => reload_update_fn(interp, worklist, idx, fn_map),
+            } => reload_update_struct(interp, updated_structs, idx, ty_map),
+            ReloadPass::Fns(fn_map) => reload_update_fn(interp, idx, fn_map),
         }
     }
 
     fn visit_env_value(
         &mut self,
         interp: &mut Interpreter,
-        worklist: &mut Vec<ShimValue>,
         scope_data: u24,
         scope_capacity: u32,
         value_offset: usize,
         val: ShimValue,
-    ) -> Result<(), Self::Err> {
+    ) -> Result<ShimValue, Self::Err> {
         // The stored value isn't word-aligned, so copy it into a fresh word,
         // rewrite it there, then store the updated value back into the scope.
         unsafe {
             let new_pos = interp.mem.alloc_and_set(val, "hot reload env value")?;
-            self.visit_slot(interp, worklist, new_pos.into())?;
-            let updated_val: ShimValue = *interp.mem.get(new_pos);
+            let updated_val = self.visit_slot(interp, new_pos.into())?;
             EnvScope::write_value_at(
                 &mut interp.mem,
                 scope_data,
@@ -3903,8 +3896,8 @@ impl HeapWalk for HotReloadWalk<'_> {
                 value_offset,
                 updated_val,
             );
+            Ok(updated_val)
         }
-        Ok(())
     }
 }
 
@@ -3915,16 +3908,17 @@ impl HeapWalk for HotReloadWalk<'_> {
  * If a struct adds a field with a new default value we actually need to run
  * the constructor, which could fail.
  *
+ * Returns the (possibly rewritten) value now stored at `idx`, for the caller to
+ * enqueue for further traversal.
+ *
  * interpreter: Shim interpreter
- * to_process: Where to put the ShimValue we get from the memory for later process
  */
 fn reload_update_struct(
     interpreter: &mut Interpreter,
-    to_process: &mut Vec<ShimValue>,
     updated_structs: &mut HashMap<u24, u24>,
     idx: usize,
     struct_map: &HashMap<u24, ReloadStructTransform>,
-) -> Result<(), String>
+) -> Result<ShimValue, String>
 {
     unsafe {
         let val = match *interpreter.mem.get(idx.into()) {
@@ -3996,18 +3990,16 @@ fn reload_update_struct(
         };
 
         *interpreter.mem.get_mut(idx.into()) = val;
-        to_process.push(val);
 
-        Ok(())
+        Ok(val)
     }
 }
 
 fn reload_update_fn(
     interpreter: &mut Interpreter,
-    to_process: &mut Vec<ShimValue>,
     idx: usize,
     fn_map: &HashMap<u24, u24>,
-) -> Result<(), String>
+) -> Result<ShimValue, String>
 {
     unsafe {
         let val = match *interpreter.mem.get(idx.into()) {
@@ -4030,9 +4022,8 @@ fn reload_update_fn(
         };
 
         *interpreter.mem.get_mut(idx.into()) = val;
-        to_process.push(val);
 
-        Ok(())
+        Ok(val)
     }
 }
 
