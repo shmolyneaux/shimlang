@@ -1,0 +1,6 @@
+// Many small tuples (Tuple arm), mixing ints and a string element.
+let items = []
+for i in 0..40000 {
+    items.append((i, i * 2, "t"))
+}
+print(items.len())

@@ -1,0 +1,24 @@
+// Build a large, fully-live object graph so GC marking has real work:
+// structs (with nested members), lists, strings, a linked chain, and a dict.
+struct Item {
+    id,
+    name,
+    tags,
+    next,
+}
+
+let items = []
+let prev = None
+for i in 0..15000 {
+    let tags = [i, i * 2, i * 3, "tag"]
+    let it = Item(i, "name", tags, prev)
+    items.append(it)
+    prev = it
+}
+
+let lookup = {:}
+for i in 0..4000 {
+    lookup.set(i, "value")
+}
+
+print(items.len())

@@ -1,0 +1,18 @@
+// Snapshot 1: the list carried over from snapshot 0 still holds `foo`, and the
+// nested reference must be remapped to the reloaded definition. The struct pass
+// walks this list from the old scope, so the fn pass must use its own mask to
+// revisit it here (otherwise handlers[0] keeps pointing at the old code).
+
+// Create some variables so that we can ensure that we're not referencing an old PC
+let a = 1
+let b = 2
+
+fn foo() {
+    print("foo2")
+}
+
+let handlers = [foo]
+
+fn loop() {
+    handlers[0]()
+}

@@ -1,0 +1,6 @@
+let sets = []
+for i in 0..8000 {
+    let s = {i, i + 1, i + 2, i + 3}
+    sets.append(s)
+}
+print(sets.len())

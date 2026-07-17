@@ -1,0 +1,11 @@
+// Dict- and string-heavy graph: many dicts each holding lists of strings.
+let buckets = []
+for b in 0..3000 {
+    let d = {:}
+    d.set("alpha", "a-value")
+    d.set("beta", [1, 2, 3, "x", "y"])
+    d.set("gamma", b)
+    d.set("delta", ["nested", "list", "of", "strings"])
+    buckets.append(d)
+}
+print(buckets.len())
