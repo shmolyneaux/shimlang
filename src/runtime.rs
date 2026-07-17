@@ -2655,19 +2655,21 @@ impl Interpreter {
 
         }
 
-        // Points from the old pos to the new pos
-        let mut updated_structs = HashMap::new();
-        let mut mask = Bitmask::new(self.mem.wilderness as usize);
-
         // Update all the structs reachable from the previous program's root
         // scope so they point at their reloaded shapes.
         let old_scope = old_env.current_scope;
         {
+            let mut mask = Bitmask::new(self.mem.wilderness as usize);
+            // Maps an old struct position to the new one after realloc, so a
+            // struct reached by several paths is only reallocated once.
+            let mut updated_structs = HashMap::new();
             let mut walker = HotReloadWalk {
                 interp: &mut *self,
                 mask: &mut mask,
-                updated_structs: &mut updated_structs,
-                pass: ReloadPass::Structs(&ty_map),
+                pass: ReloadPass::Structs {
+                    ty_map: &ty_map,
+                    updated_structs: &mut updated_structs,
+                },
             };
             walk_heap(
                 &mut walker,
@@ -2699,14 +2701,17 @@ impl Interpreter {
         }
 
         // Update function references to point to the new locations, reachable
-        // from the reloaded program's root scope. This reuses `mask` from the
-        // struct pass, so objects already visited there are not walked again.
+        // from the reloaded program's root scope. This uses a fresh mask rather
+        // than reusing the struct pass's: state carried over from the old
+        // program is reachable from both scopes, and any function references
+        // nested inside it still need remapping here even though the struct
+        // pass already marked those objects.
         let root_scope = self.root_env.current_scope;
         {
+            let mut mask = Bitmask::new(self.mem.wilderness as usize);
             let mut walker = HotReloadWalk {
                 interp: &mut *self,
                 mask: &mut mask,
-                updated_structs: &mut updated_structs,
                 pass: ReloadPass::Fns(&fn_map),
             };
             walk_heap(
@@ -3841,21 +3846,24 @@ enum ReloadStructTransform {
 }
 
 /// Which hot-reload fix-up a [`HotReloadWalk`] applies at each value slot.
-#[derive(Clone, Copy)]
 enum ReloadPass<'m> {
-    /// Rewrite struct values to their reloaded shapes.
-    Structs(&'m HashMap<u24, ReloadStructTransform>),
+    /// Rewrite struct values to their reloaded shapes. `updated_structs` maps
+    /// an already-reallocated struct's old position to its new one, so a struct
+    /// reachable by several paths is only reallocated once; it is only needed
+    /// by this pass.
+    Structs {
+        ty_map: &'m HashMap<u24, ReloadStructTransform>,
+        updated_structs: &'m mut HashMap<u24, u24>,
+    },
     /// Rewrite function references to their new positions.
     Fns(&'m HashMap<u24, u24>),
 }
 
-/// [`HeapWalk`] implementation shared by both hot-reload passes. The mask and
-/// `updated_structs` map are borrowed so they persist across the two passes
-/// (an object already visited by the struct pass is skipped by the fn pass).
+/// [`HeapWalk`] implementation used by both hot-reload passes. Each pass runs
+/// with its own mask (see the call sites for why they cannot be shared).
 struct HotReloadWalk<'a, 'm> {
     interp: &'a mut Interpreter,
     mask: &'a mut Bitmask,
-    updated_structs: &'a mut HashMap<u24, u24>,
     pass: ReloadPass<'m>,
 }
 
@@ -3884,21 +3892,14 @@ impl HeapWalk for HotReloadWalk<'_, '_> {
     }
 
     fn visit_slot(&mut self, worklist: &mut Vec<ShimValue>, idx: usize) -> Result<(), Self::Err> {
-        match self.pass {
-            ReloadPass::Structs(ty_map) => reload_update_struct(
-                &mut *self.interp,
-                worklist,
-                &mut *self.updated_structs,
-                idx,
+        match &mut self.pass {
+            ReloadPass::Structs {
                 ty_map,
-            ),
-            ReloadPass::Fns(fn_map) => reload_update_fn(
-                &mut *self.interp,
-                worklist,
-                &mut *self.updated_structs,
-                idx,
-                fn_map,
-            ),
+                updated_structs,
+            } => reload_update_struct(&mut *self.interp, worklist, updated_structs, idx, ty_map),
+            ReloadPass::Fns(fn_map) => {
+                reload_update_fn(&mut *self.interp, worklist, idx, fn_map)
+            }
         }
     }
 
@@ -4025,7 +4026,6 @@ fn reload_update_struct(
 fn reload_update_fn(
     interpreter: &mut Interpreter,
     to_process: &mut Vec<ShimValue>,
-    _updated_structs: &mut HashMap<u24, u24>,
     idx: usize,
     fn_map: &HashMap<u24, u24>,
 ) -> Result<(), String>

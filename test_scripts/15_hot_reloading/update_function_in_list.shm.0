@@ -1,0 +1,11 @@
+// Snapshot 0: a function reference is nested inside a heap object (a list)
+// that is preserved as state across the reload.
+fn foo() {
+    print("foo1")
+}
+
+let handlers = [foo]
+
+fn loop() {
+    handlers[0]()
+}
