@@ -2663,7 +2663,6 @@ impl Interpreter {
             // struct reached by several paths is only reallocated once.
             let mut updated_structs = HashMap::new();
             let mut walker = HotReloadWalk {
-                interp: &mut *self,
                 pass: ReloadPass::Structs {
                     ty_map: &ty_map,
                     updated_structs: &mut updated_structs,
@@ -2671,6 +2670,7 @@ impl Interpreter {
             };
             walk_heap(
                 &mut walker,
+                &mut *self,
                 vec![ShimValue::Environment(u24::from(old_scope))],
             )?;
         }
@@ -2707,11 +2707,11 @@ impl Interpreter {
         let root_scope = self.root_env.current_scope;
         {
             let mut walker = HotReloadWalk {
-                interp: &mut *self,
                 pass: ReloadPass::Fns(&fn_map),
             };
             walk_heap(
                 &mut walker,
+                &mut *self,
                 vec![ShimValue::Environment(u24::from(root_scope))],
             )?;
         }
@@ -3857,34 +3857,33 @@ enum ReloadPass<'m> {
 }
 
 /// [`HeapWalk`] implementation used by both hot-reload passes. `walk_heap` owns
-/// the mark bitmask (a fresh one per pass), so this only carries the
-/// pass-specific rewrite state.
-struct HotReloadWalk<'a, 'm> {
-    interp: &'a mut Interpreter,
+/// the mark bitmask (a fresh one per pass) and threads in the interpreter, so
+/// this only carries the pass-specific rewrite state.
+struct HotReloadWalk<'m> {
     pass: ReloadPass<'m>,
 }
 
-impl HeapWalk for HotReloadWalk<'_, '_> {
+impl HeapWalk for HotReloadWalk<'_> {
     type Err = String;
 
-    fn interp_ref(&self) -> &Interpreter {
-        &*self.interp
-    }
-
-    fn visit_slot(&mut self, worklist: &mut Vec<ShimValue>, idx: usize) -> Result<(), Self::Err> {
+    fn visit_slot(
+        &mut self,
+        interp: &mut Interpreter,
+        worklist: &mut Vec<ShimValue>,
+        idx: usize,
+    ) -> Result<(), Self::Err> {
         match &mut self.pass {
             ReloadPass::Structs {
                 ty_map,
                 updated_structs,
-            } => reload_update_struct(&mut *self.interp, worklist, updated_structs, idx, ty_map),
-            ReloadPass::Fns(fn_map) => {
-                reload_update_fn(&mut *self.interp, worklist, idx, fn_map)
-            }
+            } => reload_update_struct(interp, worklist, updated_structs, idx, ty_map),
+            ReloadPass::Fns(fn_map) => reload_update_fn(interp, worklist, idx, fn_map),
         }
     }
 
     fn visit_env_value(
         &mut self,
+        interp: &mut Interpreter,
         worklist: &mut Vec<ShimValue>,
         scope_data: u24,
         scope_capacity: u32,
@@ -3894,11 +3893,11 @@ impl HeapWalk for HotReloadWalk<'_, '_> {
         // The stored value isn't word-aligned, so copy it into a fresh word,
         // rewrite it there, then store the updated value back into the scope.
         unsafe {
-            let new_pos = self.interp.mem.alloc_and_set(val, "hot reload env value")?;
-            self.visit_slot(worklist, new_pos.into())?;
-            let updated_val: ShimValue = *self.interp.mem.get(new_pos);
+            let new_pos = interp.mem.alloc_and_set(val, "hot reload env value")?;
+            self.visit_slot(interp, worklist, new_pos.into())?;
+            let updated_val: ShimValue = *interp.mem.get(new_pos);
             EnvScope::write_value_at(
-                &mut self.interp.mem,
+                &mut interp.mem,
                 scope_data,
                 scope_capacity,
                 value_offset,

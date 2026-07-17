@@ -784,28 +784,30 @@ impl Bitmask {
 ///
 /// [`walk_heap`] owns the traversal state — the worklist *and* the mark bitmask
 /// (including cycle detection and capacity growth) — and dispatches per
-/// [`ShimValue`]. Implementors only describe what to do with each discovered
-/// value; they neither hold nor manage the mask.
+/// [`ShimValue`]. The interpreter being walked is threaded in by `walk_heap`
+/// rather than stored here, so implementors only describe what to do with each
+/// discovered value; they hold neither the mask nor the interpreter.
 pub(crate) trait HeapWalk {
     /// Error produced while visiting a value. The GC never fails
     /// (`Infallible`); hot reload can (`String`).
     type Err;
 
-    /// Shared access to the interpreter whose memory is being walked. Only used
-    /// for reads while discovering an object's layout, so a shared borrow is
-    /// enough (and lets multiple reads coexist).
-    fn interp_ref(&self) -> &Interpreter;
-
     /// Handle the child value stored at word `idx`: enqueue it for traversal,
     /// and (for hot reload) rewrite it in place to point at the reloaded
     /// object.
-    fn visit_slot(&mut self, worklist: &mut Vec<ShimValue>, idx: usize) -> Result<(), Self::Err>;
+    fn visit_slot(
+        &mut self,
+        interp: &mut Interpreter,
+        worklist: &mut Vec<ShimValue>,
+        idx: usize,
+    ) -> Result<(), Self::Err>;
 
     /// Handle a value living `value_offset` bytes into an env scope's data
     /// block. The GC just enqueues it; hot reload re-homes it, rewrites it, and
     /// stores the updated value back into the scope.
     fn visit_env_value(
         &mut self,
+        interp: &mut Interpreter,
         worklist: &mut Vec<ShimValue>,
         scope_data: u24,
         scope_capacity: u32,
@@ -848,9 +850,10 @@ macro_rules! mark_range {
 /// shapes (which it does for any live object graph).
 pub(crate) fn walk_heap<W: HeapWalk>(
     w: &mut W,
+    interp: &mut Interpreter,
     roots: Vec<ShimValue>,
 ) -> Result<Bitmask, W::Err> {
-    let mut mask = Bitmask::new(w.interp_ref().mem.wilderness as usize);
+    let mut mask = Bitmask::new(interp.mem.wilderness as usize);
     // Reserve word 0, the null sentinel reserved by MMU::with_capacity, so the
     // GC never frees it. Harmless for the hot-reload passes that discard `mask`.
     mark_bit!(mask, 0, MemDescriptor::other(0, 1, "null"));
@@ -860,7 +863,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(
         while let Some(val) = worklist.pop() {
             // Re-running struct constructors during hot reload can allocate, so
             // keep the mark set large enough for any freshly allocated words.
-            mask.ensure_capacity(w.interp_ref().mem.wilderness as usize);
+            mask.ensure_capacity(interp.mem.wilderness as usize);
             match val {
                 ShimValue::Integer(_)
                 | ShimValue::Float(_)
@@ -876,7 +879,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(
                     }
                     let shim_fn_word_count = std::mem::size_of::<ShimFn>().div_ceil(8);
                     let (name_len, name, captured_scope) = {
-                        let shim_fn: &ShimFn = w.interp_ref().mem.get(fn_pos);
+                        let shim_fn: &ShimFn = interp.mem.get(fn_pos);
                         (shim_fn.name_len, shim_fn.name, shim_fn.captured_scope)
                     };
                     mark_range!(
@@ -902,7 +905,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(
                         MemDescriptor::other(pos, pos + len, "Tuple contents")
                     );
                     for idx in pos..(pos + len) {
-                        w.visit_slot(&mut worklist, idx)?;
+                        w.visit_slot(interp, &mut worklist, idx)?;
                     }
                 }
                 ShimValue::List(pos) => {
@@ -917,7 +920,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(
                     );
 
                     let (data, len, capacity) = {
-                        let lst: &ShimList = w.interp_ref().mem.get(pos.into());
+                        let lst: &ShimList = interp.mem.get(pos.into());
                         (usize::from(lst.data), lst.len(), lst.capacity())
                     };
 
@@ -930,7 +933,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(
                     // Only the logically-present elements are live; the unused
                     // tail of the backing store is marked (above) but not walked.
                     for idx in data..(data + len) {
-                        w.visit_slot(&mut worklist, idx)?;
+                        w.visit_slot(interp, &mut worklist, idx)?;
                     }
                 }
                 s @ ShimValue::String(len, offset, pos) => {
@@ -950,7 +953,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(
                             (offset + len).div_ceil(8),
                             &format!(
                                 "String: {}",
-                                debug_u8s(s.string_from_mem(&w.interp_ref().mem).unwrap())
+                                debug_u8s(s.string_from_mem(&interp.mem).unwrap())
                             )
                         )
                     );
@@ -962,7 +965,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(
                     }
 
                     let (entries_base, entry_count) = {
-                        let dict: &ShimDict = w.interp_ref().mem.get(pos.into());
+                        let dict: &ShimDict = interp.mem.get(pos.into());
                         (usize::from(dict.entries), dict.entry_count as usize)
                     };
 
@@ -975,7 +978,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(
                     let mut keys: Vec<ShimValue> = Vec::new();
                     let mut value_slots: Vec<usize> = Vec::new();
                     {
-                        let u64_slice = &w.interp_ref().mem.mem()
+                        let u64_slice = &interp.mem.mem()
                             [entries_base..entries_base + entry_words * entry_count];
                         let entries: &[DictEntry] = std::slice::from_raw_parts(
                             u64_slice.as_ptr() as *const DictEntry,
@@ -995,7 +998,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(
                         worklist.push(key);
                     }
                     for slot in value_slots {
-                        w.visit_slot(&mut worklist, slot)?;
+                        w.visit_slot(interp, &mut worklist, slot)?;
                     }
 
                     // Mark the dict header.
@@ -1010,7 +1013,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(
                     );
 
                     let (indices_pos, indices_word_count, entries_pos, entries_span) = {
-                        let dict: &ShimDict = w.interp_ref().mem.get(pos.into());
+                        let dict: &ShimDict = interp.mem.get(pos.into());
                         let size: usize = 1 << dict.size_pow;
                         let indices_word_count = if dict.size_pow == 0 {
                             0
@@ -1049,7 +1052,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(
                         continue;
                     }
                     let dict_pos = {
-                        let set: &ShimSet = w.interp_ref().mem.get(pos.into());
+                        let set: &ShimSet = interp.mem.get(pos.into());
                         set.dict_pos
                     };
 
@@ -1076,14 +1079,14 @@ pub(crate) fn walk_heap<W: HeapWalk>(
                         continue;
                     }
                     let (mem_size, method_positions): (usize, Vec<u24>) = {
-                        let def: &StructDef = w.interp_ref().mem.get(pos.into());
+                        let def: &StructDef = interp.mem.get(pos.into());
                         (def.mem_size(), def.method_fn_positions().collect())
                     };
                     mark_range!(
                         mask,
                         pos..(pos + mem_size),
                         {
-                            let def: &StructDef = w.interp_ref().mem.get(pos.into());
+                            let def: &StructDef = interp.mem.get(pos.into());
                             MemDescriptor::other(
                                 pos,
                                 pos + mem_size,
@@ -1103,14 +1106,14 @@ pub(crate) fn walk_heap<W: HeapWalk>(
                         continue;
                     }
                     let member_count = {
-                        let def: &StructDef = w.interp_ref().mem.get(def_pos);
+                        let def: &StructDef = interp.mem.get(def_pos);
                         def.member_count as usize
                     };
                     mark_range!(
                         mask,
                         pos..(pos + member_count),
                         {
-                            let interp = w.interp_ref();
+                            let interp = &*interp;
                             let def: &StructDef = interp.mem.get(def_pos);
                             let mut members = Vec::new();
                             for idx in pos..(pos + member_count) {
@@ -1125,7 +1128,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(
                         }
                     );
                     for idx in pos..(pos + member_count) {
-                        w.visit_slot(&mut worklist, idx)?;
+                        w.visit_slot(interp, &mut worklist, idx)?;
                     }
                     worklist.push(ShimValue::StructDef(def_pos));
                 }
@@ -1147,7 +1150,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(
                     }
                     let type_idx: usize = type_idx.into();
                     let (native_word_count, vtable) = {
-                        let info = &w.interp_ref().mem.native_type_registry[type_idx];
+                        let info = &interp.mem.native_type_registry[type_idx];
                         (info.word_count, info.vtable)
                     };
                     mark_range!(
@@ -1159,7 +1162,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(
                     // Reconstruct a fat pointer to call gc_vals() without a Box.
                     let extra = {
                         let data_ptr =
-                            &w.interp_ref().mem.mem()[pos] as *const u64 as *const ();
+                            &interp.mem.mem()[pos] as *const u64 as *const ();
                         let fat_ptr: (*const (), *const ()) = (data_ptr, vtable);
                         let native_ref: &dyn ShimNative = std::mem::transmute(fat_ptr);
                         native_ref.gc_vals()
@@ -1184,8 +1187,8 @@ pub(crate) fn walk_heap<W: HeapWalk>(
                     );
 
                     // word[pos] holds the bound object; word[pos + 1] holds the fn.
-                    w.visit_slot(&mut worklist, pos)?;
-                    let func_pos = u24::from(w.interp_ref().mem.mem()[pos + 1]);
+                    w.visit_slot(interp, &mut worklist, pos)?;
+                    let func_pos = u24::from(interp.mem.mem()[pos + 1]);
                     worklist.push(ShimValue::Fn(func_pos));
                 }
                 ShimValue::BoundNativeMethod(pos) => {
@@ -1201,7 +1204,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(
                     );
 
                     // word[pos] is the bound object; walk/rewrite it.
-                    w.visit_slot(&mut worklist, pos)?;
+                    w.visit_slot(interp, &mut worklist, pos)?;
                 }
                 ShimValue::Environment(scope_pos) => {
                     let pos: usize = scope_pos.into();
@@ -1209,7 +1212,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(
                         continue;
                     }
                     let (scope_data, scope_capacity, scope_used, scope_parent) = {
-                        let scope: &EnvScope = w.interp_ref().mem.get(scope_pos);
+                        let scope: &EnvScope = interp.mem.get(scope_pos);
                         (scope.data, scope.capacity, scope.used(), scope.parent)
                     };
 
@@ -1231,7 +1234,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(
                         mask,
                         start..end,
                         {
-                            let interp = w.interp_ref();
+                            let interp = &*interp;
                             let scope: &EnvScope = interp.mem.get(scope_pos);
                             MemDescriptor::env_data(start, end, &scope.to_string(&interp.mem))
                         }
@@ -1245,7 +1248,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(
                     while off < scope_used as usize {
                         let (value_offset, val) = {
                             let word_count = (scope_used as usize).div_ceil(8);
-                            let u64_slice = &w.interp_ref().mem.mem()[start..start + word_count];
+                            let u64_slice = &interp.mem.mem()[start..start + word_count];
                             let bytes: &[u8] = std::slice::from_raw_parts(
                                 u64_slice.as_ptr() as *const u8,
                                 scope_used as usize,
@@ -1263,6 +1266,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(
                         };
 
                         w.visit_env_value(
+                            interp,
                             &mut worklist,
                             scope_data,
                             scope_capacity,
@@ -1298,7 +1302,7 @@ impl<'a> GC<'a> {
     pub(crate) fn mark(&mut self, roots: Vec<ShimValue>) -> Bitmask {
         let _zone = zone_scoped!("GC mark");
         // The GC never fails while marking; its `HeapWalk::Err` is `Infallible`.
-        walk_heap(self, roots).unwrap()
+        walk_heap(&mut GcWalk, &mut *self.interpreter, roots).unwrap()
     }
 
     pub fn drop_orphaned_native_types(&mut self, mask: &Bitmask) {
@@ -1356,26 +1360,29 @@ impl<'a> GC<'a> {
     }
 }
 
-impl HeapWalk for GC<'_> {
+/// The [`HeapWalk`] the garbage collector uses to mark. It holds no state — the
+/// interpreter is threaded in by [`walk_heap`] — so it stays separate from
+/// [`GC`], which owns the interpreter for the sweep/drop phases.
+struct GcWalk;
+
+impl HeapWalk for GcWalk {
     // Marking is infallible.
     type Err = std::convert::Infallible;
 
-    fn interp_ref(&self) -> &Interpreter {
-        &*self.interpreter
-    }
-
     fn visit_slot(
         &mut self,
+        interp: &mut Interpreter,
         worklist: &mut Vec<ShimValue>,
         idx: usize,
     ) -> Result<(), Self::Err> {
-        let val: ShimValue = unsafe { *self.interpreter.mem.get(idx.into()) };
+        let val: ShimValue = unsafe { *interp.mem.get(idx.into()) };
         worklist.push(val);
         Ok(())
     }
 
     fn visit_env_value(
         &mut self,
+        _interp: &mut Interpreter,
         worklist: &mut Vec<ShimValue>,
         _scope_data: u24,
         _scope_capacity: u32,
