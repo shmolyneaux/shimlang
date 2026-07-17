@@ -782,9 +782,10 @@ impl Bitmask {
 /// callers: the mark phase of the garbage collector and the two hot-reload
 /// fix-up passes (struct-shape updates and function-reference updates).
 ///
-/// [`walk_heap`] owns the traversal itself — the worklist and the per-value
-/// dispatch on [`ShimValue`] — and calls back into the implementor for the
-/// parts that actually differ between the callers.
+/// [`walk_heap`] owns the traversal state — the worklist *and* the mark bitmask
+/// (including cycle detection and capacity growth) — and dispatches per
+/// [`ShimValue`]. Implementors only describe what to do with each discovered
+/// value; they neither hold nor manage the mask.
 pub(crate) trait HeapWalk {
     /// Error produced while visiting a value. The GC never fails
     /// (`Infallible`); hot reload can (`String`).
@@ -794,22 +795,6 @@ pub(crate) trait HeapWalk {
     /// for reads while discovering an object's layout, so a shared borrow is
     /// enough (and lets multiple reads coexist).
     fn interp_ref(&self) -> &Interpreter;
-
-    /// Whether the object at word `pos` has already been visited. Used to break
-    /// cycles and avoid re-marking shared objects.
-    fn seen(&self, pos: usize) -> bool;
-
-    /// Grow the visited/mark set so it covers any memory allocated while
-    /// walking (hot reload can allocate when re-running struct constructors).
-    fn ensure_capacity(&mut self);
-
-    /// Mark word `idx` as reached, without a debug descriptor. Used by
-    /// [`mark_range!`] in non-`gc_debug` builds.
-    fn set_marked(&mut self, idx: usize);
-
-    /// Mark word `idx` as reached, recording `desc` for the GC memory viewer
-    /// when `gc_debug` is enabled. Non-GC walkers ignore `desc`.
-    fn set_marked_desc(&mut self, idx: usize, desc: &MemDescriptor);
 
     /// Handle the child value stored at word `idx`: enqueue it for traversal,
     /// and (for hot reload) rewrite it in place to point at the reloaded
@@ -829,42 +814,53 @@ pub(crate) trait HeapWalk {
     ) -> Result<(), Self::Err>;
 }
 
-/// Mark every word in `range`, attaching a debug descriptor built from `desc`
-/// only when `gc_debug` is enabled (mirrors [`mark_bit!`]). In release builds
-/// `desc` is not evaluated at all, so it may freely format strings or read
-/// memory to build a rich description.
+/// Mark every word in `range` on `mask`, attaching a debug descriptor built
+/// from `desc` only when `gc_debug` is enabled (mirrors [`mark_bit!`]). In
+/// release builds `desc` is not evaluated at all, so it may freely format
+/// strings or read memory to build a rich description.
 macro_rules! mark_range {
-    ($w:expr, $range:expr, $desc:expr) => {{
+    ($mask:expr, $range:expr, $desc:expr) => {{
         #[cfg(feature = "gc_debug")]
         {
             let desc = $desc;
             for idx in $range {
-                $w.set_marked_desc(idx, &desc);
+                $mask.set(idx, &desc);
             }
         }
         #[cfg(not(feature = "gc_debug"))]
         {
             for idx in $range {
-                $w.set_marked(idx);
+                $mask.setx(idx);
             }
         }
     }};
 }
 
 /// Walk every object transitively reachable from `roots`, dispatching the
-/// per-object work to `w`. This is the single traversal shared by GC marking
-/// and both hot-reload passes.
+/// per-object work to `w`, and return the mark bitmask that records which words
+/// were reached. This is the single traversal shared by GC marking and both
+/// hot-reload passes; each call gets a fresh mask, so callers never share or
+/// manage one themselves. The GC keeps the returned mask (for sweeping and the
+/// memory viewer); hot reload only needs its side effects and drops it.
 ///
 /// Safety: reads objects out of interpreter memory using the type tags carried
 /// by each [`ShimValue`], so the memory must actually hold values of those
 /// shapes (which it does for any live object graph).
-pub(crate) fn walk_heap<W: HeapWalk>(w: &mut W, roots: Vec<ShimValue>) -> Result<(), W::Err> {
+pub(crate) fn walk_heap<W: HeapWalk>(
+    w: &mut W,
+    roots: Vec<ShimValue>,
+) -> Result<Bitmask, W::Err> {
+    let mut mask = Bitmask::new(w.interp_ref().mem.wilderness as usize);
+    // Reserve word 0, the null sentinel reserved by MMU::with_capacity, so the
+    // GC never frees it. Harmless for the hot-reload passes that discard `mask`.
+    mark_bit!(mask, 0, MemDescriptor::other(0, 1, "null"));
+
     let mut worklist = roots;
     unsafe {
         while let Some(val) = worklist.pop() {
             // Re-running struct constructors during hot reload can allocate, so
             // keep the mark set large enough for any freshly allocated words.
-            w.ensure_capacity();
+            mask.ensure_capacity(w.interp_ref().mem.wilderness as usize);
             match val {
                 ShimValue::Integer(_)
                 | ShimValue::Float(_)
@@ -875,7 +871,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(w: &mut W, roots: Vec<ShimValue>) -> Result
                 | ShimValue::Uninitialized => (),
                 ShimValue::Fn(fn_pos) => {
                     let pos: usize = fn_pos.into();
-                    if w.seen(pos) {
+                    if mask.is_set(pos) {
                         continue;
                     }
                     let shim_fn_word_count = std::mem::size_of::<ShimFn>().div_ceil(8);
@@ -884,7 +880,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(w: &mut W, roots: Vec<ShimValue>) -> Result
                         (shim_fn.name_len, shim_fn.name, shim_fn.captured_scope)
                     };
                     mark_range!(
-                        w,
+                        mask,
                         pos..(pos + shim_fn_word_count),
                         MemDescriptor::other(pos, pos + shim_fn_word_count, "ShimFn")
                     );
@@ -901,7 +897,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(w: &mut W, roots: Vec<ShimValue>) -> Result
                     let pos: usize = pos.into();
                     let len: usize = len.into();
                     mark_range!(
-                        w,
+                        mask,
                         pos..(pos + len),
                         MemDescriptor::other(pos, pos + len, "Tuple contents")
                     );
@@ -911,11 +907,11 @@ pub(crate) fn walk_heap<W: HeapWalk>(w: &mut W, roots: Vec<ShimValue>) -> Result
                 }
                 ShimValue::List(pos) => {
                     let pos: usize = pos.into();
-                    if w.seen(pos) {
+                    if mask.is_set(pos) {
                         continue;
                     }
                     mark_range!(
-                        w,
+                        mask,
                         pos..(pos + 1),
                         MemDescriptor::other(pos, pos + 1, "List header")
                     );
@@ -926,7 +922,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(w: &mut W, roots: Vec<ShimValue>) -> Result
                     };
 
                     mark_range!(
-                        w,
+                        mask,
                         data..(data + capacity),
                         MemDescriptor::other(data, data + capacity, "List item")
                     );
@@ -939,7 +935,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(w: &mut W, roots: Vec<ShimValue>) -> Result
                 }
                 s @ ShimValue::String(len, offset, pos) => {
                     let pos: usize = usize::from(pos);
-                    if w.seen(pos) {
+                    if mask.is_set(pos) {
                         continue;
                     }
                     let len = len as usize;
@@ -947,7 +943,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(w: &mut W, roots: Vec<ShimValue>) -> Result
                     #[cfg(not(feature = "gc_debug"))]
                     let _ = s;
                     mark_range!(
-                        w,
+                        mask,
                         pos..(pos + (offset + len).div_ceil(8)),
                         MemDescriptor::other(
                             pos,
@@ -961,7 +957,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(w: &mut W, roots: Vec<ShimValue>) -> Result
                 }
                 ShimValue::Dict(pos) => {
                     let pos: usize = pos.into();
-                    if w.seen(pos) {
+                    if mask.is_set(pos) {
                         continue;
                     }
 
@@ -1004,7 +1000,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(w: &mut W, roots: Vec<ShimValue>) -> Result
 
                     // Mark the dict header.
                     mark_range!(
-                        w,
+                        mask,
                         pos..(pos + std::mem::size_of::<ShimDict>().div_ceil(8)),
                         MemDescriptor::other(
                             pos,
@@ -1031,7 +1027,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(w: &mut W, roots: Vec<ShimValue>) -> Result
 
                     // Mark the indices array
                     mark_range!(
-                        w,
+                        mask,
                         indices_pos..(indices_pos + indices_word_count),
                         MemDescriptor::other(
                             indices_pos,
@@ -1042,14 +1038,14 @@ pub(crate) fn walk_heap<W: HeapWalk>(w: &mut W, roots: Vec<ShimValue>) -> Result
 
                     // Mark the entries array
                     mark_range!(
-                        w,
+                        mask,
                         entries_pos..(entries_pos + entries_span),
                         MemDescriptor::other(entries_pos, entries_pos + entries_span, "dict entries")
                     );
                 }
                 ShimValue::Set(pos) => {
                     let pos: usize = pos.into();
-                    if w.seen(pos) {
+                    if mask.is_set(pos) {
                         continue;
                     }
                     let dict_pos = {
@@ -1059,7 +1055,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(w: &mut W, roots: Vec<ShimValue>) -> Result
 
                     // Mark the space for the ShimSet struct
                     mark_range!(
-                        w,
+                        mask,
                         pos..(pos + std::mem::size_of::<ShimSet>().div_ceil(8)),
                         MemDescriptor::other(
                             pos,
@@ -1076,7 +1072,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(w: &mut W, roots: Vec<ShimValue>) -> Result
                 }
                 ShimValue::StructDef(pos) => {
                     let pos: usize = pos.into();
-                    if w.seen(pos) {
+                    if mask.is_set(pos) {
                         continue;
                     }
                     let (mem_size, method_positions): (usize, Vec<u24>) = {
@@ -1084,7 +1080,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(w: &mut W, roots: Vec<ShimValue>) -> Result
                         (def.mem_size(), def.method_fn_positions().collect())
                     };
                     mark_range!(
-                        w,
+                        mask,
                         pos..(pos + mem_size),
                         {
                             let def: &StructDef = w.interp_ref().mem.get(pos.into());
@@ -1103,7 +1099,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(w: &mut W, roots: Vec<ShimValue>) -> Result
                 }
                 ShimValue::Struct(def_pos, pos) => {
                     let pos: usize = pos.into();
-                    if w.seen(pos) {
+                    if mask.is_set(pos) {
                         continue;
                     }
                     let member_count = {
@@ -1111,7 +1107,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(w: &mut W, roots: Vec<ShimValue>) -> Result
                         def.member_count as usize
                     };
                     mark_range!(
-                        w,
+                        mask,
                         pos..(pos + member_count),
                         {
                             let interp = w.interp_ref();
@@ -1135,18 +1131,18 @@ pub(crate) fn walk_heap<W: HeapWalk>(w: &mut W, roots: Vec<ShimValue>) -> Result
                 }
                 ShimValue::NativeFn(pos) => {
                     let pos: usize = pos.into();
-                    if w.seen(pos) {
+                    if mask.is_set(pos) {
                         continue;
                     }
                     mark_range!(
-                        w,
+                        mask,
                         pos..(pos + 1),
                         MemDescriptor::other(pos, pos + 1, "NativeFn")
                     );
                 }
                 ShimValue::Native(type_idx, pos) => {
                     let pos: usize = pos.into();
-                    if w.seen(pos) {
+                    if mask.is_set(pos) {
                         continue;
                     }
                     let type_idx: usize = type_idx.into();
@@ -1155,7 +1151,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(w: &mut W, roots: Vec<ShimValue>) -> Result
                         (info.word_count, info.vtable)
                     };
                     mark_range!(
-                        w,
+                        mask,
                         pos..(pos + native_word_count),
                         MemDescriptor::other(pos, pos + native_word_count, "Native")
                     );
@@ -1172,17 +1168,17 @@ pub(crate) fn walk_heap<W: HeapWalk>(w: &mut W, roots: Vec<ShimValue>) -> Result
                 }
                 ShimValue::BoundMethod(pos) => {
                     let pos: usize = pos.into();
-                    if w.seen(pos) {
+                    if mask.is_set(pos) {
                         continue;
                     }
                     // Mark the 2 words used to store the BoundMethod
                     mark_range!(
-                        w,
+                        mask,
                         pos..(pos + 1),
                         MemDescriptor::other(pos, pos + 1, "Bound Method Obj")
                     );
                     mark_range!(
-                        w,
+                        mask,
                         (pos + 1)..(pos + 2),
                         MemDescriptor::other(pos + 1, pos + 2, "Bound Method fn")
                     );
@@ -1194,12 +1190,12 @@ pub(crate) fn walk_heap<W: HeapWalk>(w: &mut W, roots: Vec<ShimValue>) -> Result
                 }
                 ShimValue::BoundNativeMethod(pos) => {
                     let pos: usize = pos.into();
-                    if w.seen(pos) {
+                    if mask.is_set(pos) {
                         continue;
                     }
                     // Two words: the bound ShimValue and the native fn pointer.
                     mark_range!(
-                        w,
+                        mask,
                         pos..(pos + 2),
                         MemDescriptor::other(pos, pos + 2, "BoundNativeMethod")
                     );
@@ -1209,7 +1205,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(w: &mut W, roots: Vec<ShimValue>) -> Result
                 }
                 ShimValue::Environment(scope_pos) => {
                     let pos: usize = scope_pos.into();
-                    if w.seen(pos) {
+                    if mask.is_set(pos) {
                         continue;
                     }
                     let (scope_data, scope_capacity, scope_used, scope_parent) = {
@@ -1219,7 +1215,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(w: &mut W, roots: Vec<ShimValue>) -> Result
 
                     // Chunk of memory that stores the EnvScope metadata
                     mark_range!(
-                        w,
+                        mask,
                         pos..(pos + std::mem::size_of::<EnvScope>().div_ceil(8)),
                         MemDescriptor::env_header(
                             pos,
@@ -1232,7 +1228,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(w: &mut W, roots: Vec<ShimValue>) -> Result
                     let start = usize::from(scope_data);
                     let end = start + scope_capacity as usize;
                     mark_range!(
-                        w,
+                        mask,
                         start..end,
                         {
                             let interp = w.interp_ref();
@@ -1285,32 +1281,30 @@ pub(crate) fn walk_heap<W: HeapWalk>(w: &mut W, roots: Vec<ShimValue>) -> Result
         }
     }
 
-    Ok(())
+    Ok(mask)
 }
 
 pub(crate) struct GC<'a> {
     pub interpreter: &'a mut Interpreter,
-    pub mask: Bitmask,
 }
 
 impl<'a> GC<'a> {
     pub(crate) fn new(interpreter: &'a mut Interpreter) -> Self {
-        let mut mask = Bitmask::new(interpreter.mem.wilderness as usize);
-        // Mark word 0 so the GC never frees the sentinel reserved by MMU::with_capacity
-        mark_bit!(mask, 0, MemDescriptor::other(0, 1, "null"));
-        Self { interpreter, mask }
+        Self { interpreter }
     }
 
-    pub(crate) fn mark(&mut self, vals: Vec<ShimValue>) {
+    /// Mark every object reachable from `roots`, returning the resulting mark
+    /// bitmask for [`GC::sweep`] / [`GC::drop_orphaned_native_types`].
+    pub(crate) fn mark(&mut self, roots: Vec<ShimValue>) -> Bitmask {
         let _zone = zone_scoped!("GC mark");
         // The GC never fails while marking; its `HeapWalk::Err` is `Infallible`.
-        walk_heap(self, vals).unwrap();
+        walk_heap(self, roots).unwrap()
     }
 
-    pub fn drop_orphaned_native_types(&mut self) {
+    pub fn drop_orphaned_native_types(&mut self, mask: &Bitmask) {
         let (to_keep, to_drop): (Vec<_>, Vec<_>) = self.interpreter.mem.droppable_native_pos
             .drain(..)
-            .partition(|(pos, _)| self.mask.is_set(*pos as usize));
+            .partition(|(pos, _)| mask.is_set(*pos as usize));
 
         self.interpreter.mem.droppable_native_pos = to_keep;
         self.interpreter.mem.dropping_native = true;
@@ -1328,14 +1322,14 @@ impl<'a> GC<'a> {
         self.interpreter.mem.dropping_native = false;
     }
 
-    pub(crate) fn sweep(&mut self) {
+    pub(crate) fn sweep(&mut self, mask: &Bitmask) {
         let _zone = zone_scoped!("GC sweep");
 
         let wilderness = self.interpreter.mem.wilderness;
         let mut new_wilderness = wilderness;
         let mut free_blocks: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
 
-        for range in self.mask.find_zeros() {
+        for range in mask.find_zeros() {
             let start = range.start as u32;
             // `find_zeros` rounds the final run up to the next 64-bit boundary,
             // which can extend past the wilderness. Clamp so we never track
@@ -1368,29 +1362,6 @@ impl HeapWalk for GC<'_> {
 
     fn interp_ref(&self) -> &Interpreter {
         &*self.interpreter
-    }
-
-    fn seen(&self, pos: usize) -> bool {
-        self.mask.is_set(pos)
-    }
-
-    fn ensure_capacity(&mut self) {
-        self.mask
-            .ensure_capacity(self.interpreter.mem.wilderness as usize);
-    }
-
-    fn set_marked(&mut self, idx: usize) {
-        self.mask.setx(idx);
-    }
-
-    fn set_marked_desc(&mut self, idx: usize, desc: &MemDescriptor) {
-        #[cfg(feature = "gc_debug")]
-        self.mask.set(idx, desc);
-        #[cfg(not(feature = "gc_debug"))]
-        {
-            let _ = desc;
-            self.mask.setx(idx);
-        }
     }
 
     fn visit_slot(

@@ -2517,9 +2517,9 @@ impl Interpreter {
                 let _zone = zone_scoped!("Init GC");
                 GC::new(self)
             };
-            gc.mark(roots);
-            gc.sweep();
-            gc.drop_orphaned_native_types();
+            let mask = gc.mark(roots);
+            gc.sweep(&mask);
+            gc.drop_orphaned_native_types(&mask);
         }
     }
 
@@ -2659,13 +2659,11 @@ impl Interpreter {
         // scope so they point at their reloaded shapes.
         let old_scope = old_env.current_scope;
         {
-            let mut mask = Bitmask::new(self.mem.wilderness as usize);
             // Maps an old struct position to the new one after realloc, so a
             // struct reached by several paths is only reallocated once.
             let mut updated_structs = HashMap::new();
             let mut walker = HotReloadWalk {
                 interp: &mut *self,
-                mask: &mut mask,
                 pass: ReloadPass::Structs {
                     ty_map: &ty_map,
                     updated_structs: &mut updated_structs,
@@ -2701,17 +2699,15 @@ impl Interpreter {
         }
 
         // Update function references to point to the new locations, reachable
-        // from the reloaded program's root scope. This uses a fresh mask rather
-        // than reusing the struct pass's: state carried over from the old
-        // program is reachable from both scopes, and any function references
-        // nested inside it still need remapping here even though the struct
-        // pass already marked those objects.
+        // from the reloaded program's root scope. `walk_heap` builds a fresh
+        // mask here rather than reusing the struct pass's: state carried over
+        // from the old program is reachable from both scopes, and any function
+        // references nested inside it still need remapping here even though the
+        // struct pass already marked those objects.
         let root_scope = self.root_env.current_scope;
         {
-            let mut mask = Bitmask::new(self.mem.wilderness as usize);
             let mut walker = HotReloadWalk {
                 interp: &mut *self,
-                mask: &mut mask,
                 pass: ReloadPass::Fns(&fn_map),
             };
             walk_heap(
@@ -3647,14 +3643,15 @@ impl Interpreter {
             let _zone = zone_scoped!("Init GC");
             GC::new(self)
         };
-        gc.mark(roots);
+        let mask = gc.mark(roots);
 
         #[cfg(feature = "gc_debug")]
         {
-            gc.mask.description
+            mask.description
         }
         #[cfg(not(feature = "gc_debug"))]
         {
+            let _ = mask;
             HashMap::new()
         }
     }
@@ -3859,11 +3856,11 @@ enum ReloadPass<'m> {
     Fns(&'m HashMap<u24, u24>),
 }
 
-/// [`HeapWalk`] implementation used by both hot-reload passes. Each pass runs
-/// with its own mask (see the call sites for why they cannot be shared).
+/// [`HeapWalk`] implementation used by both hot-reload passes. `walk_heap` owns
+/// the mark bitmask (a fresh one per pass), so this only carries the
+/// pass-specific rewrite state.
 struct HotReloadWalk<'a, 'm> {
     interp: &'a mut Interpreter,
-    mask: &'a mut Bitmask,
     pass: ReloadPass<'m>,
 }
 
@@ -3872,23 +3869,6 @@ impl HeapWalk for HotReloadWalk<'_, '_> {
 
     fn interp_ref(&self) -> &Interpreter {
         &*self.interp
-    }
-
-    fn seen(&self, pos: usize) -> bool {
-        self.mask.is_set(pos)
-    }
-
-    fn ensure_capacity(&mut self) {
-        self.mask.ensure_capacity(self.interp.mem.wilderness as usize);
-    }
-
-    fn set_marked(&mut self, idx: usize) {
-        self.mask.setx(idx);
-    }
-
-    fn set_marked_desc(&mut self, idx: usize, _desc: &MemDescriptor) {
-        // Hot reload only needs the visited set, not the debug descriptors.
-        self.mask.setx(idx);
     }
 
     fn visit_slot(&mut self, worklist: &mut Vec<ShimValue>, idx: usize) -> Result<(), Self::Err> {
