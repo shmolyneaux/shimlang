@@ -777,29 +777,6 @@ impl Bitmask {
     }
 }
 
-/// Abstraction over the different ways we need to walk every object reachable
-/// (transitively) from a set of roots in interpreter memory. There are three
-/// callers: the mark phase of the garbage collector and the two hot-reload
-/// fix-up passes (struct-shape updates and function-reference updates).
-///
-/// [`walk_heap`] owns the traversal state — the worklist *and* the mark bitmask
-/// (including cycle detection and capacity growth) — and dispatches per
-/// [`ShimValue`]. The interpreter being walked is threaded in by `walk_heap`
-/// rather than stored here, so implementors only describe what to do with each
-/// discovered value; they hold neither the mask nor the interpreter.
-pub(crate) trait HeapWalk {
-    /// Error produced while visiting a value. The GC never fails
-    /// (`Infallible`); hot reload can (`String`).
-    type Err;
-
-    /// Map a value discovered during the walk to the value that should take its
-    /// place. `walk_heap` enqueues the result and, if it differs from `val`,
-    /// writes it back wherever the value lived (a heap word or an env slot). The
-    /// GC returns `val` unchanged; hot reload rewrites structs and functions to
-    /// their reloaded equivalents.
-    fn transform(&mut self, interp: &mut Interpreter, val: ShimValue) -> Result<ShimValue, Self::Err>;
-}
-
 /// Mark every word in `range` on `mask`, attaching a debug descriptor built
 /// from `desc` only when `gc_debug` is enabled (mirrors [`mark_bit!`]). In
 /// release builds `desc` is not evaluated at all, so it may freely format
@@ -822,18 +799,18 @@ macro_rules! mark_range {
     }};
 }
 
-/// Resolve the child value stored at word `idx`: hand it to `w`, write any
-/// rewrite back in place, and enqueue the result for further traversal.
+/// Resolve the child value stored at word `idx`: hand it to `transform`, write
+/// any rewrite back in place, and enqueue the result for further traversal.
 ///
 /// Safety: `idx` must be a live word holding a [`ShimValue`].
-unsafe fn visit_word<W: HeapWalk>(
-    w: &mut W,
+unsafe fn visit_word<E>(
+    transform: &mut impl FnMut(&mut Interpreter, ShimValue) -> Result<ShimValue, E>,
     interp: &mut Interpreter,
     worklist: &mut Vec<ShimValue>,
     idx: usize,
-) -> Result<(), W::Err> {
+) -> Result<(), E> {
     let val = unsafe { *interp.mem.get(idx.into()) };
-    let new = w.transform(interp, val)?;
+    let new = transform(interp, val)?;
     if new.to_u64() != val.to_u64() {
         unsafe { *interp.mem.get_mut(idx.into()) = new };
     }
@@ -841,21 +818,25 @@ unsafe fn visit_word<W: HeapWalk>(
     Ok(())
 }
 
-/// Walk every object transitively reachable from `roots`, dispatching the
-/// per-object work to `w`, and return the mark bitmask that records which words
-/// were reached. This is the single traversal shared by GC marking and both
-/// hot-reload passes; each call gets a fresh mask, so callers never share or
-/// manage one themselves. The GC keeps the returned mask (for sweeping and the
-/// memory viewer); hot reload only needs its side effects and drops it.
+/// Walk every object transitively reachable from `roots` and return the mark
+/// bitmask that records which words were reached. `transform` maps each
+/// discovered value to its replacement (identity for GC marking; a struct/fn
+/// rewrite for the hot-reload passes); `walk_heap` enqueues the result and, when
+/// it changed, writes it back wherever the value lived.
+///
+/// This is the single traversal shared by GC marking and both hot-reload
+/// passes; each call gets a fresh mask, so callers never share or manage one
+/// themselves. The GC keeps the returned mask (for sweeping and the memory
+/// viewer); hot reload only needs its side effects and drops it.
 ///
 /// Safety: reads objects out of interpreter memory using the type tags carried
 /// by each [`ShimValue`], so the memory must actually hold values of those
 /// shapes (which it does for any live object graph).
-pub(crate) fn walk_heap<W: HeapWalk>(
-    w: &mut W,
+pub(crate) fn walk_heap<E>(
+    mut transform: impl FnMut(&mut Interpreter, ShimValue) -> Result<ShimValue, E>,
     interp: &mut Interpreter,
     roots: Vec<ShimValue>,
-) -> Result<Bitmask, W::Err> {
+) -> Result<Bitmask, E> {
     let mut mask = Bitmask::new(interp.mem.wilderness as usize);
     // Reserve word 0, the null sentinel reserved by MMU::with_capacity, so the
     // GC never frees it. Harmless for the hot-reload passes that discard `mask`.
@@ -908,7 +889,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(
                         MemDescriptor::other(pos, pos + len, "Tuple contents")
                     );
                     for idx in pos..(pos + len) {
-                        visit_word(w, interp, &mut worklist, idx)?;
+                        visit_word(&mut transform, interp, &mut worklist, idx)?;
                     }
                 }
                 ShimValue::List(pos) => {
@@ -936,7 +917,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(
                     // Only the logically-present elements are live; the unused
                     // tail of the backing store is marked (above) but not walked.
                     for idx in data..(data + len) {
-                        visit_word(w, interp, &mut worklist, idx)?;
+                        visit_word(&mut transform, interp, &mut worklist, idx)?;
                     }
                 }
                 s @ ShimValue::String(len, offset, pos) => {
@@ -1001,7 +982,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(
                         worklist.push(key);
                     }
                     for slot in value_slots {
-                        visit_word(w, interp, &mut worklist, slot)?;
+                        visit_word(&mut transform, interp, &mut worklist, slot)?;
                     }
 
                     // Mark the dict header.
@@ -1131,7 +1112,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(
                         }
                     );
                     for idx in pos..(pos + member_count) {
-                        visit_word(w, interp, &mut worklist, idx)?;
+                        visit_word(&mut transform, interp, &mut worklist, idx)?;
                     }
                     worklist.push(ShimValue::StructDef(def_pos));
                 }
@@ -1190,7 +1171,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(
                     );
 
                     // word[pos] holds the bound object; word[pos + 1] holds the fn.
-                    visit_word(w, interp, &mut worklist, pos)?;
+                    visit_word(&mut transform, interp, &mut worklist, pos)?;
                     let func_pos = u24::from(interp.mem.mem()[pos + 1]);
                     worklist.push(ShimValue::Fn(func_pos));
                 }
@@ -1207,7 +1188,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(
                     );
 
                     // word[pos] is the bound object; walk/rewrite it.
-                    visit_word(w, interp, &mut worklist, pos)?;
+                    visit_word(&mut transform, interp, &mut worklist, pos)?;
                 }
                 ShimValue::Environment(scope_pos) => {
                     let pos: usize = scope_pos.into();
@@ -1269,7 +1250,7 @@ pub(crate) fn walk_heap<W: HeapWalk>(
                             (value_offset, val)
                         };
 
-                        let new = w.transform(interp, val)?;
+                        let new = transform(interp, val)?;
                         if new.to_u64() != val.to_u64() {
                             EnvScope::write_value_at(
                                 &mut interp.mem,
@@ -1308,8 +1289,15 @@ impl<'a> GC<'a> {
     /// bitmask for [`GC::sweep`] / [`GC::drop_orphaned_native_types`].
     pub(crate) fn mark(&mut self, roots: Vec<ShimValue>) -> Bitmask {
         let _zone = zone_scoped!("GC mark");
-        // The GC never fails while marking; its `HeapWalk::Err` is `Infallible`.
-        walk_heap(&mut GcWalk, &mut *self.interpreter, roots).unwrap()
+        // Marking only reads; the walk never rewrites a value, so the transform
+        // is the identity (and infallible).
+        fn keep(
+            _: &mut Interpreter,
+            val: ShimValue,
+        ) -> Result<ShimValue, std::convert::Infallible> {
+            Ok(val)
+        }
+        walk_heap(keep, &mut *self.interpreter, roots).unwrap()
     }
 
     pub fn drop_orphaned_native_types(&mut self, mask: &Bitmask) {
@@ -1364,24 +1352,5 @@ impl<'a> GC<'a> {
 
         self.interpreter.mem.free_blocks = free_blocks;
         self.interpreter.mem.wilderness = new_wilderness;
-    }
-}
-
-/// The [`HeapWalk`] the garbage collector uses to mark. It holds no state — the
-/// interpreter is threaded in by [`walk_heap`] — so it stays separate from
-/// [`GC`], which owns the interpreter for the sweep/drop phases.
-struct GcWalk;
-
-impl HeapWalk for GcWalk {
-    // Marking is infallible.
-    type Err = std::convert::Infallible;
-
-    fn transform(
-        &mut self,
-        _interp: &mut Interpreter,
-        val: ShimValue,
-    ) -> Result<ShimValue, Self::Err> {
-        // Marking never rewrites anything.
-        Ok(val)
     }
 }

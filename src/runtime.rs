@@ -2662,14 +2662,8 @@ impl Interpreter {
             // Maps an old struct position to the new one after realloc, so a
             // struct reached by several paths is only reallocated once.
             let mut updated_structs = HashMap::new();
-            let mut walker = HotReloadWalk {
-                pass: ReloadPass::Structs {
-                    ty_map: &ty_map,
-                    updated_structs: &mut updated_structs,
-                },
-            };
             walk_heap(
-                &mut walker,
+                |interp, val| reload_update_struct(interp, &mut updated_structs, val, &ty_map),
                 &mut *self,
                 vec![ShimValue::Environment(u24::from(old_scope))],
             )?;
@@ -2706,11 +2700,8 @@ impl Interpreter {
         // struct pass already marked those objects.
         let root_scope = self.root_env.current_scope;
         {
-            let mut walker = HotReloadWalk {
-                pass: ReloadPass::Fns(&fn_map),
-            };
             walk_heap(
-                &mut walker,
+                |_interp, val| reload_update_fn(val, &fn_map),
                 &mut *self,
                 vec![ShimValue::Environment(u24::from(root_scope))],
             )?;
@@ -3840,46 +3831,6 @@ mod tests {
 enum ReloadStructTransform {
     NoOp(u24),   // Just point to new ty, the data doesn't need to change
     Realloc(u24),
-}
-
-/// Which hot-reload fix-up a [`HotReloadWalk`] applies at each value slot.
-enum ReloadPass<'m> {
-    /// Rewrite struct values to their reloaded shapes. `updated_structs` maps
-    /// an already-reallocated struct's old position to its new one, so a struct
-    /// reachable by several paths is only reallocated once; it is only needed
-    /// by this pass.
-    Structs {
-        ty_map: &'m HashMap<u24, ReloadStructTransform>,
-        updated_structs: &'m mut HashMap<u24, u24>,
-    },
-    /// Rewrite function references to their new positions.
-    Fns(&'m HashMap<u24, u24>),
-}
-
-/// [`HeapWalk`] implementation used by both hot-reload passes. `walk_heap` owns
-/// the mark bitmask (a fresh one per pass), threads in the interpreter, and
-/// writes the transformed value back wherever it lives, so this only carries
-/// the pass-specific rewrite state.
-struct HotReloadWalk<'m> {
-    pass: ReloadPass<'m>,
-}
-
-impl HeapWalk for HotReloadWalk<'_> {
-    type Err = String;
-
-    fn transform(
-        &mut self,
-        interp: &mut Interpreter,
-        val: ShimValue,
-    ) -> Result<ShimValue, Self::Err> {
-        match &mut self.pass {
-            ReloadPass::Structs {
-                ty_map,
-                updated_structs,
-            } => reload_update_struct(interp, updated_structs, val, ty_map),
-            ReloadPass::Fns(fn_map) => reload_update_fn(val, fn_map),
-        }
-    }
 }
 
 /**
