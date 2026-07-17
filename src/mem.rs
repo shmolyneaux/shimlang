@@ -803,17 +803,27 @@ macro_rules! mark_range {
 /// any rewrite back in place, and enqueue the result for further traversal.
 ///
 /// Safety: `idx` must be a live word holding a [`ShimValue`].
-unsafe fn visit_word<E>(
+///
+/// When `REWRITE` is false (GC marking) this compiles down to a plain
+/// read-and-enqueue: `transform` is never called and no store is emitted, so
+/// the GC provably never writes to (or dirties) the heap it is scanning.
+unsafe fn visit_word<const REWRITE: bool, E>(
     transform: &mut impl FnMut(&mut Interpreter, ShimValue) -> Result<ShimValue, E>,
     interp: &mut Interpreter,
     worklist: &mut Vec<ShimValue>,
     idx: usize,
 ) -> Result<(), E> {
-    let val = unsafe { *interp.mem.get(idx.into()) };
-    let new = transform(interp, val)?;
-    if new.to_u64() != val.to_u64() {
-        unsafe { *interp.mem.get_mut(idx.into()) = new };
-    }
+    // Index by word directly rather than round-tripping the usize through a u24.
+    let val = unsafe { ShimValue::from_u64(interp.mem.mem()[idx]) };
+    let new = if REWRITE {
+        let new = transform(interp, val)?;
+        if new.to_u64() != val.to_u64() {
+            interp.mem.mem_mut(idx, 1)[0] = new.to_u64();
+        }
+        new
+    } else {
+        val
+    };
     worklist.push(new);
     Ok(())
 }
@@ -832,7 +842,7 @@ unsafe fn visit_word<E>(
 /// Safety: reads objects out of interpreter memory using the type tags carried
 /// by each [`ShimValue`], so the memory must actually hold values of those
 /// shapes (which it does for any live object graph).
-pub(crate) fn walk_heap<E>(
+pub(crate) fn walk_heap<const REWRITE: bool, E>(
     mut transform: impl FnMut(&mut Interpreter, ShimValue) -> Result<ShimValue, E>,
     interp: &mut Interpreter,
     roots: Vec<ShimValue>,
@@ -889,7 +899,7 @@ pub(crate) fn walk_heap<E>(
                         MemDescriptor::other(pos, pos + len, "Tuple contents")
                     );
                     for idx in pos..(pos + len) {
-                        visit_word(&mut transform, interp, &mut worklist, idx)?;
+                        visit_word::<REWRITE, _>(&mut transform, interp, &mut worklist, idx)?;
                     }
                 }
                 ShimValue::List(pos) => {
@@ -917,7 +927,7 @@ pub(crate) fn walk_heap<E>(
                     // Only the logically-present elements are live; the unused
                     // tail of the backing store is marked (above) but not walked.
                     for idx in data..(data + len) {
-                        visit_word(&mut transform, interp, &mut worklist, idx)?;
+                        visit_word::<REWRITE, _>(&mut transform, interp, &mut worklist, idx)?;
                     }
                 }
                 s @ ShimValue::String(len, offset, pos) => {
@@ -963,12 +973,12 @@ pub(crate) fn walk_heap<E>(
                     let value_word = std::mem::offset_of!(DictEntry, value) / 8;
                     for entry_idx in 0..entry_count {
                         let base = entries_base + entry_idx * entry_words;
-                        let key: ShimValue = *interp.mem.get((base + key_word).into());
+                        let key = ShimValue::from_u64(interp.mem.mem()[base + key_word]);
                         if !key.is_uninitialized() {
                             // Keys are never structs or functions (not hashable),
                             // so they only need to be traversed, not rewritten.
                             worklist.push(key);
-                            visit_word(&mut transform, interp, &mut worklist, base + value_word)?;
+                            visit_word::<REWRITE, _>(&mut transform, interp, &mut worklist, base + value_word)?;
                         }
                     }
 
@@ -1099,7 +1109,7 @@ pub(crate) fn walk_heap<E>(
                         }
                     );
                     for idx in pos..(pos + member_count) {
-                        visit_word(&mut transform, interp, &mut worklist, idx)?;
+                        visit_word::<REWRITE, _>(&mut transform, interp, &mut worklist, idx)?;
                     }
                     worklist.push(ShimValue::StructDef(def_pos));
                 }
@@ -1158,7 +1168,7 @@ pub(crate) fn walk_heap<E>(
                     );
 
                     // word[pos] holds the bound object; word[pos + 1] holds the fn.
-                    visit_word(&mut transform, interp, &mut worklist, pos)?;
+                    visit_word::<REWRITE, _>(&mut transform, interp, &mut worklist, pos)?;
                     let func_pos = u24::from(interp.mem.mem()[pos + 1]);
                     worklist.push(ShimValue::Fn(func_pos));
                 }
@@ -1175,7 +1185,7 @@ pub(crate) fn walk_heap<E>(
                     );
 
                     // word[pos] is the bound object; walk/rewrite it.
-                    visit_word(&mut transform, interp, &mut worklist, pos)?;
+                    visit_word::<REWRITE, _>(&mut transform, interp, &mut worklist, pos)?;
                 }
                 ShimValue::Environment(scope_pos) => {
                     let pos: usize = scope_pos.into();
@@ -1237,16 +1247,21 @@ pub(crate) fn walk_heap<E>(
                             (value_offset, val)
                         };
 
-                        let new = transform(interp, val)?;
-                        if new.to_u64() != val.to_u64() {
-                            EnvScope::write_value_at(
-                                &mut interp.mem,
-                                scope_data,
-                                scope_capacity,
-                                value_offset,
-                                new,
-                            );
-                        }
+                        let new = if REWRITE {
+                            let new = transform(interp, val)?;
+                            if new.to_u64() != val.to_u64() {
+                                EnvScope::write_value_at(
+                                    &mut interp.mem,
+                                    scope_data,
+                                    scope_capacity,
+                                    value_offset,
+                                    new,
+                                );
+                            }
+                            new
+                        } else {
+                            val
+                        };
                         worklist.push(new);
 
                         off = value_offset + 8;
@@ -1276,15 +1291,16 @@ impl<'a> GC<'a> {
     /// bitmask for [`GC::sweep`] / [`GC::drop_orphaned_native_types`].
     pub(crate) fn mark(&mut self, roots: Vec<ShimValue>) -> Bitmask {
         let _zone = zone_scoped!("GC mark");
-        // Marking only reads; the walk never rewrites a value, so the transform
-        // is the identity (and infallible).
-        fn keep(
+        // Marking only reads. `REWRITE = false` means the walk never calls the
+        // transform or writes to the heap, so `never` is dead code that exists
+        // only to satisfy the closure parameter.
+        fn never(
             _: &mut Interpreter,
             val: ShimValue,
         ) -> Result<ShimValue, std::convert::Infallible> {
             Ok(val)
         }
-        walk_heap(keep, &mut *self.interpreter, roots).unwrap()
+        walk_heap::<false, _>(never, &mut *self.interpreter, roots).unwrap()
     }
 
     pub fn drop_orphaned_native_types(&mut self, mask: &Bitmask) {

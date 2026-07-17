@@ -2662,7 +2662,7 @@ impl Interpreter {
             // Maps an old struct position to the new one after realloc, so a
             // struct reached by several paths is only reallocated once.
             let mut updated_structs = HashMap::new();
-            walk_heap(
+            walk_heap::<true, _>(
                 |interp, val| reload_update_struct(interp, &mut updated_structs, val, &ty_map),
                 &mut *self,
                 vec![ShimValue::Environment(u24::from(old_scope))],
@@ -2700,7 +2700,7 @@ impl Interpreter {
         // struct pass already marked those objects.
         let root_scope = self.root_env.current_scope;
         {
-            walk_heap(
+            walk_heap::<true, _>(
                 |_interp, val| reload_update_fn(val, &fn_map),
                 &mut *self,
                 vec![ShimValue::Environment(u24::from(root_scope))],
