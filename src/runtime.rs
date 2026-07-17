@@ -2523,6 +2523,24 @@ impl Interpreter {
         }
     }
 
+    /// Benchmark hook: run just the GC mark phase over the current live object
+    /// graph `iterations` times (after `warmup` untimed passes) and return the
+    /// total elapsed time. Marking does not free anything, so the live set is
+    /// unchanged between passes. Used by the `gc_bench` binary.
+    pub fn bench_gc_mark(&mut self, warmup: u32, iterations: u32) -> std::time::Duration {
+        let roots = vec![ShimValue::Environment(u24::from(self.root_env.current_scope))];
+        for _ in 0..warmup {
+            let mut gc = GC::new(self);
+            let _ = gc.mark(roots.clone());
+        }
+        let start = std::time::Instant::now();
+        for _ in 0..iterations {
+            let mut gc = GC::new(self);
+            let _ = gc.mark(roots.clone());
+        }
+        start.elapsed()
+    }
+
     pub fn create_from_script(script: &[u8]) -> Result<Self, String> {
         let ast = ast_from_text(script)?;
         let program = compile_ast(&ast)?;

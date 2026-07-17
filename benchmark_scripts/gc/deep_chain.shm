@@ -1,0 +1,7 @@
+struct Link { val, next }
+let head = None
+for i in 0..60000 {
+    head = Link(i, head)
+}
+let root = head
+print("built")

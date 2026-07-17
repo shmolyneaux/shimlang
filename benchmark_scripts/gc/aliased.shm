@@ -1,0 +1,7 @@
+struct Node { val, ref }
+let shared = Node(42, None)
+let refs = []
+for i in 0..45000 {
+    refs.append(Node(i, shared))
+}
+print(refs.len())

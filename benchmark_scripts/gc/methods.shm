@@ -1,0 +1,13 @@
+struct Widget {
+    id,
+    fn describe(self) { self.id }
+    fn tick(self) { self.id + 1 }
+}
+let widgets = []
+let handlers = []
+for i in 0..12000 {
+    let w = Widget(i)
+    widgets.append(w)
+    handlers.append(w.describe)
+}
+print(widgets.len())

@@ -1,0 +1,6 @@
+let fns = []
+for i in 0..15000 {
+    let captured = i
+    fns.append(fn(x) { x + captured })
+}
+print(fns.len())
