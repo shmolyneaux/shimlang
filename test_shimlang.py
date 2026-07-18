@@ -40,7 +40,7 @@ if result.returncode:
     print("Failed to build")
     sys.exit()
 
-print(f"Built executable in  {duration} seconds")
+print(f"Built executable in {duration} seconds")
 
 def print_diff(expected, actual):
     expected_lines = expected.splitlines()

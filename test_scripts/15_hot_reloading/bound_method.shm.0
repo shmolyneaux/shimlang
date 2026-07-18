@@ -1,0 +1,21 @@
+struct Player {
+    fn draw(self) {
+        print("Initial drawing")
+    }
+}
+
+let player = Player()
+let tick_fns = []
+
+let init = false
+
+fn loop() {
+    if !init {
+        tick_fns.append(player.draw)
+        init = true
+    }
+
+    for f in tick_fns {
+        f()
+    }
+}
