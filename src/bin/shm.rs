@@ -247,7 +247,10 @@ fn run() -> Result<(), String> {
         let program = shimlang::compile_ast(&ast)?;
         let mut interpreter = shimlang::Interpreter::create(&Config::default(), program);
 
-        let mut pc = 0;
+        // `pc` is a byte index into MMU memory; start it at the current bytecode
+        // base. `append_program` returns how far the bytecode moved so we can
+        // keep it pointing at the right place across appends.
+        let mut pc = interpreter.bytecode_byte_offset();
 
         loop {
             let mut input = String::new();
@@ -268,7 +271,10 @@ fn run() -> Result<(), String> {
             };
             let program = shimlang::compile_ast(&ast)?;
 
-            interpreter.append_program(program)?;
+            // Appending may relocate the bytecode within MMU memory; shift our
+            // running `pc` by the same amount so it keeps pointing at the code.
+            let delta = interpreter.append_program(program)?;
+            pc += delta;
             match interpreter.execute_at(&mut pc) {
                 Ok(shimlang::ShimValue::None) => (),
                 Ok(val) => {

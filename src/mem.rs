@@ -343,6 +343,38 @@ impl MMU {
         Ok(position)
     }
 
+    /// Copy `contents` into MMU memory, rounding the allocation up to the
+    /// nearest whole 64-bit word, and return the word position of the first
+    /// byte. Interpreter `pc` values are byte indices into MMU memory, so the
+    /// byte index of the start of this block is `position * 8`.
+    pub(crate) fn alloc_bytecode(&mut self, contents: &[u8]) -> Result<u24, String> {
+        if contents.is_empty() {
+            return Ok(0.into());
+        }
+        let total_words = contents.len().div_ceil(8);
+        let word_count: u24 = total_words.into();
+        let position = alloc!(self, word_count, "bytecode")?;
+        self.write_bytecode_at(position, contents);
+        Ok(position)
+    }
+
+    /// Overwrite the bytecode block at word `position` with `contents`. The
+    /// caller must guarantee the block was allocated with room for at least
+    /// `contents.len()` bytes (i.e. `contents.len().div_ceil(8)` words).
+    pub(crate) fn write_bytecode_at(&mut self, position: u24, contents: &[u8]) {
+        if contents.is_empty() {
+            return;
+        }
+        let total_words = contents.len().div_ceil(8);
+        let bytes: &mut [u8] = unsafe {
+            let u64_slice =
+                &mut self.mem[usize::from(position)..(usize::from(position) + total_words)];
+            std::slice::from_raw_parts_mut(u64_slice.as_mut_ptr() as *mut u8, contents.len())
+        };
+        bytes.copy_from_slice(contents);
+        self.mark_dirty_range(usize::from(position), usize::from(position) + total_words);
+    }
+
     pub fn alloc_debug(&mut self, words: u24, msg: &str) -> Result<u24, String> {
         let result = self.alloc_no_debug(words)?;
         eprintln!(

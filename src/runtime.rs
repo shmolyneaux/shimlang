@@ -2413,6 +2413,14 @@ pub trait DebugHook: Send {
 pub struct Interpreter {
     pub mem: MMU,
     pub program: Arc<Program>,
+    /// Word position in MMU memory where the program bytecode is stored. The
+    /// interpreter reads bytecode directly out of the MMU, and `pc` values are
+    /// byte indices into MMU memory, offset from here by `bytecode_pos * 8`.
+    pub bytecode_pos: u24,
+    /// Number of 64-bit words reserved for the bytecode block at `bytecode_pos`.
+    /// A reload that still fits can overwrite the block in place (keeping every
+    /// existing `pc` valid); a larger one must relocate.
+    bytecode_words: usize,
     singletons: HashMap<TypeId, Box<dyn Any + Send>>,
     pub root_env: Environment,
     pub debug_hook: Option<Box<dyn DebugHook>>,
@@ -2426,6 +2434,88 @@ impl Interpreter {
 
     pub fn clear_debug_hook(&mut self) {
         self.debug_hook = None;
+    }
+
+    /// The byte index into MMU memory of the first bytecode byte. Interpreter
+    /// `pc` values are byte indices into MMU memory, so this is the `pc` of the
+    /// start of the program.
+    pub fn bytecode_byte_offset(&self) -> usize {
+        usize::from(self.bytecode_pos) * 8
+    }
+
+    /// Look up the source span for the instruction at MMU byte index `pc`. The
+    /// spans table is indexed by the byte offset within the bytecode, so undo
+    /// the MMU base offset first.
+    fn span_at(&self, pc: usize) -> Span {
+        self.program.spans[pc - self.bytecode_byte_offset()]
+    }
+
+    /// Copy the current program bytecode into MMU memory (rounded up to whole
+    /// 64-bit words). If it still fits in the block already reserved at
+    /// `bytecode_pos`, it is overwritten in place so every existing `pc` stays
+    /// valid; otherwise a fresh block is allocated (leaving the old one for the
+    /// GC to reclaim) and the base moves. Returns `true` when the base moved.
+    fn reload_bytecode_into_mmu(&mut self) -> Result<bool, String> {
+        let bytecode = self.program.bytecode.clone();
+        let new_words = bytecode.len().div_ceil(8);
+
+        if usize::from(self.bytecode_pos) != 0 && new_words <= self.bytecode_words {
+            self.mem.write_bytecode_at(self.bytecode_pos, &bytecode);
+            Ok(false)
+        } else {
+            self.bytecode_pos = self.mem.alloc_bytecode(&bytecode)?;
+            self.bytecode_words = new_words;
+            Ok(true)
+        }
+    }
+
+    /// Shift every reachable function's stored `pc` by `delta` bytes. Used when
+    /// the bytecode is relocated to a new MMU position (see `append_program`)
+    /// so that functions defined against the old base keep pointing at the same
+    /// instructions in their new home.
+    fn shift_fn_pcs(&mut self, delta: u32) -> Result<(), String> {
+        if delta == 0 {
+            return Ok(());
+        }
+        let root_scope = self.root_env.current_scope;
+        if root_scope == 0 {
+            return Ok(());
+        }
+        // A function object can be reached from many places; only adjust each
+        // one once.
+        let mut seen: HashSet<u24> = HashSet::new();
+        walk_heap::<true, String>(
+            |interp, val| {
+                match val {
+                    ShimValue::Fn(pos) => {
+                        if seen.insert(pos) {
+                            let f: &mut ShimFn = unsafe { interp.mem.get_mut(pos) };
+                            f.pc = f.pc.wrapping_add(delta);
+                        }
+                    }
+                    ShimValue::StructDef(pos) => {
+                        // Method functions are referenced from the struct
+                        // definition rather than by a bare `ShimValue::Fn`, so
+                        // adjust them here too.
+                        let positions: Vec<u24> = {
+                            let def: &StructDef = unsafe { interp.mem.get(pos) };
+                            def.method_fn_positions().collect()
+                        };
+                        for fp in positions {
+                            if seen.insert(fp) {
+                                let f: &mut ShimFn = unsafe { interp.mem.get_mut(fp) };
+                                f.pc = f.pc.wrapping_add(delta);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                Ok(val)
+            },
+            &mut *self,
+            vec![ShimValue::Environment(u24::from(root_scope))],
+        )?;
+        Ok(())
     }
 
     pub fn format_env(&self, env: &Environment) -> String {
@@ -2517,7 +2607,15 @@ impl Interpreter {
                 let _zone = zone_scoped!("Init GC");
                 GC::new(self)
             };
-            let mask = gc.mark(roots);
+            let mut mask = gc.mark(roots);
+            // The bytecode lives in the MMU but isn't reachable as a
+            // `ShimValue`, so mark its words by hand to keep the sweep from
+            // reclaiming the code we're executing.
+            let bc_start = usize::from(gc.interpreter.bytecode_pos);
+            let bc_words = gc.interpreter.program.bytecode.len().div_ceil(8);
+            for word in bc_start..(bc_start + bc_words) {
+                mask.setx(word);
+            }
             gc.sweep(&mask);
             gc.drop_orphaned_native_types(&mask);
         }
@@ -2548,12 +2646,18 @@ impl Interpreter {
         let config = Config::default();
         let mut mmu = MMU::with_capacity(u24::from(config.memory_space_bytes / 8));
 
+        // Store the bytecode in the MMU before anything else so it lands at a
+        // low, stable address. `pc` values are byte indices into MMU memory.
+        let bytecode_words = program.bytecode.len().div_ceil(8);
+        let bytecode_pos = mmu.alloc_bytecode(&program.bytecode)?;
         let root_env = Environment::new_with_builtins(&mut mmu);
         Ok(
             Self {
                 ast,
                 mem: mmu,
                 program: Arc::new(program),
+                bytecode_pos,
+                bytecode_words,
                 singletons: HashMap::new(),
                 root_env,
                 debug_hook: None,
@@ -2567,6 +2671,10 @@ impl Interpreter {
 
         let old_ast = std::mem::replace(&mut self.ast, ast.clone());
         self.program = Arc::new(program);
+        // Store the reloaded bytecode in the MMU. The old bytecode is left for
+        // the GC to reclaim; functions that reference it are remapped below (or
+        // rejected if they can't be).
+        self.reload_bytecode_into_mmu()?;
 
         let old_env = std::mem::replace(
             &mut self.root_env,
@@ -2731,12 +2839,20 @@ impl Interpreter {
     pub fn create(config: &Config, program: Program) -> Self {
         let mut mmu = MMU::with_capacity(u24::from(config.memory_space_bytes / 8));
 
+        // Store the bytecode in the MMU before anything else so it lands at a
+        // low, stable address. `pc` values are byte indices into MMU memory.
+        let bytecode_words = program.bytecode.len().div_ceil(8);
+        let bytecode_pos = mmu
+            .alloc_bytecode(&program.bytecode)
+            .expect("out of memory storing bytecode");
         let root_env = Environment::new_with_builtins(&mut mmu);
         let ast = ast_from_text(&program.script)
             .expect("Program script should already have been validated by compile_ast");
         Self {
             mem: mmu,
             program: Arc::new(program),
+            bytecode_pos,
+            bytecode_words,
             singletons: HashMap::new(),
             root_env,
             debug_hook: None,
@@ -2750,7 +2866,7 @@ impl Interpreter {
     }
 
     pub fn execute(&mut self) -> Result<ShimValue, String> {
-        let mut pc = 0;
+        let mut pc = self.bytecode_byte_offset();
         self.execute_at(&mut pc)
     }
 
@@ -2785,7 +2901,13 @@ impl Interpreter {
             .expect("singleton type mismatch")
     }
 
-    pub fn append_program(&mut self, program: Program) -> Result<(), String> {
+    /// Append `program` to the running program and re-store the combined
+    /// bytecode in the MMU. Because the bytecode may move to a new MMU address,
+    /// every existing function's `pc` is shifted to match, and the byte delta
+    /// is returned so the caller can adjust any `pc` it is tracking itself.
+    pub fn append_program(&mut self, program: Program) -> Result<usize, String> {
+        let old_base = self.bytecode_byte_offset();
+
         let span_offset = self.program.script.len() as u32;
         Arc::<Program>::get_mut(&mut self.program)
             .unwrap()
@@ -2803,7 +2925,12 @@ impl Interpreter {
             .script
             .extend(program.script);
 
-        Ok(())
+        self.reload_bytecode_into_mmu()?;
+        let new_base = self.bytecode_byte_offset();
+        let delta = new_base - old_base;
+        self.shift_fn_pcs(delta as u32)?;
+
+        Ok(delta)
     }
 
     pub fn execute_bytecode_extended(
@@ -2831,7 +2958,19 @@ impl Interpreter {
         let mut fn_optional_param_name_idx = 0;
         let mut fn_optional_param_names: Vec<Ident> = Vec::new();
 
-        let bytes = &self.program.clone().bytecode;
+        // The bytecode lives in MMU memory and `pc` is a byte index into it, so
+        // read instructions straight out of the MMU. The bytecode region is
+        // never written during execution and is kept live by the GC (see
+        // `Interpreter::gc`), so this shared byte view stays valid for the whole
+        // call even as the rest of the MMU is mutated.
+        //
+        // SAFETY: `MMU::mem` is a fixed-capacity `Vec<u64>` that never
+        // reallocates for the life of the interpreter, so the base pointer is
+        // stable. We only ever read indices in `[bytecode_byte_offset,
+        // end_byte)`, which alias the immutable bytecode block.
+        let end_byte = self.bytecode_byte_offset() + self.program.bytecode.len();
+        let mem_ptr = self.mem.mem().as_ptr() as *const u8;
+        let bytes: &[u8] = unsafe { std::slice::from_raw_parts(mem_ptr, end_byte) };
         while pc < bytes.len() {
             match self.execute_bytecode_extended_inner(
                 &mut pending_args, env, initial_scope, bytes, &mut pc,
@@ -2904,7 +3043,7 @@ impl Interpreter {
                     let a = stack.pop().expect("Operand for add");
 
                     match a.add(self, &b, pending_args).map_err(|err_str| {
-                        format_script_err(self.program.spans[*pc], &self.program.script, &err_str)
+                        format_script_err(self.span_at(*pc), &self.program.script, &err_str)
                     })? {
                         CallResult::ReturnValue(res) => stack.push(res),
                         CallResult::PC(new_pc, captured_scope) => {
@@ -2929,7 +3068,7 @@ impl Interpreter {
                     let b = stack.pop().expect("Operand for add");
                     let a = stack.pop().expect("Operand for add");
                     stack.push(a.sub(self, &b).map_err(|err_str| {
-                        format_script_err(self.program.spans[*pc], &self.program.script, &err_str)
+                        format_script_err(self.span_at(*pc), &self.program.script, &err_str)
                     })?);
                 }
                 val if val == ByteCode::Equal as u8 => {
@@ -2946,49 +3085,49 @@ impl Interpreter {
                     let b = stack.pop().expect("Operand for ByteCode::Multiply");
                     let a = stack.pop().expect("Operand for ByteCode::Multiply");
                     stack.push(a.mul(self, &b).map_err(|err_str| {
-                        format_script_err(self.program.spans[*pc], &self.program.script, &err_str)
+                        format_script_err(self.span_at(*pc), &self.program.script, &err_str)
                     })?);
                 }
                 val if val == ByteCode::Divide as u8 => {
                     let b = stack.pop().expect("Operand for ByteCode::Divide");
                     let a = stack.pop().expect("Operand for ByteCode::Divide");
                     stack.push(a.div(self, &b).map_err(|err_str| {
-                        format_script_err(self.program.spans[*pc], &self.program.script, &err_str)
+                        format_script_err(self.span_at(*pc), &self.program.script, &err_str)
                     })?);
                 }
                 val if val == ByteCode::Modulus as u8 => {
                     let b = stack.pop().expect("Operand for ByteCode::Modulus");
                     let a = stack.pop().expect("Operand for ByteCode::Modulus");
                     stack.push(a.modulus(self, &b).map_err(|err_str| {
-                        format_script_err(self.program.spans[*pc], &self.program.script, &err_str)
+                        format_script_err(self.span_at(*pc), &self.program.script, &err_str)
                     })?);
                 }
                 val if val == ByteCode::GT as u8 => {
                     let b = stack.pop().expect("Operand for ByteCode::GT");
                     let a = stack.pop().expect("Operand for ByteCode::GT");
                     stack.push(a.gt(self, &b).map_err(|err_str| {
-                        format_script_err(self.program.spans[*pc], &self.program.script, &err_str)
+                        format_script_err(self.span_at(*pc), &self.program.script, &err_str)
                     })?);
                 }
                 val if val == ByteCode::Gte as u8 => {
                     let b = stack.pop().expect("Operand for ByteCode::Gte");
                     let a = stack.pop().expect("Operand for ByteCode::Gte");
                     stack.push(a.gte(self, &b).map_err(|err_str| {
-                        format_script_err(self.program.spans[*pc], &self.program.script, &err_str)
+                        format_script_err(self.span_at(*pc), &self.program.script, &err_str)
                     })?);
                 }
                 val if val == ByteCode::LT as u8 => {
                     let b = stack.pop().expect("Operand for ByteCode::LT");
                     let a = stack.pop().expect("Operand for ByteCode::LT");
                     stack.push(a.lt(self, &b).map_err(|err_str| {
-                        format_script_err(self.program.spans[*pc], &self.program.script, &err_str)
+                        format_script_err(self.span_at(*pc), &self.program.script, &err_str)
                     })?);
                 }
                 val if val == ByteCode::Lte as u8 => {
                     let b = stack.pop().expect("Operand for ByteCode::Lte");
                     let a = stack.pop().expect("Operand for ByteCode::Lte");
                     stack.push(a.lte(self, &b).map_err(|err_str| {
-                        format_script_err(self.program.spans[*pc], &self.program.script, &err_str)
+                        format_script_err(self.span_at(*pc), &self.program.script, &err_str)
                     })?);
                 }
                 val if val == ByteCode::In as u8 => {
@@ -3106,8 +3245,7 @@ impl Interpreter {
                                 // enough and we need to exit
                                 if param_idx < required_arg_count {
                                     return Err(format_script_err(
-                                        self.program.spans
-                                            [stack_frame[stack_frame.len() - 1].0 - 3],
+                                        self.span_at(stack_frame[stack_frame.len() - 1].0 - 3),
                                         &self.program.script,
                                         &format!(
                                             "Not enough positional args, arg_count: {}, kwarg_count: {}",
@@ -3127,7 +3265,7 @@ impl Interpreter {
                     if pos_arg_idx != pending_args.args.len() {
                         let remaining = pending_args.args.len() - pos_arg_idx;
                         return Err(format_script_err(
-                            self.program.spans[stack_frame[stack_frame.len() - 1].0 - 3],
+                            self.span_at(stack_frame[stack_frame.len() - 1].0 - 3),
                             &self.program.script,
                             &format!("Too many positional args, {} remaining", remaining),
                         ));
@@ -3139,7 +3277,7 @@ impl Interpreter {
                             msg.push_str(debug_u8s(ident));
                         }
                         return Err(format_script_err(
-                            self.program.spans[stack_frame[stack_frame.len() - 1].0 - 3],
+                            self.span_at(stack_frame[stack_frame.len() - 1].0 - 3),
                             &self.program.script,
                             &msg,
                         ));
@@ -3206,7 +3344,7 @@ impl Interpreter {
 
                     if !env.contains_key(&self.mem, ident) {
                         return Err(format_script_err(
-                            self.program.spans[*pc],
+                            self.span_at(*pc),
                             &self.program.script,
                             &format!(
                                 "Cannot assign to undeclared variable \"{}\" (use `let` to declare it)",
@@ -3225,7 +3363,7 @@ impl Interpreter {
                         stack.push(value);
                     } else {
                         return Err(format_script_err(
-                            self.program.spans[*pc],
+                            self.span_at(*pc),
                             &self.program.script,
                             &format!("Unknown identifier {:?}", debug_u8s(ident)),
                         ));
@@ -3242,7 +3380,7 @@ impl Interpreter {
                         Ok(val) => val,
                         Err(msg) => {
                             return Err(format_script_err(
-                                self.program.spans[*pc],
+                                self.span_at(*pc),
                                 &self.program.script,
                                 &msg,
                             ));
@@ -3260,7 +3398,7 @@ impl Interpreter {
                     let val = stack.pop().expect("val to assign");
                     let obj = stack.pop().expect("obj to set");
                     obj.set_attr(self, ident, val).map_err(|err_str| {
-                        format_script_err(self.program.spans[*pc], &self.program.script, &err_str)
+                        format_script_err(self.span_at(*pc), &self.program.script, &err_str)
                     })?;
 
                     *pc += 1 + ident_len;
@@ -3270,7 +3408,7 @@ impl Interpreter {
                     let obj = stack.pop().expect("index obj");
 
                     let val = obj.index(self, &index).map_err(|err_str| {
-                        format_script_err(self.program.spans[*pc], &self.program.script, &err_str)
+                        format_script_err(self.span_at(*pc), &self.program.script, &err_str)
                     })?;
 
                     stack.push(val);
@@ -3281,7 +3419,7 @@ impl Interpreter {
                     let obj = stack.pop().expect("index obj");
 
                     obj.set_index(self, &index, &val).map_err(|err_str| {
-                        format_script_err(self.program.spans[*pc], &self.program.script, &err_str)
+                        format_script_err(self.span_at(*pc), &self.program.script, &err_str)
                     })?;
                 }
                 val if val == ByteCode::Call as u8 => {
@@ -3308,7 +3446,7 @@ impl Interpreter {
                     let callable = stack.pop().expect("callable not on stack");
 
                     match callable.call(self, pending_args).map_err(|err_str| {
-                        format_script_err(self.program.spans[*pc], &self.program.script, &err_str)
+                        format_script_err(self.span_at(*pc), &self.program.script, &err_str)
                     })? {
                         CallResult::ReturnValue(res) => stack.push(res),
                         CallResult::PC(new_pc, captured_scope) => {
@@ -3359,7 +3497,7 @@ impl Interpreter {
                         .attr_call(ident, self, pending_args)
                         .map_err(|err_str| {
                             format_script_err(
-                                self.program.spans[*pc],
+                                self.span_at(*pc),
                                 &self.program.script,
                                 &err_str,
                             )
