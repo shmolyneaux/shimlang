@@ -3867,6 +3867,84 @@ mod tests {
         assert_eq!(interpreter.fetch_mut::<A>().0, 7);
         assert_eq!(interpreter.fetch_mut::<B>().0, "hello");
     }
+
+    /// Invoke a zero-argument callable held in the root environment and return
+    /// its result, mirroring how the `--hot-reload` driver dispatches `loop`.
+    fn call_root_fn(interp: &mut Interpreter, name: &[u8]) -> ShimValue {
+        let func = interp
+            .get_from_root_env(name)
+            .unwrap_or_else(|| panic!("{} missing from root env", debug_u8s(name)));
+        let mut args = ArgBundle::new();
+        match func.call(interp, &mut args).unwrap() {
+            CallResult::ReturnValue(v) => v,
+            CallResult::PC(pc, captured_scope) => {
+                let mut new_env = Environment::with_scope(captured_scope);
+                interp
+                    .execute_bytecode_extended(&mut (pc as usize), args, &mut new_env)
+                    .unwrap()
+            }
+        }
+    }
+
+    /// After a hot reload, a closure carried over in persisted state still
+    /// points at the *previous* program's bytecode. That code lives in a blob
+    /// separate from the reload's current program, so the GC must mark it via
+    /// the reachable `ShimFn` or the next collection frees code that is still
+    /// callable. This reproduces that path: reload, collect, then call the
+    /// carried-over function and confirm its code survived.
+    #[test]
+    fn gc_keeps_hot_reloaded_code_alive() {
+        // `handler` is an anonymous function, so the reload's function-remap
+        // pass never rewrites it; the old value (old bytecode) carries over.
+        let mut interp =
+            Interpreter::create_from_script(b"let handler = fn() { return 7 }\n").unwrap();
+        interp.execute().unwrap();
+
+        interp
+            .hot_reload_from_script(b"let handler = fn() { return 7 }\nlet other = 1\n")
+            .unwrap();
+
+        // The carried-over handler must reference the previous program's code,
+        // not the reload's current program; otherwise this test proves nothing.
+        let handler_pc = match interp.get_from_root_env(b"handler").unwrap() {
+            ShimValue::Fn(pos) => {
+                let shim_fn: &ShimFn = unsafe { interp.mem.get(pos) };
+                shim_fn.pc as usize
+            }
+            other => panic!("handler is not a Fn: {:?}", other),
+        };
+        let current_start = usize::from(interp.program_position) * 8;
+        let current_end = current_start + interp.program_len;
+        assert!(
+            handler_pc < current_start || handler_pc >= current_end,
+            "test setup: handler unexpectedly points into the current program"
+        );
+
+        // Before the fix this collection frees the old bytecode blob. Sweeping
+        // does not clear freed words, so the code bytes linger and the function
+        // would still run by luck. Scribble over every word the collection
+        // released to model the reuse that a real workload's next allocation
+        // performs: if the blob was wrongly freed, its code is now garbage.
+        interp.gc();
+        let free_ranges: Vec<(usize, usize)> = interp
+            .mem
+            .free_blocks
+            .iter()
+            .flat_map(|(&size, positions)| {
+                positions
+                    .iter()
+                    .map(move |&pos| (pos as usize, size as usize))
+            })
+            .collect();
+        for (pos, size) in free_ranges {
+            interp.mem.mem_mut(pos, size).fill(u64::MAX);
+        }
+
+        match call_root_fn(&mut interp, b"handler") {
+            ShimValue::Integer(7) => {}
+            other => panic!("carried-over handler returned {:?}, expected 7", other),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -4047,14 +4125,13 @@ fn reload_update_fn(val: ShimValue, fn_map: &HashMap<u24, u24>) -> Result<ShimVa
             match fn_map.get(&pos) {
                 Some(new_pos) => ShimValue::Fn(*new_pos),
                 None => {
-                    // TODO: When the runtime is updated to store bytecode in the MMU then
-                    // we should be able to support running old closures. For now we discard
-                    // the old bytecode so we can't run it :(
-                    //
-                    // This also ends up disallowing closures in the new code that would be
-                    // completely valid, but that should be fine (it would fail on the next
-                    // hot reload anyways).
-                    return Err(format!("Referenced Fn({pos:?}) does not exist in reloaded code"));
+                    // A carried-over function with no counterpart in the reloaded
+                    // program (e.g. an anonymous closure) keeps pointing at its
+                    // original code. That code lives in the previous program's
+                    // bytecode blob, which the GC now keeps alive as long as a
+                    // reachable `ShimFn` references it (see `walk_heap`), so the
+                    // old closure stays callable across reloads and collections.
+                    ShimValue::Fn(pos)
                 }
             }
         }

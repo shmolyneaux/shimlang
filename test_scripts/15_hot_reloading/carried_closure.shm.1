@@ -1,0 +1,16 @@
+// Snapshot 1: `add10` carries over from snapshot 0. Its code is no longer part
+// of the current program, so it only keeps working if the GC marks the old
+// bytecode (kept alive by the reachable closure) instead of freeing it. The
+// placeholder value here is replaced by the carried-over closure during the
+// reload's state copy; the extra variables shift allocations so a wrongly freed
+// blob would be reused and corrupted before `loop` runs under `--gc`.
+let a = 1
+let b = 2
+let c = 3
+
+let add10 = fn(x) { return x }
+
+fn loop() {
+    print(add10(5))
+    print(add10(90))
+}
