@@ -496,6 +496,21 @@ impl MMU {
         Ok(position)
     }
 
+    pub fn alloc_bytecode(&mut self, bytecode: &[u8]) -> Result<u24, String> {
+        let word_count: u24 = bytecode.len().div_ceil(8).into();
+        let position = alloc!(self, word_count, "bytecode")?;
+
+        unsafe {
+            std::ptr::copy_nonoverlapping::<u8>(
+                bytecode.as_ptr(),
+                self.mem[usize::from(position)..].as_mut_ptr() as *mut u8,
+                bytecode.len(),
+            );
+        }
+
+        Ok(position)
+    }
+
     pub fn alloc_list(&mut self) -> Result<ShimValue, String> {
         Ok(ShimValue::List(self.alloc_list_raw()?))
     }
@@ -889,6 +904,11 @@ pub(crate) fn walk_heap<const REWRITE: bool, E>(
                     if captured_scope != 0 {
                         worklist.push(ShimValue::Environment(captured_scope.into()));
                     }
+
+                    // TODO: mark the bytecode pointed to by the ShimFn
+                    // This relevant for modules which aren't in the base program
+                    // of the interpreter and closure state carried over during
+                    // hot reloading
                 }
                 ShimValue::Tuple(len, pos) => {
                     let pos: usize = pos.into();

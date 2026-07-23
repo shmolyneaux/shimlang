@@ -78,6 +78,7 @@ pub(crate) enum ByteCode {
     Range,
     /// Swap the top two values on the stack.
     Swap,
+    ProgramEnd,
 }
 
 pub struct Program {
@@ -256,6 +257,15 @@ pub fn compile_ast(ast: &Ast) -> Result<Program, String> {
         end: ast.script.len() as u32,
     };
     compile_block_inner(&ast.block, true, ast_span, &mut program)?;
+    program.push(
+        (
+            ByteCode::ProgramEnd as u8,
+            Span {
+                start: 0,
+                end: ast.script.len() as u32,
+            }
+        )
+    );
     let (bytecode, spans): (Vec<u8>, Vec<Span>) = program.into_iter().unzip();
     Ok(Program {
         bytecode,
@@ -1798,6 +1808,8 @@ pub fn format_asm(bytes: &[u8]) -> String {
             out.push_str("return");
         } else if *b == ByteCode::Range as u8 {
             out.push_str("Range");
+        } else if *b == ByteCode::ProgramEnd as u8 {
+            out.push_str("END");
         } else {
             // Unformatted byte (including Pad0-Pad9) - show the decimal value
             out.push_str(&format!("{b:3}  "));

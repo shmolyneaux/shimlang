@@ -5,4 +5,5 @@
   24:  load "print"
   31:  load "x"
   34:  call args=1  kwargs=0
+  37:  END
 

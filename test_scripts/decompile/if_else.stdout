@@ -10,4 +10,5 @@
   51:  call args=1  kwargs=0
   54:  pop
   55:  None
+  56:  END
 

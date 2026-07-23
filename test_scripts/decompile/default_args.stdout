@@ -21,4 +21,5 @@
  102:  String "greeting"
  112:  String "Hi"
  116:  call args=1  kwargs=1
+ 119:  END
 

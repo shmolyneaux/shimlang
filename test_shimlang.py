@@ -151,21 +151,29 @@ for command in (
         else:
             raise Exception(f"Unknown platform {sys.platform}")
 
+        env = os.environ.copy()
+        env["RUST_BACKTRACE"] = "1"
+        kwargs = {
+            "shell": True,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+            "text": True,
+            "env": env,
+            "timeout": 8.0,
+        }
         if command == "execute" or command == "errors":
-            proc = subprocess.run(f"{exe_path} {script}", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            proc = subprocess.run(f"{exe_path} {script}", **kwargs)
         elif command == "gc":
-            env = os.environ.copy()
-            env["RUST_BACKTRACE"] = "1"
-            proc = subprocess.run(f"{exe_path} --gc {script}", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+            proc = subprocess.run(f"{exe_path} --gc {script}", **kwargs)
         elif command == "spans":
-            proc = subprocess.run(f"{exe_path} --spans {script}", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            proc = subprocess.run(f"{exe_path} --spans {script}", **kwargs)
         elif command == "parse":
-            proc = subprocess.run(f"{exe_path} --parse {script}", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            proc = subprocess.run(f"{exe_path} --parse {script}", **kwargs)
         elif command == "decompile":
-            proc = subprocess.run(f"{exe_path} --compile {script}", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            proc = subprocess.run(f"{exe_path} --compile {script}", **kwargs)
         elif command == "hot_reload":
             snapshot_args = " ".join(str(s) for s in snapshots)
-            proc = subprocess.run(f"{exe_path} --hot-reload {snapshot_args}", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            proc = subprocess.run(f"{exe_path} --hot-reload {snapshot_args}", **kwargs)
         else:
             raise Exception("Unknown command")
 

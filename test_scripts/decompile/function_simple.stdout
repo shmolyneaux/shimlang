@@ -9,4 +9,5 @@
   28:  let "greet"
   35:  load "greet"
   42:  call args=0  kwargs=0
+  45:  END
 

@@ -18,4 +18,5 @@
   97:  ShimValue 1
  106:  index
  107:  call args=1  kwargs=0
+ 110:  END
 
