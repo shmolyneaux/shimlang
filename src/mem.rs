@@ -220,15 +220,6 @@ pub struct MMU {
     /// Each entry is (mmu_position, type_idx).
     droppable_native_pos: Vec<(u32, u24)>,
 
-    /// Bytecode blobs allocated via [`MMU::alloc_bytecode`], stored as
-    /// (word position, word count). A `ShimFn` only records the byte offset of
-    /// its code, not its length, so the GC uses this registry to mark the whole
-    /// blob a reachable function lives in. This keeps code for hot-reloaded or
-    /// otherwise carried-over functions alive even once it is no longer the
-    /// interpreter's current program. The sweep prunes entries whose blob it
-    /// reclaimed, so the registry does not grow without bound across reloads.
-    pub bytecode_blocks: Vec<(u32, u32)>,
-
     /// Set to true while gc_drop callbacks are executing. Any MMU allocation
     /// attempted in this state panics, because newly allocated words would be
     /// invisible to the GC bitmask and immediately reclaimed by sweep.
@@ -267,7 +258,6 @@ impl MMU {
             native_type_ids: HashMap::new(),
             native_type_registry: Vec::new(),
             droppable_native_pos: Vec::new(),
-            bytecode_blocks: Vec::new(),
             dropping_native: false,
         }
     }
@@ -518,14 +508,6 @@ impl MMU {
             );
         }
 
-        // Record the blob so the GC can mark all of it whenever a reachable
-        // `ShimFn` points into it (see `walk_heap`). Empty blobs carry no code
-        // and would never be matched, so there is nothing to track.
-        if u32::from(word_count) > 0 {
-            self.bytecode_blocks
-                .push((u32::from(position), u32::from(word_count)));
-        }
-
         Ok(position)
     }
 
@@ -533,7 +515,13 @@ impl MMU {
         Ok(ShimValue::List(self.alloc_list_raw()?))
     }
 
-    pub fn alloc_fn(&mut self, pc: u32, name: &[u8], captured_scope: u32) -> Result<ShimValue, String> {
+    pub fn alloc_fn(
+        &mut self,
+        pc: u32,
+        bytecode_len: u24,
+        name: &[u8],
+        captured_scope: u32,
+    ) -> Result<ShimValue, String> {
         let word_count: u24 = (std::mem::size_of::<ShimFn>() as u32).div_ceil(8).into();
         let position = alloc!(self, word_count, &format!("Fn `{}`", debug_u8s(name)))?;
 
@@ -544,6 +532,7 @@ impl MMU {
             let ptr: *mut ShimFn = &mut self.mem[usize::from(position)] as *mut u64 as *mut ShimFn;
             ptr.write(ShimFn {
                 pc,
+                bytecode_len,
                 name_len: name.len() as u16,
                 name: name_pos,
                 captured_scope,
@@ -905,9 +894,15 @@ pub(crate) fn walk_heap<const REWRITE: bool, E>(
                         continue;
                     }
                     let shim_fn_word_count = std::mem::size_of::<ShimFn>().div_ceil(8);
-                    let (pc, name_len, name, captured_scope) = {
+                    let (pc, bytecode_len, name_len, name, captured_scope) = {
                         let shim_fn: &ShimFn = interp.mem.get(fn_pos);
-                        (shim_fn.pc, shim_fn.name_len, shim_fn.name, shim_fn.captured_scope)
+                        (
+                            shim_fn.pc as usize,
+                            usize::from(shim_fn.bytecode_len),
+                            shim_fn.name_len,
+                            shim_fn.name,
+                            shim_fn.captured_scope,
+                        )
                     };
                     mark_range!(
                         mask,
@@ -923,30 +918,21 @@ pub(crate) fn walk_heap<const REWRITE: bool, E>(
                         worklist.push(ShimValue::Environment(captured_scope.into()));
                     }
 
-                    // Mark the bytecode this function's code lives in. `pc` is a
-                    // byte offset into the whole MMU memory, so the code begins
-                    // at word `pc / 8`. Marking the entire enclosing blob keeps
-                    // the code alive for modules and for functions carried over
-                    // during hot reloading, whose code is no longer the
-                    // interpreter's current program and would otherwise be swept.
-                    let code_word = (pc / 8) as usize;
-                    if let Some(&(blob_pos, blob_words)) = interp
-                        .mem
-                        .bytecode_blocks
-                        .iter()
-                        .find(|&&(bpos, bwords)| {
-                            let bpos = bpos as usize;
-                            code_word >= bpos && code_word < bpos + bwords as usize
-                        })
-                    {
-                        let blob_start = blob_pos as usize;
-                        let blob_end = blob_start + blob_words as usize;
-                        mark_range!(
-                            mask,
-                            blob_start..blob_end,
-                            MemDescriptor::other(blob_start, blob_end, "bytecode")
-                        );
-                    }
+                    // Mark the function's bytecode. `pc` is a byte offset into
+                    // the whole MMU memory and the code spans `bytecode_len`
+                    // bytes, so cover words `pc / 8 ..= (pc + len - 1) / 8`. This
+                    // keeps the code alive for functions carried over during hot
+                    // reloading (and for future modules), whose bytecode is no
+                    // longer the interpreter's current program and would
+                    // otherwise be swept. Nested functions live within this
+                    // range, so they are covered too.
+                    let code_start = pc / 8;
+                    let code_end = (pc + bytecode_len).div_ceil(8);
+                    mark_range!(
+                        mask,
+                        code_start..code_end,
+                        MemDescriptor::other(code_start, code_end, "bytecode")
+                    );
                 }
                 ShimValue::Tuple(len, pos) => {
                     let pos: usize = pos.into();
@@ -1413,16 +1399,5 @@ impl<'a> GC<'a> {
 
         self.interpreter.mem.free_blocks = free_blocks;
         self.interpreter.mem.wilderness = new_wilderness;
-
-        // Drop registry entries for blobs the sweep just reclaimed. A blob is
-        // marked as a unit (all-or-nothing) whenever a reachable `ShimFn` points
-        // into it, so an unmarked start word means no function kept it alive and
-        // its words are now free. Pruning keeps the registry from growing across
-        // hot reloads and prevents a future `ShimFn` lookup from matching memory
-        // that has since been reused.
-        self.interpreter
-            .mem
-            .bytecode_blocks
-            .retain(|&(pos, _)| mask.is_set(pos as usize));
     }
 }

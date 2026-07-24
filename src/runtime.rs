@@ -635,8 +635,13 @@ pub struct StructDef {
 
 // Stores function information in interpreter memory
 pub struct ShimFn {
-    // Program counter where the function code begins
+    // Program counter where the function code begins (a byte offset into the
+    // whole MMU memory)
     pub pc: u32,
+    // Length in bytes of the function's bytecode, starting at `pc`. The GC uses
+    // this to mark the code so functions carried over across a hot reload (whose
+    // bytecode is no longer the interpreter's current program) are not swept.
+    pub bytecode_len: u24,
     // Length of the function name string
     pub name_len: u16,
     // Memory position of the function name (stored as string)
@@ -646,6 +651,8 @@ pub struct ShimFn {
 }
 
 const _: () = {
+    // `bytecode_len` (a u24) packs into the padding a 16-byte layout already had,
+    // so adding it does not grow the struct.
     assert!(std::mem::size_of::<ShimFn>() == 16);
 };
 
@@ -3573,9 +3580,14 @@ impl Interpreter {
                 val if val == ByteCode::CreateFn as u8 => {
                     let instruction_offset = ((bytes[*pc + 1] as u32) << 8) + bytes[*pc + 2] as u32;
                     let fn_pc = *pc as u32 - instruction_offset;
+                    // The function body sits between `fn_pc` and this CreateFn
+                    // instruction, so its byte length is exactly the offset back.
+                    let bytecode_len = u24::from(instruction_offset);
                     // Use descriptive name for anonymous functions
                     // Capture the current environment scope
-                    let fn_val = self.mem.alloc_fn(fn_pc, b"<anonymous>", env.current_scope)?;
+                    let fn_val =
+                        self.mem
+                            .alloc_fn(fn_pc, bytecode_len, b"<anonymous>", env.current_scope)?;
                     stack.push(fn_val);
                     *pc += 2;
                 }
@@ -3606,26 +3618,49 @@ impl Interpreter {
                         idx = idx + 1 + ident_len as usize;
                     }
 
+                    // Read the method table (a start offset and name per method)
+                    // first, so each method body's length can be derived from
+                    // where the next method begins. Bodies are laid out
+                    // consecutively in table order right after the table.
+                    let mut methods: Vec<(usize, Vec<u8>)> = Vec::new();
                     for _ in 0..method_count {
                         let method_pc = *pc + ((bytes[idx] as usize) << 8) + bytes[idx + 1] as usize;
 
                         idx += 2;
 
-                        let ident_len = bytes[idx];
-                        let ident = &bytes[idx + 1..idx + 1 + ident_len as usize];
+                        let ident_len = bytes[idx] as usize;
+                        let ident = bytes[idx + 1..idx + 1 + ident_len].to_vec();
+                        idx = idx + 1 + ident_len;
+
+                        methods.push((method_pc, ident));
+                    }
+
+                    for method_idx in 0..methods.len() {
+                        let method_pc = methods[method_idx].0;
+                        // This method's code ends where the next method's begins,
+                        // or at the end of the whole struct definition for the
+                        // last method.
+                        let body_end = methods
+                            .get(method_idx + 1)
+                            .map(|(next_pc, _)| *next_pc)
+                            .unwrap_or(new_pc);
+                        let bytecode_len = u24::from((body_end - method_pc) as u32);
 
                         // Allocate a function object for this method
                         // Methods capture the environment where the struct is defined
-                        let fn_val = self
-                            .mem
-                            .alloc_fn(method_pc as u32, ident, env.current_scope)?;
+                        let ident = &methods[method_idx].1;
+                        let fn_val = self.mem.alloc_fn(
+                            method_pc as u32,
+                            bytecode_len,
+                            ident,
+                            env.current_scope,
+                        )?;
                         let fn_pos = match fn_val {
                             ShimValue::Fn(pos) => pos,
                             _ => panic!("alloc_fn should return Fn"),
                         };
 
-                        struct_table.push((ident.to_vec(), StructAttribute::MethodDef(fn_pos)));
-                        idx = idx + 1 + ident_len as usize;
+                        struct_table.push((ident.clone(), StructAttribute::MethodDef(fn_pos)));
                     }
                     let struct_def_words: u32 = std::mem::size_of::<StructDef>().div_ceil(8) as u32;
                     let pos = alloc!(
