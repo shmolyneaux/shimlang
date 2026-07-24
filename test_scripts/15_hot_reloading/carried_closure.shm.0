@@ -1,0 +1,14 @@
+// Snapshot 0: `make` builds a closure that captures `base`. The closure is an
+// anonymous function, so the reload can't remap it to a new definition; it must
+// keep running its original bytecode.
+fn make(base) {
+    return fn(x) {
+        return base + x
+    }
+}
+
+let add10 = make(10)
+
+fn loop() {
+    print(add10(5))
+}

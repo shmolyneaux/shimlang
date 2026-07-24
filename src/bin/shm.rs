@@ -149,6 +149,12 @@ fn run() -> Result<(), String> {
                 // - Transform all the top-level values (recursively) to match
                 //   the new struct data shape
                 // - Assign the transformed values to the new environment
+                if args.gc {
+                    // Collect after the reload so carried-over code (functions
+                    // whose bytecode is no longer the current program) is
+                    // exercised against the GC, and dead blobs are reclaimed.
+                    interpreter.gc();
+                }
             }
 
             match interpreter.get_from_root_env(b"loop") {

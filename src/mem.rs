@@ -515,7 +515,13 @@ impl MMU {
         Ok(ShimValue::List(self.alloc_list_raw()?))
     }
 
-    pub fn alloc_fn(&mut self, pc: u32, name: &[u8], captured_scope: u32) -> Result<ShimValue, String> {
+    pub fn alloc_fn(
+        &mut self,
+        pc: u32,
+        bytecode_len: u24,
+        name: &[u8],
+        captured_scope: u32,
+    ) -> Result<ShimValue, String> {
         let word_count: u24 = (std::mem::size_of::<ShimFn>() as u32).div_ceil(8).into();
         let position = alloc!(self, word_count, &format!("Fn `{}`", debug_u8s(name)))?;
 
@@ -526,6 +532,7 @@ impl MMU {
             let ptr: *mut ShimFn = &mut self.mem[usize::from(position)] as *mut u64 as *mut ShimFn;
             ptr.write(ShimFn {
                 pc,
+                bytecode_len,
                 name_len: name.len() as u16,
                 name: name_pos,
                 captured_scope,
@@ -887,9 +894,15 @@ pub(crate) fn walk_heap<const REWRITE: bool, E>(
                         continue;
                     }
                     let shim_fn_word_count = std::mem::size_of::<ShimFn>().div_ceil(8);
-                    let (name_len, name, captured_scope) = {
+                    let (pc, bytecode_len, name_len, name, captured_scope) = {
                         let shim_fn: &ShimFn = interp.mem.get(fn_pos);
-                        (shim_fn.name_len, shim_fn.name, shim_fn.captured_scope)
+                        (
+                            shim_fn.pc as usize,
+                            usize::from(shim_fn.bytecode_len),
+                            shim_fn.name_len,
+                            shim_fn.name,
+                            shim_fn.captured_scope,
+                        )
                     };
                     mark_range!(
                         mask,
@@ -905,10 +918,21 @@ pub(crate) fn walk_heap<const REWRITE: bool, E>(
                         worklist.push(ShimValue::Environment(captured_scope.into()));
                     }
 
-                    // TODO: mark the bytecode pointed to by the ShimFn
-                    // This relevant for modules which aren't in the base program
-                    // of the interpreter and closure state carried over during
-                    // hot reloading
+                    // Mark the function's bytecode. `pc` is a byte offset into
+                    // the whole MMU memory and the code spans `bytecode_len`
+                    // bytes, so cover words `pc / 8 ..= (pc + len - 1) / 8`. This
+                    // keeps the code alive for functions carried over during hot
+                    // reloading (and for future modules), whose bytecode is no
+                    // longer the interpreter's current program and would
+                    // otherwise be swept. Nested functions live within this
+                    // range, so they are covered too.
+                    let code_start = pc / 8;
+                    let code_end = (pc + bytecode_len).div_ceil(8);
+                    mark_range!(
+                        mask,
+                        code_start..code_end,
+                        MemDescriptor::other(code_start, code_end, "bytecode")
+                    );
                 }
                 ShimValue::Tuple(len, pos) => {
                     let pos: usize = pos.into();

@@ -173,7 +173,11 @@ for command in (
             proc = subprocess.run(f"{exe_path} --compile {script}", **kwargs)
         elif command == "hot_reload":
             snapshot_args = " ".join(str(s) for s in snapshots)
-            proc = subprocess.run(f"{exe_path} --hot-reload {snapshot_args}", **kwargs)
+            # Run under --gc so every reload snapshot is followed by a
+            # collection, exercising the GC over code and state carried across
+            # reloads (e.g. functions whose bytecode is no longer the current
+            # program).
+            proc = subprocess.run(f"{exe_path} --hot-reload --gc {snapshot_args}", **kwargs)
         else:
             raise Exception("Unknown command")
 
