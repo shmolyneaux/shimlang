@@ -2426,6 +2426,10 @@ pub struct Interpreter {
     pub root_env: Environment,
     pub debug_hook: Option<Box<dyn DebugHook>>,
     ast: Ast,
+    /// Native functions registered by the host. A hot reload builds a fresh
+    /// root environment, so these are replayed into it to keep host builtins
+    /// available to the reloaded script.
+    native_fns: Vec<(Vec<u8>, NativeFn)>,
 }
 
 impl Interpreter {
@@ -2589,6 +2593,7 @@ impl Interpreter {
                 program: Arc::new(program),
                 root_env,
                 debug_hook: None,
+                native_fns: Vec::new(),
             }
         )
     }
@@ -2606,6 +2611,13 @@ impl Interpreter {
             &mut self.root_env,
             Environment::new_with_builtins(&mut self.mem),
         );
+
+        // The fresh root environment only has the language builtins, so replay
+        // the host's native functions before running the reloaded script.
+        for (name, func) in std::mem::take(&mut self.native_fns) {
+            self.root_env.insert_native_fn(&mut self.mem, &name, func);
+            self.native_fns.push((name, func));
+        }
 
         self.execute()?;
 
@@ -2778,6 +2790,7 @@ impl Interpreter {
             program: Arc::new(program),
             root_env,
             debug_hook: None,
+            native_fns: Vec::new(),
             ast,
         }
     }
@@ -2785,6 +2798,8 @@ impl Interpreter {
     /// Add a native function to the interpreter's root environment.
     pub fn add_native_fn(&mut self, name: &[u8], func: NativeFn) {
         self.root_env.insert_native_fn(&mut self.mem, name, func);
+        self.native_fns.retain(|(existing, _)| existing != name);
+        self.native_fns.push((name.to_vec(), func));
     }
 
     pub fn execute(&mut self) -> Result<ShimValue, String> {
@@ -3919,6 +3934,36 @@ mod tests {
                     .unwrap()
             }
         }
+    }
+
+    /// A hot reload builds a fresh root environment, which starts with only the
+    /// language builtins. Host-registered natives have to survive that swap, or
+    /// a reloaded script can no longer call into the embedder.
+    #[test]
+    fn hot_reload_keeps_native_fns() {
+        fn seven(_interp: &mut Interpreter, _args: &ArgBundle) -> Result<ShimValue, String> {
+            Ok(ShimValue::Integer(7))
+        }
+
+        let mut interp = Interpreter::create_from_script(b"let x = 0\n").unwrap();
+        interp.add_native_fn(b"seven", seven);
+        interp.execute().unwrap();
+
+        // The reloaded script calls the native at the top level, so a missing
+        // registration fails the reload outright. `y` is new in this version, so
+        // it keeps the reloaded value instead of being restored from old state.
+        interp
+            .hot_reload_from_script(b"let x = 0\nlet y = seven()\nfn get() { return seven() }\n")
+            .unwrap();
+
+        assert!(matches!(
+            interp.get_from_root_env(b"y"),
+            Some(ShimValue::Integer(7))
+        ));
+        assert!(matches!(
+            call_root_fn(&mut interp, b"get"),
+            ShimValue::Integer(7)
+        ));
     }
 
     /// After a hot reload, a closure carried over in persisted state still
