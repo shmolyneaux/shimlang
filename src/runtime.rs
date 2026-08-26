@@ -259,14 +259,16 @@ impl Environment {
         env
     }
 
-    pub fn insert_native_fn(&mut self, mem: &mut MMU, name: &[u8], func: NativeFn) {
+    pub fn insert_native_fn(&mut self, mem: &mut MMU, name: &[u8], func: NativeFn) -> ShimValue {
         // Native builtins are registered during interpreter setup, so an
         // allocation failure here is unrecoverable.
         let position = mem
             .alloc_and_set(func, &format!("native fn {}", debug_u8s(name)))
             .expect("out of memory registering a native builtin");
-        self.insert_new(mem, name.to_vec(), ShimValue::NativeFn(position))
+        let val = ShimValue::NativeFn(position);
+        self.insert_new(mem, name.to_vec(), val)
             .expect("out of memory registering a native builtin");
+        val
     }
 
     pub fn insert_new(&mut self, mem: &mut MMU, key: Vec<u8>, val: ShimValue) -> Result<(), String> {
@@ -2426,10 +2428,7 @@ pub struct Interpreter {
     pub root_env: Environment,
     pub debug_hook: Option<Box<dyn DebugHook>>,
     ast: Ast,
-    /// Native functions registered by the host. A hot reload builds a fresh
-    /// root environment, so these are replayed into it to keep host builtins
-    /// available to the reloaded script.
-    native_fns: Vec<(Vec<u8>, NativeFn)>,
+    retained_vars: Vec<(Vec<u8>, ShimValue)>,
 }
 
 impl Interpreter {
@@ -2593,7 +2592,7 @@ impl Interpreter {
                 program: Arc::new(program),
                 root_env,
                 debug_hook: None,
-                native_fns: Vec::new(),
+                retained_vars: Vec::new(),
             }
         )
     }
@@ -2613,10 +2612,9 @@ impl Interpreter {
         );
 
         // The fresh root environment only has the language builtins, so replay
-        // the host's native functions before running the reloaded script.
-        for (name, func) in std::mem::take(&mut self.native_fns) {
-            self.root_env.insert_native_fn(&mut self.mem, &name, func);
-            self.native_fns.push((name, func));
+        // the host's builtins before running the reloaded script.
+        for (name, val) in &self.retained_vars {
+            self.root_env.insert_new(&mut self.mem, name.to_vec(), *val)?;
         }
 
         self.execute()?;
@@ -2790,16 +2788,15 @@ impl Interpreter {
             program: Arc::new(program),
             root_env,
             debug_hook: None,
-            native_fns: Vec::new(),
             ast,
+            retained_vars: Vec::new(),
         }
     }
 
     /// Add a native function to the interpreter's root environment.
     pub fn add_native_fn(&mut self, name: &[u8], func: NativeFn) {
-        self.root_env.insert_native_fn(&mut self.mem, name, func);
-        self.native_fns.retain(|(existing, _)| existing != name);
-        self.native_fns.push((name.to_vec(), func));
+        let val = self.root_env.insert_native_fn(&mut self.mem, name, func);
+        self.retained_vars.push((name.to_vec(), val));
     }
 
     pub fn execute(&mut self) -> Result<ShimValue, String> {
@@ -2820,6 +2817,7 @@ impl Interpreter {
         self.root_env
             .insert_new(&mut self.mem, key.to_vec(), val)
             .expect("out of memory inserting into the root environment");
+        self.retained_vars.push((key.to_vec(), val));
     }
 
     pub fn update_in_root_env(&mut self, key: &[u8], val: ShimValue) -> Result<(), String> {
