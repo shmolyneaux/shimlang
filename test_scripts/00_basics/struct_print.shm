@@ -1,5 +1,5 @@
 struct Point {
-    x,
+    x
     y
 }
 
@@ -7,8 +7,8 @@ let p = Point(2.0, 3.0)
 print(p)
 
 struct Person {
-    name,
-    age,
+    name
+    age
     city
 }
 
@@ -17,7 +17,7 @@ print(person)
 
 // Test with integer values
 struct Vec2 {
-    x,
+    x
     y
 }
 
@@ -31,7 +31,7 @@ print(e)
 
 // Test with nested struct
 struct Rectangle {
-    top_left,
+    top_left
     bottom_right
 }
 
@@ -40,7 +40,7 @@ print(rect)
 
 // Test with bool and list
 struct Config {
-    enabled,
+    enabled
     values
 }
 

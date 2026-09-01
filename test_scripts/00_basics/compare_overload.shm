@@ -1,5 +1,5 @@
 struct Ver {
-    n,
+    n
 
     fn lt(self, other) { self.n < other.n }
     fn gt(self, other) { self.n > other.n }

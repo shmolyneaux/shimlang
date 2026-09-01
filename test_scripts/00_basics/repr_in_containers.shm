@@ -21,7 +21,7 @@ print(["say \"hi\"", "back\\slash", "line\nbreak", "tab\tsep"])
 
 // Struct members that are strings use repr
 struct Person {
-    name,
+    name
     nick
 }
 print(Person("Alice", "Al"))

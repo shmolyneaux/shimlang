@@ -1,0 +1,18 @@
+// Newline-separated members work alongside methods.
+struct Counter {
+    count = 0
+    step = 1
+
+    fn bump(self) {
+        self.count = self.count + self.step
+    }
+
+    fn get(self) {
+        return self.count
+    }
+}
+
+let c = Counter()
+c.bump()
+c.bump()
+print(c.get())

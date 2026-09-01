@@ -1,6 +1,6 @@
 struct Container {
-    data,
-    name,
+    data
+    name
 }
 
 let d = {:}

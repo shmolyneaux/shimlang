@@ -12,12 +12,12 @@ fn combinations(l) {
 }
 
 struct Body {
-    x,
-    y,
-    z,
-    vx,
-    vy,
-    vz,
+    x
+    y
+    z
+    vx
+    vy
+    vz
     m
 }
 

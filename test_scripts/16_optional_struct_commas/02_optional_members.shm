@@ -1,0 +1,14 @@
+// Members with defaults may also be separated by newlines.
+struct Config {
+    name
+    port = 8080
+    debug = false
+}
+
+let a = Config("a")
+print(a.port)
+print(a.debug)
+
+let b = Config("b", 9000, true)
+print(b.port)
+print(b.debug)

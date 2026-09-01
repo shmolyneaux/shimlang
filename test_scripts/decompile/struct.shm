@@ -1,6 +1,6 @@
 struct Point {
-    x,
-    y,
+    x
+    y
     
     fn distance(self) {
         (self.x * self.x + self.y * self.y)

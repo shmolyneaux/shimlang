@@ -1,0 +1,6 @@
+Parse Error:
+ 1 | struct Point { x y }
+                      ^
+ 2 | print(Point(1, 2).x)
+Error: Expected comma between members declared on the same line
+Failed to parse script

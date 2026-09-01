@@ -1,5 +1,5 @@
 struct Point {
-    xval,
+    xval
     yval
 
     fn add(self, other) {

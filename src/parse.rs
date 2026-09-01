@@ -1346,11 +1346,19 @@ pub fn parse_block_inner(tokens: &mut TokenStream) -> Result<Block, String> {
                             }
                             members.push(ident.clone());
                         }
-                        if *tokens.peek()? != Token::Comma {
+                        // Members may be separated by a comma, or simply by
+                        // a newline. A comma is only required to separate
+                        // multiple members declared on the same line.
+                        if *tokens.peek()? == Token::Comma {
+                            tokens.advance()?;
+                        } else if !tokens.peek_starts_new_line() {
+                            if matches!(tokens.peek()?, Token::Identifier(_)) {
+                                return Err(tokens.format_peek_err(
+                                    "Expected comma between members declared on the same line",
+                                ));
+                            }
                             break;
                         }
-                        // Consume the comma
-                        tokens.advance()?;
                     }
                     Token::RCurly | Token::Fn => {
                         tokens.unadvance()?;

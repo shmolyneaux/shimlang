@@ -1,7 +1,7 @@
 struct Vec3 {
-    x,
-    y,
-    z,
+    x
+    y
+    z
 
     fn add(self, other) {
         Vec3(self.x + other.x, self.y + other.y, self.z + other.z)

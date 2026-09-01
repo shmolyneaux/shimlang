@@ -1705,7 +1705,7 @@ name as a constructor:
 
 ```rust
 struct Point {
-    x,
+    x
     y
 }
 
@@ -1717,6 +1717,27 @@ Output:
 
 ```
 1 2
+```
+
+Fields are separated by newlines. A comma is only needed to separate multiple
+fields declared on the same line, and a trailing comma after the last field on a
+line is allowed:
+
+```rust
+struct Rect {
+    x, y
+    width
+    height
+}
+
+let r = Rect(1, 2, 30, 40)
+print(r.width, r.height)
+```
+
+Output:
+
+```
+30 40
 ```
 
 Structs print with a readable representation:
@@ -1742,7 +1763,7 @@ parameter:
 
 ```rust
 struct Point {
-    x,
+    x
     y
 
     fn add(self, other) {
@@ -1810,7 +1831,7 @@ Struct fields can have default values, including computed expressions:
 
 ```rust
 struct Config {
-    debug = false,
+    debug = false
     verbose = false
 }
 
@@ -1900,7 +1921,7 @@ attribute that refers back to the struct definition:
 
 ```rust
 struct Animal {
-    name,
+    name
     age
 }
 
@@ -1975,8 +1996,8 @@ instance, can override `format` to customize how it is rendered:
 
 ```rust
 struct Point {
-    x,
-    y,
+    x
+    y
 
     fn format(self, pretty=false) {
         if pretty {
@@ -2197,8 +2218,8 @@ the end of iteration:
 
 ```rust
 struct Counter {
-    current,
-    max,
+    current
+    max
 
     fn iter(self) {
         self

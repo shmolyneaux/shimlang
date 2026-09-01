@@ -1,5 +1,5 @@
 struct Foo {
-    a,
+    a
     fn tick() {}
     fn tock() {}
 
@@ -9,7 +9,7 @@ struct Foo {
 }
 
 struct Bar {
-    a,
+    a
     fn tick() {}
     fn tock() {}
 }

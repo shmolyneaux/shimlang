@@ -1,6 +1,6 @@
 struct Point {
-    x,
-    y,
+    x
+    y
 
     fn add(self, other) {
         Point(

@@ -1,7 +1,7 @@
 // Snapshot 0: create a Config and mutate its name to a non-default value.
 struct Config {
-    name = "app",
-    debug = true,
+    name = "app"
+    debug = true
 
     fn describe(self) {
         print("\(self.name) debug=\(self.debug)")
