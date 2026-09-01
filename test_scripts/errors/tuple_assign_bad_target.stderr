@@ -1,0 +1,6 @@
+Parse Error:
+ 1 | let a = 1
+ 2 | (a, 2) = (3, 4)
+         ^
+Error: Can't unpack tuple to Primary(Integer(2))
+Failed to parse script

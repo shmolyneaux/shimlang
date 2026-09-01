@@ -43,6 +43,7 @@ PASS static method
 PASS struct introspection
 PASS custom format interpolation
 PASS custom format keyword interpolation
+PASS tuple assignment to attribute and index targets
 PASS struct default field values
 PASS compound assignment on field
 PASS custom iterator
