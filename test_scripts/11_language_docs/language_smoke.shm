@@ -166,6 +166,11 @@ check("struct introspection", v.__type__.__name__ == "Vec2" and Vec2.__name__ ==
 check("custom format interpolation", "\(v)" == "(4, 6)")
 check("custom format keyword interpolation", "\(v, pretty=true)" == "Vec2 { x: 4, y: 6 }")
 
+let target = Vec2(0, 0)
+let slots = [0, 0]
+(target.x, slots[1]) = (7, 8)
+check("tuple assignment to attribute and index targets", target.x == 7 and slots[1] == 8)
+
 struct Config {
     debug = false,
     retries = 3

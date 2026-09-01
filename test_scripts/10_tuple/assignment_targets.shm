@@ -1,0 +1,63 @@
+// Tuple assignment accepts any target a plain assignment does: bare
+// identifiers, attributes, and indexes.
+struct Point {
+    x,
+    y,
+
+    fn set_from(self, pos) {
+        (self.x, self.y) = pos
+    }
+}
+
+fn return_pos(scale) {
+    (scale * 2, scale * 3)
+}
+
+let p = Point(0, 0)
+(p.x, p.y) = return_pos(5)
+assert(p.x == 10)
+assert(p.y == 15)
+
+p.set_from((1, 2))
+assert(p.x == 1)
+assert(p.y == 2)
+
+// Attributes can be swapped, since the right hand side is fully evaluated
+// before any target is assigned.
+(p.x, p.y) = (p.y, p.x)
+assert(p.x == 2)
+assert(p.y == 1)
+
+// Nested attributes work too
+struct Line {
+    start,
+    end,
+}
+let line = Line(Point(0, 0), Point(0, 0))
+(line.start.x, line.end.y) = (3, 4)
+assert(line.start.x == 3)
+assert(line.end.y == 4)
+
+// List and dict indexes
+let items = [0, 0, 0]
+let idx = 0
+(items[idx], items[2]) = (7, 8)
+assert(items[0] == 7)
+assert(items[1] == 0)
+assert(items[2] == 8)
+
+let d = {:}
+(d["a"], d["b"]) = ("A", "B")
+assert(d["a"] == "A")
+assert(d["b"] == "B")
+
+// Targets of different kinds can be mixed
+let a = 1
+(a, items[1], p.x) = (9, 10, 11)
+assert(a == 9)
+assert(items[1] == 10)
+assert(p.x == 11)
+
+// A single-element tuple target still needs its trailing comma
+(p.y,) = (12,)
+assert(p.y == 12)

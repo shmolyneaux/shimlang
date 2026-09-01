@@ -138,9 +138,11 @@ impl Block {
         for stmt in self.stmts.iter() {
             match &stmt.data {
                 Statement::Let(Target::Ident(ident), _expr) => out.push(ident.clone()),
-                Statement::Let(Target::Tuple(idents), _expr) => {
-                    for ident in idents {
-                        out.push(ident.clone())
+                Statement::Let(Target::Tuple(targets), _expr) => {
+                    for target in targets {
+                        if let AssignTarget::Ident(ident) = target {
+                            out.push(ident.clone())
+                        }
                     }
                 }
                 _ => (),
@@ -215,10 +217,20 @@ pub enum CompoundOp {
     Modulus,
 }
 
+/// A single destination of a tuple-unpacking assignment. These mirror the
+/// targets that a plain assignment supports: a bare variable, an attribute of
+/// some object, or an index into a container.
+#[derive(Debug, Clone)]
+pub enum AssignTarget {
+    Ident(Vec<u8>),
+    Attribute(ExprNode, Vec<u8>),
+    Index(ExprNode, ExprNode),
+}
+
 #[derive(Debug, Clone)]
 pub enum Target {
     Ident(Vec<u8>),
-    Tuple(Vec<Vec<u8>>),
+    Tuple(Vec<AssignTarget>),
 }
 
 #[derive(Debug, Clone)]
@@ -1180,7 +1192,7 @@ pub fn parse_block_inner(tokens: &mut TokenStream) -> Result<Block, String> {
                     while *tokens.peek()? != Token::RBracket {
                         let token = tokens.pop()?;
                         if let Token::Identifier(ident) = token {
-                            idents.push(ident);
+                            idents.push(AssignTarget::Ident(ident));
                         } else {
                             return Err(tokens
                                 .format_peek_err(&format!("Expected ident in let tuple, found {:?}", token)));
@@ -1444,16 +1456,25 @@ pub fn parse_block_inner(tokens: &mut TokenStream) -> Result<Block, String> {
                                 span: start_span + end_span,
                             }
                         }
-                        Expression::Primary(Primary::Tuple(maybe_idents)) => {
-                            let mut idents = Vec::new();
-                            for maybe_ident in maybe_idents.into_iter() {
-                                match maybe_ident.data {
-                                    Expression::Primary(Primary::Identifier(ident)) => idents.push(ident),
+                        Expression::Primary(Primary::Tuple(maybe_targets)) => {
+                            let mut targets = Vec::new();
+                            for maybe_target in maybe_targets.into_iter() {
+                                let span = maybe_target.span;
+                                match maybe_target.data {
+                                    Expression::Primary(Primary::Identifier(ident)) => {
+                                        targets.push(AssignTarget::Ident(ident))
+                                    }
+                                    Expression::Attribute(obj_expr, ident) => {
+                                        targets.push(AssignTarget::Attribute(*obj_expr, ident))
+                                    }
+                                    Expression::Index(obj_expr, index_expr) => {
+                                        targets.push(AssignTarget::Index(*obj_expr, *index_expr))
+                                    }
                                     tuple_item => {
                                         return Err(format_script_err(
-                                            maybe_ident.span,
+                                            span,
                                             &tokens.script,
-                                            &format!("Can't unpack tuple to non-ident {:?}", tuple_item),
+                                            &format!("Can't unpack tuple to {:?}", tuple_item),
                                         ));
                                     }
                                 }
@@ -1462,7 +1483,7 @@ pub fn parse_block_inner(tokens: &mut TokenStream) -> Result<Block, String> {
                             let end_span = tokens.previous_span()?;
                             consume_statement_terminator(tokens)?;
                             StatementNode {
-                                data: Statement::Assignment(Target::Tuple(idents), expr_to_assign),
+                                data: Statement::Assignment(Target::Tuple(targets), expr_to_assign),
                                 span: start_span + end_span,
                             }
                         }

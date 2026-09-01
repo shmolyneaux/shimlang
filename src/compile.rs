@@ -129,10 +129,15 @@ fn validate_stmt_loop_control(
                 ));
             }
         }
-        Statement::Let(_, e)
-        | Statement::Assignment(_, e)
-        | Statement::CompoundAssignment(_, _, e)
-        | Statement::Expression(e) => validate_expr_loop_control(e, in_loop, script)?,
+        Statement::Let(target, e) | Statement::Assignment(target, e) => {
+            for target_expr in target_exprs(target) {
+                validate_expr_loop_control(target_expr, in_loop, script)?;
+            }
+            validate_expr_loop_control(e, in_loop, script)?
+        }
+        Statement::CompoundAssignment(_, _, e) | Statement::Expression(e) => {
+            validate_expr_loop_control(e, in_loop, script)?
+        }
         Statement::Return(opt) => {
             if let Some(e) = opt {
                 validate_expr_loop_control(e, in_loop, script)?;
@@ -441,6 +446,26 @@ pub fn compile_return(expr: &Option<&ExprNode>, span: Span) -> Result<Vec<(u8, S
     Ok(res)
 }
 
+/// The sub-expressions embedded in an assignment target: the object of an
+/// attribute target, plus the index expression of an index target. A plain
+/// identifier target has none.
+fn target_exprs(target: &Target) -> Vec<&ExprNode> {
+    let mut out = Vec::new();
+    if let Target::Tuple(targets) = target {
+        for target in targets {
+            match target {
+                AssignTarget::Ident(_) => (),
+                AssignTarget::Attribute(obj_expr, _) => out.push(obj_expr),
+                AssignTarget::Index(obj_expr, index_expr) => {
+                    out.push(obj_expr);
+                    out.push(index_expr);
+                }
+            }
+        }
+    }
+    out
+}
+
 fn compound_op_bytecode(op: &CompoundOp) -> u8 {
     match op {
         CompoundOp::Add => ByteCode::Add as u8,
@@ -470,15 +495,21 @@ pub fn compile_statement(stmt_node: &StatementNode) -> Result<Vec<(u8, Span)>, S
 
             Ok(expr_asm)
         }
-        Statement::Let(Target::Tuple(idents), expr) => {
+        Statement::Let(Target::Tuple(targets), expr) => {
             let mut expr_asm = compile_expression(expr)?;
 
-            let tuple_size_u8s = u16_to_u8s(idents.len() as u16);
+            let tuple_size_u8s = u16_to_u8s(targets.len() as u16);
             expr_asm.push((ByteCode::UnpackTuple as u8, stmt_span));
             expr_asm.push((tuple_size_u8s[0], stmt_span));
             expr_asm.push((tuple_size_u8s[1], stmt_span));
 
-            for ident in idents {
+            for target in targets {
+                // `let` only ever binds new names; the parser rejects anything
+                // that isn't a bare identifier.
+                let ident = match target {
+                    AssignTarget::Ident(ident) => ident,
+                    other => return Err(format!("Can't declare {:?} with let", other)),
+                };
                 expr_asm.push((ByteCode::VariableDeclaration as u8, stmt_span));
                 expr_asm.push((
                     ident
@@ -507,25 +538,53 @@ pub fn compile_statement(stmt_node: &StatementNode) -> Result<Vec<(u8, Span)>, S
 
             Ok(expr_asm)
         }
-        Statement::Assignment(Target::Tuple(idents), expr) => {
+        Statement::Assignment(Target::Tuple(targets), expr) => {
             let mut expr_asm = compile_expression(expr)?;
 
-            let tuple_size_u8s = u16_to_u8s(idents.len() as u16);
+            let tuple_size_u8s = u16_to_u8s(targets.len() as u16);
             expr_asm.push((ByteCode::UnpackTuple as u8, stmt_span));
             expr_asm.push((tuple_size_u8s[0], stmt_span));
             expr_asm.push((tuple_size_u8s[1], stmt_span));
 
-            for ident in idents {
-                expr_asm.push((ByteCode::Assignment as u8, stmt_span));
-                expr_asm.push((
-                    ident
-                        .len()
-                        .try_into()
-                        .expect("For loop ident len should into u8"),
-                    stmt_span,
-                ));
-                for b in ident {
-                    expr_asm.push((*b, stmt_span));
+            // UnpackTuple leaves the items on the stack with the first item on
+            // top, so each target consumes the value sitting at the top of the
+            // stack in turn.
+            for target in targets {
+                match target {
+                    AssignTarget::Ident(ident) => {
+                        expr_asm.push((ByteCode::Assignment as u8, stmt_span));
+                        expr_asm.push((
+                            ident
+                                .len()
+                                .try_into()
+                                .expect("For loop ident len should into u8"),
+                            stmt_span,
+                        ));
+                        for b in ident {
+                            expr_asm.push((*b, stmt_span));
+                        }
+                    }
+                    AssignTarget::Attribute(obj_expr, ident) => {
+                        // Stack: [.., val] -> [.., val, obj] -> [.., obj, val]
+                        expr_asm.extend(compile_expression(obj_expr)?);
+                        expr_asm.push((ByteCode::Swap as u8, stmt_span));
+                        expr_asm.push((ByteCode::SetAttr as u8, stmt_span));
+                        expr_asm.push((
+                            ident.len().try_into().expect("Ident len should into u8"),
+                            stmt_span,
+                        ));
+                        for b in ident.iter() {
+                            expr_asm.push((*b, stmt_span));
+                        }
+                    }
+                    AssignTarget::Index(obj_expr, index_expr) => {
+                        // Stack: [.., val] -> [.., obj, val] -> [.., obj, idx, val]
+                        expr_asm.extend(compile_expression(obj_expr)?);
+                        expr_asm.push((ByteCode::Swap as u8, stmt_span));
+                        expr_asm.extend(compile_expression(index_expr)?);
+                        expr_asm.push((ByteCode::Swap as u8, stmt_span));
+                        expr_asm.push((ByteCode::SetIndex as u8, stmt_span));
+                    }
                 }
             }
 
@@ -944,8 +1003,12 @@ pub fn statement_captures_env(stmt: &Statement) -> bool {
     match stmt {
         Statement::Fn(..) => true,
         Statement::Struct(..) => true,
-        Statement::Let(_ident, expr) => expression_captures_env(&expr.data),
-        Statement::Assignment(_ident, expr) => expression_captures_env(&expr.data),
+        Statement::Let(target, expr) | Statement::Assignment(target, expr) => {
+            expression_captures_env(&expr.data)
+                || target_exprs(target)
+                    .into_iter()
+                    .any(|target_expr| expression_captures_env(&target_expr.data))
+        }
         Statement::AttributeAssignment(obj, _ident, expr) => {
             expression_captures_env(&obj.data) || expression_captures_env(&expr.data)
         }

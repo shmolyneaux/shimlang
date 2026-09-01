@@ -692,6 +692,43 @@ Output:
 2
 ```
 
+Unpacking into existing variables uses `=` without `let`. The targets on the
+left may be anything a plain assignment accepts: variables, struct fields, and
+indexes into lists or dictionaries. The right hand side is fully evaluated
+before any target is assigned, so values can be swapped:
+
+```rust
+struct Point { x, y }
+
+fn origin_offset() {
+    (3, 4)
+}
+
+let p = Point(0, 0)
+(p.x, p.y) = origin_offset()
+print("\(p.x), \(p.y)")
+
+(p.x, p.y) = (p.y, p.x)
+print("\(p.x), \(p.y)")
+
+let lst = [0, 0]
+let d = {:}
+(lst[0], d["key"]) = (1, "value")
+print(lst)
+print(d["key"])
+```
+
+Output:
+```
+3, 4
+4, 3
+[1, 0]
+value
+```
+
+A `let` unpacking declares new variables, so it only accepts plain identifiers:
+`let (p.x, p.y) = pos` is an error.
+
 Tuples are hashable and may be used as dictionary keys:
 
 ```rust
