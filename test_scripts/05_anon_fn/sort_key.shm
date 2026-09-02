@@ -1,7 +1,7 @@
 struct Point {
-    x,
-    y,
-    name,
+    x
+    y
+    name
 
     fn to_string(self) {
         "Point(\(self.x), \(self.y), \(self.name))"
@@ -13,7 +13,7 @@ struct Point {
 }
 
 struct SortPair {
-    item,
+    item
     key
 }
 

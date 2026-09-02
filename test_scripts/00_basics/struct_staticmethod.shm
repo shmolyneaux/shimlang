@@ -1,5 +1,5 @@
 struct Point {
-    x,
+    x
     y
 
     fn default() {

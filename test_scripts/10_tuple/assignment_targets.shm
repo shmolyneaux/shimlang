@@ -1,8 +1,8 @@
 // Tuple assignment accepts any target a plain assignment does: bare
 // identifiers, attributes, and indexes.
 struct Point {
-    x,
-    y,
+    x
+    y
 
     fn set_from(self, pos) {
         (self.x, self.y) = pos
@@ -30,8 +30,8 @@ assert(p.y == 1)
 
 // Nested attributes work too
 struct Line {
-    start,
-    end,
+    start
+    end
 }
 let line = Line(Point(0, 0), Point(0, 0))
 (line.start.x, line.end.y) = (3, 4)

@@ -1,7 +1,7 @@
 // Test sorting with a complex key that returns a list (multi-field sort)
 struct Point {
-    x,
-    y,
+    x
+    y
     name
 }
 

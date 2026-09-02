@@ -1,0 +1,9 @@
+// Struct members may be separated by newlines instead of commas.
+struct Point {
+    x
+    y
+}
+
+let p = Point(1, 2)
+print(p.x)
+print(p.y)

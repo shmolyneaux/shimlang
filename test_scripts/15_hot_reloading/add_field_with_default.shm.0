@@ -1,6 +1,6 @@
 // Snapshot 0: create a Player and mutate it to a non-default name.
 struct Player {
-    name = "hero",
+    name = "hero"
 
     fn describe(self) {
         print(self.name)

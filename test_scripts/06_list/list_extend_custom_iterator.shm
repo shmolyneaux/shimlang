@@ -2,8 +2,8 @@
 // Using a simpler approach that works within language limitations
 
 struct Counter {
-    current,
-    max,
+    current
+    max
 
     fn iter(self) {
         self

@@ -1,6 +1,6 @@
 struct RangeIterator {
-    obj,
-    idx,
+    obj
+    idx
 
     fn start(obj) {
         RangeIterator(
@@ -20,7 +20,7 @@ struct RangeIterator {
 }
 
 struct Range {
-    start,
+    start
     stop
 
     fn iter(self) {

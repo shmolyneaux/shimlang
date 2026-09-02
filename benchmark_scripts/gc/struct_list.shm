@@ -1,10 +1,10 @@
 // Build a large, fully-live object graph so GC marking has real work:
 // structs (with nested members), lists, strings, a linked chain, and a dict.
 struct Item {
-    id,
-    name,
-    tags,
-    next,
+    id
+    name
+    tags
+    next
 }
 
 let items = []

@@ -1,7 +1,7 @@
 // Snapshot 1: `c` keeps n = 5 from snapshot 0. The newly added `inc` method
 // runs against that carried-over value, so show() prints 6, not 1.
 struct Counter {
-    n = 0,
+    n = 0
 
     fn inc(self) {
         self.n = self.n + 1

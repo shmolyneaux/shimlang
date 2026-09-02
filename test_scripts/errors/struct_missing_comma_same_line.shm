@@ -1,0 +1,2 @@
+struct Point { x y }
+print(Point(1, 2).x)

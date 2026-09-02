@@ -135,7 +135,7 @@ check("negation uses truthiness", !0 and !"" and ![] and !{:} and !())
 check("list comparison lexicographic", [1, 2] < [1, 3] and [1, 2] < [1, 2, 0])
 
 struct Vec2 {
-    x,
+    x
     y
 
     fn origin() {
@@ -172,7 +172,7 @@ let slots = [0, 0]
 check("tuple assignment to attribute and index targets", target.x == 7 and slots[1] == 8)
 
 struct Config {
-    debug = false,
+    debug = false
     retries = 3
 }
 let cfg = Config(debug=true)
@@ -181,7 +181,7 @@ cfg.retries += 2
 check("compound assignment on field", cfg.retries == 5)
 
 struct Counter {
-    current,
+    current
     max
 
     fn iter(self) {

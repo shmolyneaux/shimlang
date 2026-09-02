@@ -1,5 +1,5 @@
 struct FrameOrder {
-    callbacks = [],
+    callbacks = []
 
     fn add(self, func) {
         self.callbacks.append(func)

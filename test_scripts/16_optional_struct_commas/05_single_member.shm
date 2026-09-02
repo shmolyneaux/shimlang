@@ -1,0 +1,5 @@
+struct Wrapper {
+    value
+}
+
+print(Wrapper("hi").value)

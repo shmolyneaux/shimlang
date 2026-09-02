@@ -1,6 +1,6 @@
 struct Node {
-    value,
-    label,
+    value
+    label
 }
 
 let n1 = Node(1, "first")

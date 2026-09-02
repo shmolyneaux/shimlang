@@ -3,7 +3,7 @@ fn get_age() {
 }
 
 struct Foo {
-    position,
+    position
     age = get_age() + 1
 }
 

@@ -1,0 +1,13 @@
+// Commas are still accepted, both between and after members.
+struct Point { x, y }
+
+struct Vec3 {
+    x,
+    y,
+    z,
+}
+
+let p = Point(1, 2)
+let v = Vec3(3, 4, 5)
+print(p.x + p.y)
+print(v.x + v.y + v.z)

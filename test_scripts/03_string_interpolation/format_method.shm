@@ -13,8 +13,8 @@ assert((42).format() == "42")
 // Structs may override `.format` to customize interpolation, including
 // accepting positional and keyword arguments.
 struct Point {
-    x,
-    y,
+    x
+    y
 
     fn format(self, pretty=false) {
         if pretty {

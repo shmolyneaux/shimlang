@@ -1,0 +1,12 @@
+// A comma separates members on the same line; newlines separate the rest.
+struct Rect {
+    x, y
+    width
+    height
+}
+
+let r = Rect(1, 2, 3, 4)
+print(r.x)
+print(r.y)
+print(r.width)
+print(r.height)
